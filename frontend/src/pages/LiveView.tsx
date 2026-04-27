@@ -63,13 +63,15 @@ export function LiveView({ onNavigate }: Props) {
         <span style={{ marginLeft: 'auto', background: '#c62828', color: '#fff', fontSize: 10, fontWeight: 'bold', padding: '2px 7px', borderRadius: 10 }}>● LIVE</span>
       </div>
       <div style={{ flex: 1, overflow: 'hidden' }}>
-        <CameraGrid
-          cameras={cameras}
-          motionCams={motionCams}
-          height={window.innerHeight - 150}
-          layout={gridLayout}
-          onLayoutChange={setGridLayout}
-        />
+        {gridLayout.length > 0 && (
+          <CameraGrid
+            cameras={cameras}
+            motionCams={motionCams}
+            height={window.innerHeight - 150}
+            layout={gridLayout}
+            onLayoutChange={setGridLayout}
+          />
+        )}
       </div>
       <Timeline
         cameras={cameras}

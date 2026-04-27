@@ -98,10 +98,8 @@ export function useLayouts(cameras: Camera[]) {
   const setGridLayout = useCallback((layout: Layout[]) => {
     if (skipNextChangeRef.current) {
       skipNextChangeRef.current = false;
-      // Accept normalized positions without marking dirty
       setGridLayoutState(layout);
-      setSavedSnapshot(layout);
-      return;
+      return; // savedSnapshot은 init/load 시 이미 설정됨 — 여기서 업데이트하면 연쇄 렌더 발생
     }
     setGridLayoutState(layout);
     setIsDirty(true);
