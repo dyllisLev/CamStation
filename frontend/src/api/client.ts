@@ -24,12 +24,12 @@ export const listRecordings = (cam: string, date: string): Promise<string[]> =>
 export const getLayouts = (): Promise<LayoutProfile[]> =>
   api.get('/layouts').then(r => r.data);
 
-export const createLayout = (req: { name: string; data: LayoutItem[] }): Promise<LayoutProfile> =>
+export const createLayout = (req: { name: string; data: LayoutItem[]; timeline_collapsed: boolean }): Promise<LayoutProfile> =>
   api.post('/layouts', req).then(r => r.data);
 
 export const updateLayout = (
   id: string,
-  req: { name?: string; data?: LayoutItem[] },
+  req: { name?: string; data?: LayoutItem[]; timeline_collapsed?: boolean },
 ): Promise<LayoutProfile> =>
   api.put(`/layouts/${id}`, req).then(r => r.data);
 

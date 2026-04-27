@@ -15,8 +15,9 @@ export function LiveView({ onNavigate }: Props) {
   const today = format(new Date(), 'yyyy-MM-dd');
   const timelineData = useAllTimelines(cameras, today);
   const {
-    layouts, currentId, gridLayout, isDirty,
+    layouts, currentId, gridLayout, isDirty, timelineCollapsed,
     setGridLayout, loadLayout, saveLayout, saveAsLayout, cancelEdit, deleteLayoutById,
+    toggleTimelineCollapsed,
   } = useLayouts(cameras);
 
   const now = Date.now() / 1000;
@@ -76,6 +77,8 @@ export function LiveView({ onNavigate }: Props) {
         date={today}
         isLive={true}
         onSeek={handleSeek}
+        collapsed={timelineCollapsed}
+        onToggleCollapsed={toggleTimelineCollapsed}
       />
     </div>
   );

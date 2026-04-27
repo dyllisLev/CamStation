@@ -46,6 +46,7 @@ export function useLayouts(cameras: Camera[]) {
   const [savedSnapshot, setSavedSnapshot] = useState<Layout[]>([]);
   const [isDirty, setIsDirty] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
   // react-grid-layout fires onLayoutChange once on mount to normalize the layout.
   // This ref skips that first call so we don't incorrectly mark the layout as dirty.
   const skipNextChangeRef = useRef(false);
@@ -68,6 +69,7 @@ export function useLayouts(cameras: Camera[]) {
           setGridLayoutState(merged);
           setSavedSnapshot(merged);
           setCurrentId(last.id);
+          setTimelineCollapsed(last.timeline_collapsed ?? false);
         } else {
           const def = defaultLayout(cameras);
           skipNextChangeRef.current = true;
@@ -113,6 +115,7 @@ export function useLayouts(cameras: Camera[]) {
     setGridLayoutState(merged);
     setSavedSnapshot(merged);
     setCurrentId(id);
+    setTimelineCollapsed(target.timeline_collapsed ?? false);
     setIsDirty(false);
     localStorage.setItem(LAST_LAYOUT_KEY, id);
   }, [layouts]);
@@ -121,7 +124,7 @@ export function useLayouts(cameras: Camera[]) {
     if (!currentId) return;
     const items = gridLayout.map(toLayoutItem);
     try {
-      await updateLayout(currentId, { data: items });
+      await updateLayout(currentId, { data: items, timeline_collapsed: timelineCollapsed });
     } catch (e) {
       console.error('Failed to save layout:', e);
       return;
@@ -130,16 +133,16 @@ export function useLayouts(cameras: Camera[]) {
     setIsDirty(false);
     setLayouts(prev => prev.map(l =>
       l.id === currentId
-        ? { ...l, data: items, updated_at: Math.floor(Date.now() / 1000) }
+        ? { ...l, data: items, timeline_collapsed: timelineCollapsed, updated_at: Math.floor(Date.now() / 1000) }
         : l,
     ));
-  }, [currentId, gridLayout]);
+  }, [currentId, gridLayout, timelineCollapsed]);
 
   const saveAsLayout = useCallback(async (name: string) => {
     const items = gridLayout.map(toLayoutItem);
     let created: LayoutProfile;
     try {
-      created = await createLayout({ name, data: items });
+      created = await createLayout({ name, data: items, timeline_collapsed: timelineCollapsed });
     } catch (e) {
       console.error('Failed to create layout:', e);
       return;
@@ -149,13 +152,18 @@ export function useLayouts(cameras: Camera[]) {
     setSavedSnapshot(gridLayout);
     setIsDirty(false);
     localStorage.setItem(LAST_LAYOUT_KEY, created.id);
-  }, [gridLayout]);
+  }, [gridLayout, timelineCollapsed]);
 
   const cancelEdit = useCallback(() => {
     skipNextChangeRef.current = true;
     setGridLayoutState(savedSnapshot);
     setIsDirty(false);
   }, [savedSnapshot]);
+
+  const toggleTimelineCollapsed = useCallback(() => {
+    setTimelineCollapsed(p => !p);
+    setIsDirty(true);
+  }, []);
 
   const deleteLayoutById = useCallback(async (id: string) => {
     try {
@@ -177,11 +185,13 @@ export function useLayouts(cameras: Camera[]) {
     currentId,
     gridLayout,
     isDirty,
+    timelineCollapsed,
     setGridLayout,
     loadLayout,
     saveLayout,
     saveAsLayout,
     cancelEdit,
     deleteLayoutById,
+    toggleTimelineCollapsed,
   };
 }

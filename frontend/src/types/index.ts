@@ -51,6 +51,7 @@ export interface LayoutProfile {
   id: string;
   name: string;
   data: LayoutItem[];
+  timeline_collapsed: boolean;
   created_at: number;
   updated_at: number;
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import { TimelineTrack } from './TimelineTrack';
 import type { Camera, TimelineData } from '../types';
@@ -9,10 +9,11 @@ interface Props {
   date: string;
   isLive: boolean;
   onSeek: (camId: string, ts: number) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
-export function Timeline({ cameras, timelineData, date, isLive, onSeek }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+export function Timeline({ cameras, timelineData, date, isLive, onSeek, collapsed, onToggleCollapsed }: Props) {
   const [currentTime, setCurrentTime] = useState(() => new Date());
 
   useEffect(() => {
@@ -28,7 +29,7 @@ export function Timeline({ cameras, timelineData, date, isLive, onSeek }: Props)
   return (
     <div style={{ borderTop: '1px solid #2a2a2a', background: '#181818', flexShrink: 0 }}>
       <button
-        onClick={() => setCollapsed(p => !p)}
+        onClick={onToggleCollapsed}
         style={{
           width: '100%', background: '#1e1e1e', border: 'none', borderBottom: '1px solid #2a2a2a',
           color: '#555', fontSize: 10, padding: '3px 0', cursor: 'pointer', display: 'flex',
