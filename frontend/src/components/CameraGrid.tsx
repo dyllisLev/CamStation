@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import GridLayout from 'react-grid-layout';
 import type { Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -6,28 +6,18 @@ import 'react-resizable/css/styles.css';
 import { CameraTile } from './CameraTile';
 import type { Camera } from '../types';
 
-const STORAGE_KEY = 'camstation-layout';
 const COLS = 12;
 const ROW_HEIGHT = 60;
-
-function defaultLayout(cameras: Camera[]): Layout[] {
-  return cameras.map((c, i) => ({
-    i: c.id,
-    x: i === 0 ? 0 : 6 + ((i - 1) % 2) * 3,
-    y: i === 0 ? 0 : Math.floor((i - 1) / 2) * 2,
-    w: i === 0 ? 6 : 3,
-    h: i === 0 ? 4 : 2,
-    minW: 2, minH: 2,
-  }));
-}
 
 interface Props {
   cameras: Camera[];
   motionCams: Set<string>;
   height: number;
+  layout: Layout[];
+  onLayoutChange: (layout: Layout[]) => void;
 }
 
-export function CameraGrid({ cameras, motionCams, height }: Props) {
+export function CameraGrid({ cameras, motionCams, height, layout, onLayoutChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(window.innerWidth);
 
@@ -40,31 +30,6 @@ export function CameraGrid({ cameras, motionCams, height }: Props) {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
-
-  const [layout, setLayout] = useState<Layout[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return defaultLayout(cameras);
-    const parsed: Layout[] = JSON.parse(saved);
-    const savedIds = new Set(parsed.map(l => l.i));
-    const allPresent = cameras.every(c => savedIds.has(c.id));
-    return allPresent ? parsed : defaultLayout(cameras);
-  });
-
-  useEffect(() => {
-    if (cameras.length === 0) return;
-    const savedIds = new Set(layout.map(l => l.i));
-    const allPresent = cameras.every(c => savedIds.has(c.id));
-    if (!allPresent) {
-      const fresh = defaultLayout(cameras);
-      setLayout(fresh);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-    }
-  }, [cameras]);
-
-  const onLayoutChange = useCallback((newLayout: Layout[]) => {
-    setLayout(newLayout);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newLayout));
   }, []);
 
   return (
