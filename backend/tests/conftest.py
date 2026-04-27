@@ -12,11 +12,12 @@ async def test_db(tmp_path):
     async with aiosqlite.connect(db_path) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS layouts (
-                id         TEXT PRIMARY KEY,
-                name       TEXT NOT NULL,
-                data       TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                id                 TEXT    PRIMARY KEY,
+                name               TEXT    NOT NULL,
+                data               TEXT    NOT NULL,
+                timeline_collapsed INTEGER NOT NULL DEFAULT 0,
+                created_at         INTEGER NOT NULL,
+                updated_at         INTEGER NOT NULL
             )
         """)
         await db.commit()
