@@ -9,10 +9,10 @@ interface Props {
 export function CameraTile({ camera, hasMotion }: Props) {
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      <div style={{
+      <div className="cam-drag-handle" style={{
         background: 'rgba(0,0,0,0.7)', padding: '2px 8px',
         fontSize: 10, color: '#ddd', display: 'flex', alignItems: 'center', gap: 6,
-        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2,
+        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, cursor: 'move',
       }}>
         <span style={{
           width: 6, height: 6, borderRadius: '50%',

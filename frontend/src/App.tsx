@@ -29,7 +29,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a1a' }}>
       {page !== 'live' && nav}
-      {page === 'live' && <LiveView />}
+      {page === 'live' && <LiveView onNavigate={setPage} />}
       {page === 'recordings' && <RecordingsPage />}
       {page === 'settings' && <SettingsPage />}
     </div>

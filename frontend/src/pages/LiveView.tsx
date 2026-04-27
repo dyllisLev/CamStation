@@ -4,7 +4,11 @@ import { CameraGrid } from '../components/CameraGrid';
 import { Timeline } from '../components/Timeline';
 import { format } from 'date-fns';
 
-export function LiveView() {
+interface Props {
+  onNavigate: (page: 'recordings' | 'settings') => void;
+}
+
+export function LiveView({ onNavigate }: Props) {
   const cameras = useCameras();
   const today = format(new Date(), 'yyyy-MM-dd');
   const timelineData = useAllTimelines(cameras, today);
@@ -28,6 +32,8 @@ export function LiveView() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#111', color: '#eee' }}>
       <div style={{ background: '#242424', borderBottom: '1px solid #333', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <span style={{ fontSize: 13, fontWeight: 'bold', color: '#64b5f6' }}>📷 CamStation</span>
+        <button onClick={() => onNavigate('recordings')} style={{ background: 'none', border: 'none', color: '#777', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}>녹화목록</button>
+        <button onClick={() => onNavigate('settings')} style={{ background: 'none', border: 'none', color: '#777', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}>설정</button>
         <span style={{ marginLeft: 'auto', background: '#c62828', color: '#fff', fontSize: 10, fontWeight: 'bold', padding: '2px 7px', borderRadius: 10 }}>● LIVE</span>
       </div>
       <div style={{ flex: 1, overflow: 'hidden' }}>

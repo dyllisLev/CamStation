@@ -13,8 +13,8 @@ const ROW_HEIGHT = 60;
 function defaultLayout(cameras: Camera[]): Layout[] {
   return cameras.map((c, i) => ({
     i: c.id,
-    x: i === 0 ? 0 : ((i - 1) % 3) * 3 + 6,
-    y: i === 0 ? 0 : Math.floor((i - 1) / 3) * 2,
+    x: i === 0 ? 0 : 6 + ((i - 1) % 2) * 3,
+    y: i === 0 ? 0 : Math.floor((i - 1) / 2) * 2,
     w: i === 0 ? 6 : 3,
     h: i === 0 ? 4 : 2,
     minW: 2, minH: 2,
@@ -44,8 +44,23 @@ export function CameraGrid({ cameras, motionCams, height }: Props) {
 
   const [layout, setLayout] = useState<Layout[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : defaultLayout(cameras);
+    if (!saved) return defaultLayout(cameras);
+    const parsed: Layout[] = JSON.parse(saved);
+    const savedIds = new Set(parsed.map(l => l.i));
+    const allPresent = cameras.every(c => savedIds.has(c.id));
+    return allPresent ? parsed : defaultLayout(cameras);
   });
+
+  useEffect(() => {
+    if (cameras.length === 0) return;
+    const savedIds = new Set(layout.map(l => l.i));
+    const allPresent = cameras.every(c => savedIds.has(c.id));
+    if (!allPresent) {
+      const fresh = defaultLayout(cameras);
+      setLayout(fresh);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+    }
+  }, [cameras]);
 
   const onLayoutChange = useCallback((newLayout: Layout[]) => {
     setLayout(newLayout);
@@ -65,7 +80,6 @@ export function CameraGrid({ cameras, motionCams, height }: Props) {
       >
         {cameras.map(cam => (
           <div key={cam.id} style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}>
-            <div className="cam-drag-handle" style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'move' }} />
             <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
           </div>
         ))}
