@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Layout } from 'react-grid-layout';
 import type { Camera, LayoutItem, LayoutProfile } from '../types';
 import {
@@ -46,10 +46,16 @@ export function useLayouts(cameras: Camera[]) {
   const [savedSnapshot, setSavedSnapshot] = useState<Layout[]>([]);
   const [isDirty, setIsDirty] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  // react-grid-layout fires onLayoutChange once on mount to normalize the layout.
+  // This ref skips that first call so we don't incorrectly mark the layout as dirty.
+  const skipNextChangeRef = useRef(false);
+  // Track camera IDs to detect set changes after initialization.
+  const prevCameraIdsRef = useRef<string>('');
 
   useEffect(() => {
     if (cameras.length === 0 || initialized) return;
     setInitialized(true);
+    prevCameraIdsRef.current = cameras.map(c => c.id).join(',');
 
     getLayouts()
       .then(data => {
@@ -58,23 +64,43 @@ export function useLayouts(cameras: Camera[]) {
         const last = data.find(l => l.id === lastId);
         if (last) {
           const merged = mergeWithCameras(last.data, cameras);
+          skipNextChangeRef.current = true;
           setGridLayoutState(merged);
           setSavedSnapshot(merged);
           setCurrentId(last.id);
         } else {
           const def = defaultLayout(cameras);
+          skipNextChangeRef.current = true;
           setGridLayoutState(def);
           setSavedSnapshot(def);
         }
       })
       .catch(() => {
         const def = defaultLayout(cameras);
+        skipNextChangeRef.current = true;
         setGridLayoutState(def);
         setSavedSnapshot(def);
       });
   }, [cameras.length, initialized]);
 
+  // Re-merge when camera set changes after initialization (handles add/remove/replace)
+  useEffect(() => {
+    if (!initialized || cameras.length === 0) return;
+    const currentIds = cameras.map(c => c.id).join(',');
+    if (currentIds === prevCameraIdsRef.current) return;
+    prevCameraIdsRef.current = currentIds;
+    setGridLayoutState(prev => mergeWithCameras(prev.map(toLayoutItem), cameras));
+    setSavedSnapshot(prev => mergeWithCameras(prev.map(toLayoutItem), cameras));
+  }, [cameras, initialized]);
+
   const setGridLayout = useCallback((layout: Layout[]) => {
+    if (skipNextChangeRef.current) {
+      skipNextChangeRef.current = false;
+      // Accept normalized positions without marking dirty
+      setGridLayoutState(layout);
+      setSavedSnapshot(layout);
+      return;
+    }
     setGridLayoutState(layout);
     setIsDirty(true);
   }, []);
@@ -83,6 +109,7 @@ export function useLayouts(cameras: Camera[]) {
     const target = layouts.find(l => l.id === id);
     if (!target) return;
     const merged = mergeWithCameras(target.data, cams);
+    skipNextChangeRef.current = true;
     setGridLayoutState(merged);
     setSavedSnapshot(merged);
     setCurrentId(id);
@@ -93,7 +120,12 @@ export function useLayouts(cameras: Camera[]) {
   const saveLayout = useCallback(async () => {
     if (!currentId) return;
     const items = gridLayout.map(toLayoutItem);
-    await updateLayout(currentId, { data: items });
+    try {
+      await updateLayout(currentId, { data: items });
+    } catch (e) {
+      console.error('Failed to save layout:', e);
+      return;
+    }
     setSavedSnapshot(gridLayout);
     setIsDirty(false);
     setLayouts(prev => prev.map(l =>
@@ -105,7 +137,13 @@ export function useLayouts(cameras: Camera[]) {
 
   const saveAsLayout = useCallback(async (name: string) => {
     const items = gridLayout.map(toLayoutItem);
-    const created = await createLayout({ name, data: items });
+    let created: LayoutProfile;
+    try {
+      created = await createLayout({ name, data: items });
+    } catch (e) {
+      console.error('Failed to create layout:', e);
+      return;
+    }
     setLayouts(prev => [created, ...prev]);
     setCurrentId(created.id);
     setSavedSnapshot(gridLayout);
@@ -114,16 +152,23 @@ export function useLayouts(cameras: Camera[]) {
   }, [gridLayout]);
 
   const cancelEdit = useCallback(() => {
+    skipNextChangeRef.current = true;
     setGridLayoutState(savedSnapshot);
     setIsDirty(false);
   }, [savedSnapshot]);
 
   const deleteLayoutById = useCallback(async (id: string) => {
-    await deleteLayoutApi(id);
+    try {
+      await deleteLayoutApi(id);
+    } catch (e) {
+      console.error('Failed to delete layout:', e);
+      return;
+    }
     setLayouts(prev => prev.filter(l => l.id !== id));
     if (currentId === id) {
       setCurrentId(null);
       setIsDirty(false);
+      localStorage.removeItem(LAST_LAYOUT_KEY);
     }
   }, [currentId]);
 

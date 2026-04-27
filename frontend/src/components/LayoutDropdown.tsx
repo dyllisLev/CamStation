@@ -61,7 +61,14 @@ export function LayoutDropdown({
       {isDirty && (
         <>
           <button
-            onClick={onSave}
+            onClick={() => {
+              if (currentId === null) {
+                setOpen(true);
+                setSaveAsMode(true);
+              } else {
+                onSave();
+              }
+            }}
             title="저장"
             style={{
               width: 24, height: 24, borderRadius: '50%', border: 'none',
