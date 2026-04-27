@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Camera, TimelineData, Settings, SystemStatus } from '../types';
+import type { Camera, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -20,3 +20,18 @@ export const getStatus = (): Promise<SystemStatus> =>
 
 export const listRecordings = (cam: string, date: string): Promise<string[]> =>
   api.get(`/recordings/${encodeURIComponent(cam)}/${date}`).then(r => r.data);
+
+export const getLayouts = (): Promise<LayoutProfile[]> =>
+  api.get('/layouts').then(r => r.data);
+
+export const createLayout = (req: { name: string; data: LayoutItem[] }): Promise<LayoutProfile> =>
+  api.post('/layouts', req).then(r => r.data);
+
+export const updateLayout = (
+  id: string,
+  req: { name?: string; data?: LayoutItem[] },
+): Promise<LayoutProfile> =>
+  api.put(`/layouts/${id}`, req).then(r => r.data);
+
+export const deleteLayout = (id: string): Promise<void> =>
+  api.delete(`/layouts/${id}`);
