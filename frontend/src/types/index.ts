@@ -36,3 +36,21 @@ export interface SystemStatus {
   disk_total_gb: number;
   cameras_online: number;
 }
+
+export interface LayoutItem {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+}
+
+export interface LayoutProfile {
+  id: string;
+  name: string;
+  data: LayoutItem[];
+  created_at: number;
+  updated_at: number;
+}
