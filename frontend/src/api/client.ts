@@ -17,3 +17,6 @@ export const updateSettings = (s: Settings): Promise<Settings> =>
 
 export const getStatus = (): Promise<SystemStatus> =>
   api.get('/status').then(r => r.data);
+
+export const listRecordings = (cam: string, date: string): Promise<string[]> =>
+  api.get(`/recordings/${encodeURIComponent(cam)}/${date}`).then(r => r.data);

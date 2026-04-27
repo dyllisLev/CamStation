@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCameras } from '../hooks/useCameras';
 import { format } from 'date-fns';
-import axios from 'axios';
+import { listRecordings } from '../api/client';
 
 export function RecordingsPage() {
   const cameras = useCameras();
@@ -11,8 +11,8 @@ export function RecordingsPage() {
 
   useEffect(() => {
     if (!selectedCam || !selectedDate) return;
-    axios.get(`/api/recordings/${encodeURIComponent(selectedCam)}/${selectedDate}`)
-      .then(r => setFiles(r.data))
+    listRecordings(selectedCam, selectedDate)
+      .then(setFiles)
       .catch(() => setFiles([]));
   }, [selectedCam, selectedDate]);
 

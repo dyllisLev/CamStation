@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import GridLayout from 'react-grid-layout';
 import type { Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -28,10 +28,24 @@ interface Props {
 }
 
 export function CameraGrid({ cameras, motionCams, height }: Props) {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  const [layout, setLayout] = useState<Layout[]>(
-    saved ? JSON.parse(saved) : defaultLayout(cameras)
-  );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setContainerWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const [layout, setLayout] = useState<Layout[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : defaultLayout(cameras);
+  });
 
   const onLayoutChange = useCallback((newLayout: Layout[]) => {
     setLayout(newLayout);
@@ -39,21 +53,23 @@ export function CameraGrid({ cameras, motionCams, height }: Props) {
   }, []);
 
   return (
-    <GridLayout
-      layout={layout}
-      cols={COLS}
-      rowHeight={ROW_HEIGHT}
-      width={window.innerWidth}
-      onLayoutChange={onLayoutChange}
-      draggableHandle=".cam-drag-handle"
-      style={{ background: '#111', minHeight: height }}
-    >
-      {cameras.map(cam => (
-        <div key={cam.id} style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}>
-          <div className="cam-drag-handle" style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'move' }} />
-          <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
-        </div>
-      ))}
-    </GridLayout>
+    <div ref={containerRef} style={{ width: '100%', height }}>
+      <GridLayout
+        layout={layout}
+        cols={COLS}
+        rowHeight={ROW_HEIGHT}
+        width={containerWidth}
+        onLayoutChange={onLayoutChange}
+        draggableHandle=".cam-drag-handle"
+        style={{ background: '#111', minHeight: height }}
+      >
+        {cameras.map(cam => (
+          <div key={cam.id} style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}>
+            <div className="cam-drag-handle" style={{ position: 'absolute', inset: 0, zIndex: 1, cursor: 'move' }} />
+            <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
+          </div>
+        ))}
+      </GridLayout>
+    </div>
   );
 }

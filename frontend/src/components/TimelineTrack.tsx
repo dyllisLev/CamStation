@@ -37,8 +37,8 @@ export function TimelineTrack({ camId, segments, motionEvents, dayStart, dayEnd,
             background: '#1565c0', opacity: 0.7, borderRadius: 2,
           }} />
         ))}
-        {motionEvents.map((m, i) => (
-          <div key={i} style={{
+        {motionEvents.map((m) => (
+          <div key={`${m.ts_start}`} style={{
             position: 'absolute', top: 0, bottom: 0,
             left: `${pct(m.ts_start)}%`,
             width: `${Math.max(pct((m.ts_end ?? m.ts_start + 5)) - pct(m.ts_start), 0.3)}%`,
