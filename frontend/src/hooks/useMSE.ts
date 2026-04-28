@@ -6,8 +6,11 @@ export function useMSE(camId: string) {
 
   useEffect(() => {
     if (!camId) return;
-    const video = videoRef.current;
-    if (!video) return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    // Explicitly typed as non-nullable so nested closures see HTMLVideoElement
+    const video: HTMLVideoElement = videoEl;
 
     let destroyed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -48,7 +51,6 @@ export function useMSE(camId: string) {
 
         ws.onmessage = (e) => {
           if (typeof e.data === 'string') {
-            // First message: MIME type string from go2rtc
             try {
               sb = ms.addSourceBuffer(e.data);
               sb.addEventListener('updateend', () => { trimBuffer(); flush(); });
