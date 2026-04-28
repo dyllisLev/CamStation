@@ -69,7 +69,10 @@ async def get_recording(cam_id: str, date: str, filename: str):
 
 @router.get("/{cam_id}/{date}")
 async def list_recordings(cam_id: str, date: str):
-    day_start = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=KST).timestamp()
+    try:
+        day_start = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=KST).timestamp()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format; expected YYYY-MM-DD")
     day_end = day_start + 86400
     db_path = get_db_path()
     async with aiosqlite.connect(db_path) as db:
