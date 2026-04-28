@@ -7,7 +7,7 @@ import { CameraTile } from './CameraTile';
 import type { Camera } from '../types';
 
 const COLS = 12;
-const BASE_ROW_HEIGHT = 60;
+const BASE_ROW_HEIGHT = 20;
 
 interface Props {
   cameras: Camera[];
