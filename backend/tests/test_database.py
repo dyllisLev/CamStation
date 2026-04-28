@@ -1,7 +1,8 @@
 import pytest
 import aiosqlite
 import os
-from database import init_db, get_db_path, get_setting, set_setting
+from database import init_db, get_setting, set_setting
+from config import get_db_path
 
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
@@ -58,6 +59,7 @@ async def test_init_db_idempotent(tmp_db):
     value = await get_setting("retention_days")
     assert value == "99"
 
+
 @pytest.mark.asyncio
 async def test_recordings_table_exists(tmp_path, monkeypatch):
     db_path = str(tmp_path / "test.db")
@@ -71,3 +73,10 @@ async def test_recordings_table_exists(tmp_path, monkeypatch):
         )
         row = await cur.fetchone()
     assert row is not None, "recordings 테이블이 생성되어 있어야 한다"
+
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_rec_cam_ts'"
+        )
+        idx_row = await cur.fetchone()
+    assert idx_row is not None, "idx_rec_cam_ts 인덱스가 생성되어 있어야 한다"
