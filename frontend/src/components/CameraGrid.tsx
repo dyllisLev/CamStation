@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import GridLayout from 'react-grid-layout';
 import type { Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -15,6 +15,35 @@ interface Props {
   layout: Layout[];
   onLayoutChange: (layout: Layout[]) => void;
 }
+
+const H = 8;  // edge handle thickness px
+const C = 14; // corner handle size px
+
+function handleStyle(axis: string): React.CSSProperties {
+  const base: React.CSSProperties = { position: 'absolute', zIndex: 10 };
+  switch (axis) {
+    case 'n':  return { ...base, top: 0, left: C, right: C, height: H, cursor: 'ns-resize' };
+    case 's':  return { ...base, bottom: 0, left: C, right: C, height: H, cursor: 'ns-resize' };
+    case 'e':  return { ...base, right: 0, top: C, bottom: C, width: H, cursor: 'ew-resize' };
+    case 'w':  return { ...base, left: 0, top: C, bottom: C, width: H, cursor: 'ew-resize' };
+    case 'ne': return { ...base, top: 0, right: 0, width: C, height: C, cursor: 'ne-resize' };
+    case 'nw': return { ...base, top: 0, left: 0, width: C, height: C, cursor: 'nw-resize' };
+    case 'se': return { ...base, bottom: 0, right: 0, width: C, height: C, cursor: 'se-resize' };
+    case 'sw': return { ...base, bottom: 0, left: 0, width: C, height: C, cursor: 'sw-resize' };
+    default:   return base;
+  }
+}
+
+const ResizeHandle = React.forwardRef<HTMLDivElement, { handleAxis?: string }>(
+  ({ handleAxis = 'se', ...rest }, ref) => (
+    <div
+      ref={ref}
+      {...rest}
+      style={handleStyle(handleAxis)}
+      className={`cam-resize-handle cam-resize-handle-${handleAxis}`}
+    />
+  )
+);
 
 export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,7 +63,6 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
     return () => ro.disconnect();
   }, []);
 
-  // Shrink rowHeight only when tiles would overflow — never cap tile positions
   const maxItemRows = Math.max(1, ...layout.map(item => item.y + item.h));
   const rowHeight = containerHeight > 0
     ? Math.min(BASE_ROW_HEIGHT, Math.floor(containerHeight / maxItemRows))
@@ -51,6 +79,7 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
           onLayoutChange={onLayoutChange}
           draggableHandle=".cam-drag-handle"
           resizeHandles={['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']}
+          resizeHandle={<ResizeHandle />}
           margin={[2, 2]}
           containerPadding={[0, 0]}
           style={{ background: '#111' }}

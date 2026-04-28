@@ -15,48 +15,22 @@ body {
   height: 100vh;
 }
 
-/* Edge resize handles — visible as highlighted lines on hover */
-.react-resizable-handle {
-  background-image: none !important;
+/* Custom resize handles — rendered via resizeHandle prop, styled here */
+.cam-resize-handle {
   background: transparent;
-  z-index: 10;
+  transition: background 0.15s;
 }
-.react-resizable-handle-n,
-.react-resizable-handle-s {
-  width: calc(100% - 16px);
-  height: 8px;
-  left: 8px;
-  cursor: ns-resize;
+.cam-resize-handle-n:hover,
+.cam-resize-handle-s:hover {
+  background: rgba(100, 181, 246, 0.35);
 }
-.react-resizable-handle-n { top: 0; transform: none; }
-.react-resizable-handle-s { bottom: 0; transform: none; }
-.react-resizable-handle-e,
-.react-resizable-handle-w {
-  width: 8px;
-  height: calc(100% - 16px);
-  top: 8px;
-  cursor: ew-resize;
+.cam-resize-handle-e:hover,
+.cam-resize-handle-w:hover {
+  background: rgba(100, 181, 246, 0.35);
 }
-.react-resizable-handle-e { right: 0; transform: none; }
-.react-resizable-handle-w { left: 0; transform: none; }
-.react-resizable-handle-n:hover,
-.react-resizable-handle-s:hover {
-  background: linear-gradient(transparent 3px, rgba(100,181,246,0.5) 3px, rgba(100,181,246,0.5) 5px, transparent 5px);
+.cam-resize-handle-ne:hover,
+.cam-resize-handle-nw:hover,
+.cam-resize-handle-se:hover,
+.cam-resize-handle-sw:hover {
+  background: rgba(100, 181, 246, 0.35);
 }
-.react-resizable-handle-e:hover,
-.react-resizable-handle-w:hover {
-  background: linear-gradient(90deg, transparent 3px, rgba(100,181,246,0.5) 3px, rgba(100,181,246,0.5) 5px, transparent 5px);
-}
-/* Corner handles */
-.react-resizable-handle-ne,
-.react-resizable-handle-nw,
-.react-resizable-handle-se,
-.react-resizable-handle-sw {
-  width: 14px;
-  height: 14px;
-  cursor: nwse-resize;
-}
-.react-resizable-handle-se { bottom: 0; right: 0; cursor: se-resize; }
-.react-resizable-handle-sw { bottom: 0; left: 0; cursor: sw-resize; }
-.react-resizable-handle-ne { top: 0; right: 0; cursor: ne-resize; }
-.react-resizable-handle-nw { top: 0; left: 0; cursor: nw-resize; }
