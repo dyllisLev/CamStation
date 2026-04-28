@@ -69,7 +69,10 @@ log "Frontend artifact extracted to $RELEASE_DIR/frontend/dist"
 # 백엔드 + 배포 스크립트 업데이트 (tracked 파일만)
 cd "$INSTALL_DIR"
 git fetch origin 2>&1 | tee -a "$LOG_FILE"
-git checkout origin/main -- backend/routers/ backend/tests/ deploy/ 2>&1 | tee -a "$LOG_FILE"
+git checkout origin/main -- \
+  backend/config.py backend/database.py backend/main.py backend/models.py backend/requirements.txt \
+  backend/routers/ backend/services/ backend/tests/ \
+  deploy/ 2>&1 | tee -a "$LOG_FILE"
 log "Backend routers and deploy scripts updated"
 
 # 롤백을 위해 이전 심링크 대상 저장
