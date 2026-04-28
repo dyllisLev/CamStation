@@ -2,12 +2,26 @@ import { useState, useEffect } from 'react';
 import { useCameras } from '../hooks/useCameras';
 import { format } from 'date-fns';
 import { listRecordings } from '../api/client';
+import type { RecordingSegment } from '../types';
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}분 ${s.toString().padStart(2, '0')}초`;
+}
+
+function formatSize(bytes: number | null): string {
+  if (!bytes) return '';
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
 
 export function RecordingsPage() {
   const cameras = useCameras();
   const [selectedCam, setSelectedCam] = useState('');
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [files, setFiles] = useState<string[]>([]);
+  const [segments, setSegments] = useState<RecordingSegment[]>([]);
   const [playingFile, setPlayingFile] = useState<string | null>(null);
 
   useEffect(() => {
@@ -18,23 +32,16 @@ export function RecordingsPage() {
     if (!selectedCam || !selectedDate) return;
     setPlayingFile(null);
     listRecordings(selectedCam, selectedDate)
-      .then(setFiles)
-      .catch(() => setFiles([]));
+      .then(setSegments)
+      .catch(() => setSegments([]));
   }, [selectedCam, selectedDate]);
 
   const downloadUrl = (filename: string) =>
     `/api/recordings/${encodeURIComponent(selectedCam)}/${selectedDate}/${filename}`;
 
-  const formatFilename = (f: string) => {
-    const noExt = f.replace(/\.[^.]+$/, '');
-    const match = noExt.match(/(\d{4}-\d{2}-\d{2})[_-]?(\d{2}[-:]?\d{2}[-:]?\d{2})?/);
-    if (match) {
-      const time = match[2]?.replace(/-/g, ':') ?? '';
-      return time ? `${match[1]} ${time}` : match[1];
-    }
-    const hm = noExt.match(/^(\d{2})-(\d{2})$/);
-    if (hm) return `${selectedDate} ${hm[1]}:${hm[2]}`;
-    return f;
+  const formatTime = (ts: number) => {
+    const d = new Date(ts * 1000);
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
 
   return (
@@ -62,59 +69,67 @@ export function RecordingsPage() {
             padding: '6px 10px', borderRadius: 4, fontSize: 13,
           }}
         />
-        <span style={{ color: '#666', fontSize: 12 }}>{files.length}개 파일</span>
+        <span style={{ color: '#666', fontSize: 12 }}>{segments.length}개 파일</span>
       </div>
 
-      {files.length === 0 && (
+      {segments.length === 0 && (
         <p style={{ color: '#555', fontSize: 13 }}>녹화 파일이 없습니다.</p>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {files.map(f => (
-          <div key={f}>
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                background: playingFile === f ? '#333' : '#222',
-                padding: '10px 14px', borderRadius: playingFile === f ? '4px 4px 0 0' : 4,
-                borderLeft: playingFile === f ? '2px solid #64b5f6' : '2px solid transparent',
-                cursor: 'pointer',
-              }}
-              onClick={() => setPlayingFile(playingFile === f ? null : f)}
-            >
-              <span style={{ fontSize: 18, opacity: 0.5 }}>▶</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: '#ddd', fontVariantNumeric: 'tabular-nums' }}>
-                  {formatFilename(f)}
-                </div>
-                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{f}</div>
-              </div>
-              <a
-                href={downloadUrl(f)}
-                download
-                onClick={e => e.stopPropagation()}
+        {segments.map(seg => {
+          const duration = seg.ts_end ? seg.ts_end - seg.ts_start : null;
+          return (
+            <div key={seg.filename}>
+              <div
                 style={{
-                  color: '#64b5f6', fontSize: 12, textDecoration: 'none',
-                  padding: '4px 10px', border: '1px solid #335577', borderRadius: 3,
-                  whiteSpace: 'nowrap',
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  background: playingFile === seg.filename ? '#333' : '#222',
+                  padding: '10px 14px', borderRadius: playingFile === seg.filename ? '4px 4px 0 0' : 4,
+                  borderLeft: playingFile === seg.filename ? '2px solid #64b5f6' : '2px solid transparent',
+                  cursor: 'pointer',
                 }}
+                onClick={() => setPlayingFile(playingFile === seg.filename ? null : seg.filename)}
               >
-                ⬇ 다운로드
-              </a>
-            </div>
-
-            {playingFile === f && (
-              <div style={{ background: '#1a1a1a', borderRadius: '0 0 4px 4px', padding: 12 }}>
-                <video
-                  controls
-                  autoPlay
-                  src={downloadUrl(f)}
-                  style={{ width: '100%', maxHeight: 400, background: '#000', borderRadius: 3, display: 'block' }}
-                />
+                <span style={{ fontSize: 18, opacity: 0.5 }}>▶</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: '#ddd', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatTime(seg.ts_start)}
+                    {seg.ts_end && ` – ${formatTime(seg.ts_end)}`}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 2, display: 'flex', gap: 10 }}>
+                    <span>{seg.filename}</span>
+                    {duration && <span>{formatDuration(duration)}</span>}
+                    {seg.file_size && <span>{formatSize(seg.file_size)}</span>}
+                  </div>
+                </div>
+                <a
+                  href={downloadUrl(seg.filename)}
+                  download
+                  onClick={e => e.stopPropagation()}
+                  style={{
+                    color: '#64b5f6', fontSize: 12, textDecoration: 'none',
+                    padding: '4px 10px', border: '1px solid #335577', borderRadius: 3,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  ⬇ 다운로드
+                </a>
               </div>
-            )}
-          </div>
-        ))}
+
+              {playingFile === seg.filename && (
+                <div style={{ background: '#1a1a1a', borderRadius: '0 0 4px 4px', padding: 12 }}>
+                  <video
+                    controls
+                    autoPlay
+                    src={downloadUrl(seg.filename)}
+                    style={{ width: '100%', maxHeight: 400, background: '#000', borderRadius: 3, display: 'block' }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

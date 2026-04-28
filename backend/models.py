@@ -14,9 +14,10 @@ class MotionEvent(BaseModel):
 
 class RecordingSegment(BaseModel):
     camera_id: str
-    date: str
     filename: str
     ts_start: float
+    ts_end: float | None = None
+    file_size: int | None = None
 
 class Settings(BaseModel):
     retention_days: int

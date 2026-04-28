@@ -57,6 +57,9 @@ async def lifespan(app: FastAPI):
     motion_on = (await get_setting("motion_enabled") or "1") != "0"
     set_motion_enabled(motion_on)
 
+    from services.backfill import backfill_recordings
+    await backfill_recordings(RECORDINGS_DIR, get_db_path(), active_cam_ids=[])
+
     await recorder.start_all(cam_ids, segment_min, RECORDINGS_DIR)
     sub_task = asyncio.create_task(_start_sub_keepalives(sub_cam_ids))
 

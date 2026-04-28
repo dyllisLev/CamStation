@@ -7,9 +7,10 @@ export interface Camera {
 
 export interface RecordingSegment {
   camera_id: string;
-  date: string;
   filename: string;
   ts_start: number;
+  ts_end: number | null;
+  file_size: number | null;
 }
 
 export interface MotionEvent {

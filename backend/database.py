@@ -36,6 +36,19 @@ async def init_db():
                 created_at         INTEGER NOT NULL,
                 updated_at         INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS recordings (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                camera_id TEXT NOT NULL,
+                filename  TEXT NOT NULL,
+                ts_start  REAL NOT NULL,
+                ts_end    REAL,
+                file_size INTEGER,
+                created   REAL DEFAULT (unixepoch()),
+                UNIQUE(camera_id, ts_start)
+            );
+            CREATE INDEX IF NOT EXISTS idx_rec_cam_ts
+                ON recordings(camera_id, ts_start);
         """)
         await db.commit()
 
