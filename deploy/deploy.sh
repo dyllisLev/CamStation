@@ -72,8 +72,8 @@ git fetch origin 2>&1 | tee -a "$LOG_FILE"
 git checkout origin/main -- \
   backend/config.py backend/database.py backend/main.py backend/models.py backend/requirements.txt \
   backend/routers/ backend/services/ backend/tests/ \
-  deploy/ 2>&1 | tee -a "$LOG_FILE"
-log "Backend routers and deploy scripts updated"
+  config/ deploy/ 2>&1 | tee -a "$LOG_FILE"
+log "Backend, config, and deploy scripts updated"
 
 # 롤백을 위해 이전 심링크 대상 저장
 PREV_DIST=$(readlink "$INSTALL_DIR/frontend/dist" 2>/dev/null || echo "")
