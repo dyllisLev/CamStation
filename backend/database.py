@@ -45,7 +45,7 @@ async def init_db():
                 ts_end    REAL,
                 file_size INTEGER,
                 created   REAL DEFAULT (unixepoch()),
-                UNIQUE(camera_id, filename)
+                UNIQUE(camera_id, ts_start)
             );
             CREATE INDEX IF NOT EXISTS idx_rec_cam_ts
                 ON recordings(camera_id, ts_start);

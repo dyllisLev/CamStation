@@ -16,6 +16,7 @@ _segment_minutes: int = 10
 _recordings_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
 _current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 파일 전체 경로
+_stderr_tasks: dict[str, asyncio.Task] = {}
 
 
 def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) -> list[str]:
@@ -78,10 +79,11 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
             async with aiosqlite.connect(db_path) as db:
                 if prev_path is not None:
                     size = _safe_getsize(prev_path)
+                    prev_filename = os.path.basename(prev_path)
                     await db.execute(
                         "UPDATE recordings SET ts_end=?, file_size=? "
-                        "WHERE camera_id=? AND ts_end IS NULL",
-                        (new_ts, size, cam_id),
+                        "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
+                        (new_ts, size, cam_id, prev_filename),
                     )
                 await db.execute(
                     "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
@@ -113,7 +115,7 @@ async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str
         stderr=asyncio.subprocess.PIPE,
     )
     _processes[cam_id] = proc
-    asyncio.create_task(_watch_stderr(cam_id, proc, get_db_path()))
+    _stderr_tasks[cam_id] = asyncio.create_task(_watch_stderr(cam_id, proc, get_db_path()))
     logger.info("Started recording for %s (pid %s)", cam_id, proc.pid)
 
 
@@ -123,6 +125,13 @@ async def stop_recording(cam_id: str):
     if proc:
         proc.terminate()
         await proc.wait()
+        task = _stderr_tasks.pop(cam_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         # 마지막 세그먼트 완료 처리
         ts_end = datetime.now(KST).timestamp()
         last_path = _current_segment_paths.pop(cam_id, None)
