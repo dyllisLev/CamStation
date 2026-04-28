@@ -8,25 +8,21 @@ def anyio_backend():
     return 'asyncio'
 
 
-@pytest.mark.asyncio
-async def test_parse_ts_start_new_format():
+def test_parse_ts_start_new_format():
     from services.backfill import _parse_ts_start
     ts = _parse_ts_start("14-30.mp4", "2026-04-28")
     assert ts is not None
-    # KST 2026-04-28 14:30 = UTC 05:30 = 1777354200
     assert 1777354000 < ts < 1777355000
 
 
-@pytest.mark.asyncio
-async def test_parse_ts_start_old_format():
+def test_parse_ts_start_old_format():
     from services.backfill import _parse_ts_start
     ts = _parse_ts_start("2026-04-28_14-30.mp4", "2026-04-28")
     assert ts is not None
     assert 1777354000 < ts < 1777355000
 
 
-@pytest.mark.asyncio
-async def test_parse_ts_start_invalid_returns_none():
+def test_parse_ts_start_invalid_returns_none():
     from services.backfill import _parse_ts_start
     assert _parse_ts_start("garbage.mp4", "2026-04-28") is None
 
@@ -60,8 +56,10 @@ async def test_backfill_inserts_rows(tmp_path, test_db):
 async def test_backfill_last_file_null_if_active(tmp_path, test_db):
     from services.backfill import backfill_recordings
     import datetime
+    from datetime import timezone, timedelta
 
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    KST = timezone(timedelta(hours=9))
+    today = datetime.datetime.now(tz=KST).strftime("%Y-%m-%d")
     day_dir = tmp_path / "recordings" / "cam1" / today
     day_dir.mkdir(parents=True)
     (day_dir / "00-00.mp4").write_bytes(b"x" * 500)
