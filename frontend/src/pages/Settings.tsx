@@ -39,17 +39,36 @@ export function SettingsPage() {
   const handleUpdate = async () => {
     setUpdateLoading(true);
     setUpdateMsg(null);
+    const startingVersion = version?.current_version;
     try {
       const res = await triggerUpdate();
       if (res.status === 'already_running') {
         setUpdateMsg('이미 업데이트 진행 중입니다.');
-      } else {
-        setUpdateMsg('업데이트를 시작했습니다. 잠시 후 페이지를 새로고침하세요.');
-        setTimeout(loadVersion, 10000);
+        setUpdateLoading(false);
+        return;
       }
+      setUpdateMsg('업데이트 중... 완료되면 자동으로 새로고침됩니다.');
+      const deadline = Date.now() + 3 * 60 * 1000;
+      const poll = async () => {
+        if (Date.now() > deadline) {
+          setUpdateMsg('업데이트 시간 초과. 페이지를 수동으로 새로고침하세요.');
+          setUpdateLoading(false);
+          return;
+        }
+        try {
+          const v = await getSystemVersion();
+          if (v.current_version !== startingVersion) {
+            window.location.reload();
+            return;
+          }
+        } catch {
+          // 서버 재시작 중일 수 있음, 계속 폴링
+        }
+        setTimeout(poll, 3000);
+      };
+      setTimeout(poll, 5000);
     } catch {
       setUpdateMsg('업데이트 요청 실패.');
-    } finally {
       setUpdateLoading(false);
     }
   };
@@ -213,7 +232,7 @@ export function SettingsPage() {
                 fontSize: 12,
               }}
             >
-              {updateLoading ? '요청 중...' : '지금 업데이트'}
+              {updateLoading ? '업데이트 중...' : '지금 업데이트'}
             </button>
             {updateMsg && (
               <div style={{ marginTop: 8, fontSize: 11, color: '#ffa726' }}>{updateMsg}</div>
