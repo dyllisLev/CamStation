@@ -49,6 +49,7 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(window.innerWidth);
   const [containerHeight, setContainerHeight] = useState(0);
+  const [focusedCamId, setFocusedCamId] = useState<string | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -62,6 +63,17 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!focusedCamId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFocusedCamId(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [focusedCamId]);
+
+  const focusedCam = cameras.find(c => c.id === focusedCamId);
 
   const maxItemRows = Math.max(1, ...layout.map(item => item.y + item.h));
   const rowHeight = containerHeight > 0
@@ -85,11 +97,26 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
           style={{ background: '#111' }}
         >
           {cameras.map(cam => (
-            <div key={cam.id} style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}>
+            <div
+              key={cam.id}
+              style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}
+              onDoubleClick={() => setFocusedCamId(cam.id)}
+            >
               <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
             </div>
           ))}
         </GridLayout>
+      )}
+      {focusedCam && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: '#000', display: 'flex', flexDirection: 'column',
+          }}
+          onDoubleClick={() => setFocusedCamId(null)}
+        >
+          <CameraTile camera={focusedCam} hasMotion={motionCams.has(focusedCam.id)} />
+        </div>
       )}
     </div>
   );
