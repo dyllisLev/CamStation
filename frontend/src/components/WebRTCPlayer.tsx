@@ -1,4 +1,4 @@
-import { useWebRTC } from '../hooks/useWebRTC';
+import { useMSE } from '../hooks/useMSE';
 
 interface Props {
   camId: string;
@@ -6,7 +6,7 @@ interface Props {
 }
 
 export function WebRTCPlayer({ camId, style }: Props) {
-  const { videoRef, connected } = useWebRTC(camId);
+  const { videoRef, connected } = useMSE(camId);
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#0d0d0d', ...style }}>
       <video
