@@ -48,7 +48,8 @@ export function LiveView({ onNavigate }: Props) {
     const segs = timelineData[camId]?.segments ?? [];
     const seg = [...segs].reverse().find(s => s.ts_start <= ts);
     if (!seg) return;
-    const segDate = format(new Date(seg.ts_start * 1000), 'yyyy-MM-dd');
+    const segDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' })
+      .format(new Date(seg.ts_start * 1000));
     const url = `/api/recordings/${encodeURIComponent(camId)}/${segDate}/${seg.filename}`;
     window.open(url, '_blank');
   };

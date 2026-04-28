@@ -136,13 +136,21 @@ async def stop_recording(cam_id: str):
         ts_end = datetime.now(KST).timestamp()
         last_path = _current_segment_paths.pop(cam_id, None)
         size = _safe_getsize(last_path) if last_path else None
+        last_filename = os.path.basename(last_path) if last_path else None
         try:
             async with aiosqlite.connect(get_db_path()) as db:
-                await db.execute(
-                    "UPDATE recordings SET ts_end=?, file_size=? "
-                    "WHERE camera_id=? AND ts_end IS NULL",
-                    (ts_end, size, cam_id),
-                )
+                if last_filename:
+                    await db.execute(
+                        "UPDATE recordings SET ts_end=?, file_size=? "
+                        "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
+                        (ts_end, size, cam_id, last_filename),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE recordings SET ts_end=?, file_size=? "
+                        "WHERE camera_id=? AND ts_end IS NULL",
+                        (ts_end, size, cam_id),
+                    )
                 await db.commit()
         except Exception as e:
             logger.error("stop_recording DB error for %s: %s", cam_id, e)
