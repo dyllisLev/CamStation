@@ -75,3 +75,9 @@ export interface StorageStats {
   cameras: CameraStorageStats[];
   hourly_gb_total: number;
 }
+
+export interface SystemVersion {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+}

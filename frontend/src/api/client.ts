@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Camera, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats } from '../types';
+import type { Camera, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -38,3 +38,9 @@ export const updateLayout = (
 
 export const deleteLayout = (id: string): Promise<void> =>
   api.delete(`/layouts/${id}`);
+
+export const getSystemVersion = (): Promise<SystemVersion> =>
+  api.get('/system/version').then(r => r.data);
+
+export const triggerUpdate = (): Promise<{ status: string }> =>
+  api.post('/system/update').then(r => r.data);
