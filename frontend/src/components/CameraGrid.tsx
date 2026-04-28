@@ -73,8 +73,6 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
     return () => window.removeEventListener('keydown', handler);
   }, [focusedCamId]);
 
-  const focusedCam = cameras.find(c => c.id === focusedCamId);
-
   const maxItemRows = Math.max(1, ...layout.map(item => item.y + item.h));
   const rowHeight = containerHeight > 0
     ? Math.min(BASE_ROW_HEIGHT, Math.floor(containerHeight / maxItemRows))
@@ -96,27 +94,23 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
           containerPadding={[0, 0]}
           style={{ background: '#111' }}
         >
-          {cameras.map(cam => (
-            <div
-              key={cam.id}
-              style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}
-              onDoubleClick={() => setFocusedCamId(cam.id)}
-            >
-              <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
-            </div>
-          ))}
+          {cameras.map(cam => {
+            const focused = cam.id === focusedCamId;
+            return (
+              <div key={cam.id} style={{ position: 'relative', overflow: 'hidden', border: '1px solid #2a2a2a' }}>
+                <div
+                  style={focused ? {
+                    position: 'fixed', inset: 0, zIndex: 1000,
+                    background: '#000', display: 'flex', flexDirection: 'column',
+                  } : { width: '100%', height: '100%' }}
+                  onDoubleClick={() => setFocusedCamId(focused ? null : cam.id)}
+                >
+                  <CameraTile camera={cam} hasMotion={motionCams.has(cam.id)} />
+                </div>
+              </div>
+            );
+          })}
         </GridLayout>
-      )}
-      {focusedCam && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 1000,
-            background: '#000', display: 'flex', flexDirection: 'column',
-          }}
-          onDoubleClick={() => setFocusedCamId(null)}
-        >
-          <CameraTile camera={focusedCam} hasMotion={motionCams.has(focusedCam.id)} />
-        </div>
       )}
     </div>
   );
