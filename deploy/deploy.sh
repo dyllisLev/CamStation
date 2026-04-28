@@ -43,7 +43,7 @@ log "Updating: $CURRENT → $LATEST"
 
 # 스테이징 디렉토리 준비
 RELEASE_DIR="$RELEASES_DIR/$LATEST"
-mkdir -p "$RELEASE_DIR/frontend/dist"
+mkdir -p "$RELEASE_DIR/frontend"
 
 # frontend-dist.tar.gz 다운로드
 ASSET_URL=$(curl -sf \
@@ -62,7 +62,7 @@ curl -sfL \
   -H "Accept: application/octet-stream" \
   "$ASSET_URL" -o "$RELEASE_DIR/frontend-dist.tar.gz"
 
-tar -xzf "$RELEASE_DIR/frontend-dist.tar.gz" -C "$RELEASE_DIR/frontend/dist"
+tar -xzf "$RELEASE_DIR/frontend-dist.tar.gz" -C "$RELEASE_DIR/frontend"
 rm "$RELEASE_DIR/frontend-dist.tar.gz"
 log "Frontend artifact extracted to $RELEASE_DIR/frontend/dist"
 
