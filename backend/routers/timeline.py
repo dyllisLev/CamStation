@@ -14,7 +14,7 @@ async def get_segments_from_db(cam_id: str, date_str: str, db_path: str) -> list
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT camera_id, filename, ts_start, ts_end FROM recordings "
+            "SELECT camera_id, filename, ts_start, ts_end, file_size FROM recordings "
             "WHERE camera_id=? AND ts_start>=? AND ts_start<? ORDER BY ts_start",
             (cam_id, day_start, day_end),
         )
