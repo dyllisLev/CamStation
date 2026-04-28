@@ -1,5 +1,7 @@
 import asyncio
 import os
+import re
+import aiosqlite
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import logging
@@ -13,11 +15,12 @@ _sub_processes: dict[str, asyncio.subprocess.Process] = {}
 _segment_minutes: int = 10
 _recordings_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
+_current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 파일 전체 경로
 
 
 def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) -> list[str]:
     segment_sec = segment_minutes * 60
-    output_pattern = os.path.join(output_dir, "%Y-%m-%d_%H-%M.mp4")
+    output_pattern = os.path.join(output_dir, "%H-%M.mp4")
     return [
         "ffmpeg", "-y",
         "-rtsp_transport", "tcp",
@@ -33,9 +36,69 @@ def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) ->
     ]
 
 
+def parse_stderr_line(line: str) -> str | None:
+    m = re.search(r"Opening '(.+?\.mp4)' for writing", line)
+    return m.group(1) if m else None
+
+
+def _ts_from_path(path: str) -> float | None:
+    try:
+        date_str = Path(path).parent.name   # "2026-04-28"
+        stem = Path(path).stem              # "14-30"
+        hh, mm = stem.split("-")
+        dt = datetime.strptime(f"{date_str} {hh}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+        return dt.timestamp()
+    except (ValueError, IndexError):
+        return None
+
+
+def _safe_getsize(path: str) -> int | None:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: str):
+    prev_path: str | None = None
+
+    async for raw in proc.stderr:
+        line = raw.decode(errors="replace").strip()
+        new_path = parse_stderr_line(line)
+        if new_path is None:
+            continue
+
+        new_ts = _ts_from_path(new_path)
+        if new_ts is None:
+            continue
+
+        filename = os.path.basename(new_path)
+
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                if prev_path is not None:
+                    size = _safe_getsize(prev_path)
+                    await db.execute(
+                        "UPDATE recordings SET ts_end=?, file_size=? "
+                        "WHERE camera_id=? AND ts_end IS NULL",
+                        (new_ts, size, cam_id),
+                    )
+                await db.execute(
+                    "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
+                    (cam_id, filename, new_ts),
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error("_watch_stderr DB error for %s: %s", cam_id, e)
+
+        prev_path = new_path
+        _current_segment_paths[cam_id] = new_path
+
+
 async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str):
     if cam_id in _processes:
         return
+    from config import get_db_path
     today = datetime.now(KST).strftime("%Y-%m-%d")
     output_dir = os.path.join(recordings_dir, cam_id, today)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -47,17 +110,33 @@ async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str
         *cmd,
         env=env,
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
     )
     _processes[cam_id] = proc
+    asyncio.create_task(_watch_stderr(cam_id, proc, get_db_path()))
     logger.info("Started recording for %s (pid %s)", cam_id, proc.pid)
 
 
 async def stop_recording(cam_id: str):
+    from config import get_db_path
     proc = _processes.pop(cam_id, None)
     if proc:
         proc.terminate()
         await proc.wait()
+        # 마지막 세그먼트 완료 처리
+        ts_end = datetime.now(KST).timestamp()
+        last_path = _current_segment_paths.pop(cam_id, None)
+        size = _safe_getsize(last_path) if last_path else None
+        try:
+            async with aiosqlite.connect(get_db_path()) as db:
+                await db.execute(
+                    "UPDATE recordings SET ts_end=?, file_size=? "
+                    "WHERE camera_id=? AND ts_end IS NULL",
+                    (ts_end, size, cam_id),
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error("stop_recording DB error for %s: %s", cam_id, e)
         logger.info("Stopped recording for %s", cam_id)
 
 
@@ -84,7 +163,6 @@ async def stop_sub_keepalive(cam_id: str):
 
 
 async def _midnight_watchdog():
-    """KST 자정에 녹화를 재시작해 날짜 디렉토리를 새로 생성한다."""
     while True:
         now = datetime.now(KST)
         next_midnight = (now + timedelta(days=1)).replace(
