@@ -29,14 +29,17 @@ export function TimelineTrack({ camId, segments, motionEvents, dayStart, dayEnd,
         onClick={handleClick}
         style={{ flex: 1, height: 12, background: '#111', borderRadius: 2, position: 'relative', cursor: 'pointer', overflow: 'hidden' }}
       >
-        {segments.map(s => (
-          <div key={s.filename} style={{
-            position: 'absolute', top: 0, bottom: 0,
-            left: `${pct(s.ts_start)}%`,
-            width: `${Math.max(pct(s.ts_start + 600) - pct(s.ts_start), 0.1)}%`,
-            background: '#1565c0', opacity: 0.7, borderRadius: 2,
-          }} />
-        ))}
+        {segments.map(s => {
+          const end = s.ts_end ?? cursorTs;
+          return (
+            <div key={s.filename} style={{
+              position: 'absolute', top: 0, bottom: 0,
+              left: `${pct(s.ts_start)}%`,
+              width: `${Math.max(pct(end) - pct(s.ts_start), 0.1)}%`,
+              background: '#1565c0', opacity: 0.7, borderRadius: 2,
+            }} />
+          );
+        })}
         {motionEvents.map((m) => (
           <div key={`${m.ts_start}`} style={{
             position: 'absolute', top: 0, bottom: 0,
