@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 
 _processes: dict[str, asyncio.subprocess.Process] = {}
+_sub_processes: dict[str, asyncio.subprocess.Process] = {}
 _segment_minutes: int = 10
 _recordings_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
@@ -60,6 +61,28 @@ async def stop_recording(cam_id: str):
         logger.info("Stopped recording for %s", cam_id)
 
 
+async def start_sub_keepalive(cam_id: str):
+    if cam_id in _sub_processes:
+        return
+    source = f"rtsp://127.0.0.1:8554/{cam_id}_sub"
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-y", "-rtsp_transport", "tcp",
+        "-i", source,
+        "-c", "copy", "-f", "null", "/dev/null",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    _sub_processes[cam_id] = proc
+    logger.info("Started sub-stream keepalive for %s (pid %s)", cam_id, proc.pid)
+
+
+async def stop_sub_keepalive(cam_id: str):
+    proc = _sub_processes.pop(cam_id, None)
+    if proc:
+        proc.terminate()
+        await proc.wait()
+
+
 async def _midnight_watchdog():
     """KST 자정에 녹화를 재시작해 날짜 디렉토리를 새로 생성한다."""
     while True:
@@ -72,12 +95,17 @@ async def _midnight_watchdog():
         await asyncio.sleep(wait_secs)
 
         cam_ids = list(_processes.keys())
+        sub_cam_ids = list(_sub_processes.keys())
         logger.info("Midnight watchdog: restarting %d recordings for new KST day", len(cam_ids))
         for cam_id in cam_ids:
             await stop_recording(cam_id)
+        for cam_id in sub_cam_ids:
+            await stop_sub_keepalive(cam_id)
         await asyncio.sleep(2)
         for cam_id in cam_ids:
             await start_recording(cam_id, _segment_minutes, _recordings_dir)
+        for cam_id in sub_cam_ids:
+            await start_sub_keepalive(cam_id)
 
 
 async def start_all(cam_ids: list[str], segment_minutes: int, recordings_dir: str):
@@ -96,6 +124,8 @@ async def stop_all():
         _watchdog_task = None
     for cam_id in list(_processes.keys()):
         await stop_recording(cam_id)
+    for cam_id in list(_sub_processes.keys()):
+        await stop_sub_keepalive(cam_id)
 
 
 def get_active() -> list[str]:
