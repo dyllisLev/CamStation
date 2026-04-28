@@ -27,12 +27,12 @@ export function Timeline({ cameras, timelineData, date, isLive, onSeek, collapse
   const cursorTs = isLive ? Date.now() / 1000 : currentTime.getTime() / 1000;
 
   return (
-    <div style={{ borderTop: '1px solid #2a2a2a', background: '#181818', flexShrink: 0 }}>
+    <div style={{ borderTop: '2px solid #3a3a3a', background: '#181818', flexShrink: 0 }}>
       <button
         onClick={onToggleCollapsed}
         style={{
-          width: '100%', background: '#1e1e1e', border: 'none', borderBottom: '1px solid #2a2a2a',
-          color: '#555', fontSize: 10, padding: '3px 0', cursor: 'pointer', display: 'flex',
+          width: '100%', background: '#242424', border: 'none', borderBottom: '1px solid #333',
+          color: '#888', fontSize: 10, padding: '4px 0', cursor: 'pointer', display: 'flex',
           alignItems: 'center', justifyContent: 'center', gap: 4,
         }}
       >
