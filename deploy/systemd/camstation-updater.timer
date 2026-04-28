@@ -1,0 +1,10 @@
+[Unit]
+Description=CamStation auto-updater timer
+After=network-online.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=CamStation auto-updater
+
+[Service]
+Type=oneshot
+ExecStart=/opt/camstation/deploy/deploy.sh
+StandardOutput=journal
+StandardError=journal
