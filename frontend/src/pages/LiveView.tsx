@@ -53,10 +53,10 @@ export function LiveView({ onNavigate }: Props) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#111', color: '#eee' }}>
+    <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', height: '100vh', background: '#111', color: '#eee' }}>
       <div style={{
         background: '#242424', borderBottom: '1px solid #333',
-        padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+        padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 10,
       }}>
         <span style={{ fontSize: 13, fontWeight: 'bold', color: '#64b5f6' }}>📷 CamStation</span>
         <LayoutDropdown
@@ -84,7 +84,7 @@ export function LiveView({ onNavigate }: Props) {
           style={{ background: 'none', border: '1px solid #444', color: '#aaa', fontSize: 11, padding: '2px 7px', borderRadius: 4, cursor: 'pointer', lineHeight: 1 }}
 >{isFullscreen ? '⊠ 종료' : '⛶ 전체화면'}</button>
       </div>
-      <div style={{ flex: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <main style={{ position: 'relative', overflow: 'hidden' }}>
         {gridLayout.length > 0 && (
           <CameraGrid
             cameras={cameras}
@@ -93,7 +93,7 @@ export function LiveView({ onNavigate }: Props) {
             onLayoutChange={setGridLayout}
           />
         )}
-      </div>
+      </main>
       <Timeline
         cameras={cameras}
         timelineData={timelineData}

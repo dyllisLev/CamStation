@@ -34,7 +34,7 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
   }, []);
 
   return (
-    <div ref={containerRef} style={{ width: '100%', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       <GridLayout
         layout={layout}
         cols={COLS}
