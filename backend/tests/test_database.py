@@ -57,3 +57,17 @@ async def test_init_db_idempotent(tmp_db):
     await init_db()
     value = await get_setting("retention_days")
     assert value == "99"
+
+@pytest.mark.asyncio
+async def test_recordings_table_exists(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    monkeypatch.setenv("CAMSTATION_DB_PATH", db_path)
+    import importlib, database
+    importlib.reload(database)
+    await database.init_db()
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='recordings'"
+        )
+        row = await cur.fetchone()
+    assert row is not None, "recordings 테이블이 생성되어 있어야 한다"
