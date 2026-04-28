@@ -83,6 +83,24 @@ PREV_VERSION="$CURRENT"
 ln -sfn "$RELEASE_DIR/frontend/dist" "$INSTALL_DIR/frontend/dist"
 log "Symlink swapped to $RELEASE_DIR/frontend/dist"
 
+# systemd 서비스 파일 동기화
+for svc in "$INSTALL_DIR/deploy/systemd/"*.service; do
+  name=$(basename "$svc")
+  dest="/etc/systemd/system/$name"
+  if ! diff -q "$svc" "$dest" > /dev/null 2>&1; then
+    cp "$svc" "$dest"
+    log "Updated systemd unit: $name"
+  fi
+done
+systemctl daemon-reload
+
+# vstarcam-tls-proxy 재시작 (proxy 스크립트 변경 시)
+systemctl enable vstarcam-tls-proxy 2>/dev/null || true
+systemctl restart vstarcam-tls-proxy 2>&1 | tee -a "$LOG_FILE" || true
+
+# go2rtc config 반영
+systemctl restart go2rtc 2>&1 | tee -a "$LOG_FILE" || true
+
 # 서비스 재시작
 if ! systemctl restart camstation-backend nginx 2>&1 | tee -a "$LOG_FILE"; then
   log "ERROR: Service restart failed, rolling back..."

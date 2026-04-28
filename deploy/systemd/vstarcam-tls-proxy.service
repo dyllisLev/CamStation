@@ -1,0 +1,14 @@
+[Unit]
+Description=VSTARCAM Port 443 TLS→RTSP Proxy
+After=network.target
+Before=go2rtc.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/camstation/deploy/vstarcam_tls_proxy.py
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
