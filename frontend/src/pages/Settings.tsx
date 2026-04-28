@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { getSettings, updateSettings, getStorageStats } from '../api/client';
-import type { Settings, StorageStats } from '../types';
+import { useState, useEffect, useCallback } from 'react';
+import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate } from '../api/client';
+import type { Settings, StorageStats, SystemVersion } from '../types';
 
 export function SettingsPage() {
   const [form, setForm] = useState<Settings>({
@@ -11,6 +11,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [version, setVersion] = useState<SystemVersion | null>(null);
+  const [updateLoading, setUpdateLoading] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
 
   useEffect(() => { getSettings().then(setForm).catch(console.error); }, []);
 
@@ -21,10 +24,34 @@ export function SettingsPage() {
       .finally(() => setStatsLoading(false));
   }, []);
 
+  const loadVersion = useCallback(() => {
+    getSystemVersion().then(setVersion).catch(console.error);
+  }, []);
+
+  useEffect(() => { loadVersion(); }, [loadVersion]);
+
   const handleSave = async () => {
     await updateSettings(form);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleUpdate = async () => {
+    setUpdateLoading(true);
+    setUpdateMsg(null);
+    try {
+      const res = await triggerUpdate();
+      if (res.status === 'already_running') {
+        setUpdateMsg('이미 업데이트 진행 중입니다.');
+      } else {
+        setUpdateMsg('업데이트를 시작했습니다. 잠시 후 페이지를 새로고침하세요.');
+        setTimeout(loadVersion, 10000);
+      }
+    } catch {
+      setUpdateMsg('업데이트 요청 실패.');
+    } finally {
+      setUpdateLoading(false);
+    }
   };
 
   const field = (label: string, key: keyof Settings, step = 1) => (
@@ -155,6 +182,47 @@ export function SettingsPage() {
       <button onClick={handleSave} style={{ background: '#1565c0', border: 'none', color: '#fff', padding: '8px 20px', borderRadius: 4, cursor: 'pointer', marginTop: 8 }}>
         {saved ? '저장됨 ✓' : '저장'}
       </button>
+
+      {/* System Update */}
+      <div style={{ marginTop: 32, background: '#1e1e1e', border: '1px solid #333', borderRadius: 6, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 'bold', marginBottom: 12, color: '#90caf9' }}>시스템 업데이트</div>
+        {version ? (
+          <>
+            <div style={{ fontSize: 12, color: '#aaa', marginBottom: 4 }}>
+              현재 버전: <span style={{ color: '#eee' }}>{version.current_version}</span>
+            </div>
+            <div style={{ fontSize: 12, color: '#aaa', marginBottom: 12 }}>
+              최신 버전:{' '}
+              <span style={{ color: version.update_available ? '#81c784' : '#eee' }}>
+                {version.latest_version ?? '확인 불가'}
+              </span>
+              {version.update_available && (
+                <span style={{ marginLeft: 8, color: '#81c784', fontSize: 11 }}>업데이트 있음</span>
+              )}
+            </div>
+            <button
+              onClick={handleUpdate}
+              disabled={updateLoading || !version.update_available}
+              style={{
+                background: version.update_available ? '#1565c0' : '#333',
+                border: 'none',
+                color: version.update_available ? '#fff' : '#666',
+                padding: '6px 16px',
+                borderRadius: 4,
+                cursor: version.update_available ? 'pointer' : 'default',
+                fontSize: 12,
+              }}
+            >
+              {updateLoading ? '요청 중...' : '지금 업데이트'}
+            </button>
+            {updateMsg && (
+              <div style={{ marginTop: 8, fontSize: 11, color: '#ffa726' }}>{updateMsg}</div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: '#666' }}>버전 정보를 불러오는 중...</div>
+        )}
+      </div>
     </div>
   );
 }
