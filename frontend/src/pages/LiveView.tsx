@@ -84,7 +84,7 @@ export function LiveView({ onNavigate }: Props) {
           style={{ background: 'none', border: '1px solid #444', color: '#aaa', fontSize: 11, padding: '2px 7px', borderRadius: 4, cursor: 'pointer', lineHeight: 1 }}
 >{isFullscreen ? '⊠ 종료' : '⛶ 전체화면'}</button>
       </div>
-      <main style={{ position: 'relative', overflow: 'hidden', borderBottom: '2px solid #444' }}>
+      <main style={{ position: 'relative', overflow: 'hidden', paddingBottom: 4, borderBottom: '2px solid #555' }}>
         {gridLayout.length > 0 && (
           <CameraGrid
             cameras={cameras}

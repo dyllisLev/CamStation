@@ -50,6 +50,7 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
           width={containerWidth}
           onLayoutChange={onLayoutChange}
           draggableHandle=".cam-drag-handle"
+          resizeHandles={['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']}
           margin={[2, 2]}
           containerPadding={[0, 0]}
           style={{ background: '#111' }}
