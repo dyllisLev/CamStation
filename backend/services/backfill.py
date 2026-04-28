@@ -1,4 +1,3 @@
-import os
 import aiosqlite
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
