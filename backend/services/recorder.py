@@ -21,7 +21,7 @@ _stderr_tasks: dict[str, asyncio.Task] = {}
 
 def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) -> list[str]:
     segment_sec = segment_minutes * 60
-    output_pattern = os.path.join(output_dir, "%H-%M.mp4")
+    output_pattern = os.path.join(output_dir, "%Y-%m-%d_%H-%M.mp4")
     return [
         "ffmpeg", "-y",
         "-rtsp_transport", "tcp",
@@ -44,10 +44,17 @@ def parse_stderr_line(line: str) -> str | None:
 
 def _ts_from_path(path: str) -> float | None:
     try:
-        date_str = Path(path).parent.name   # "2026-04-28"
-        stem = Path(path).stem              # "14-30"
-        hh, mm = stem.split("-")
-        dt = datetime.strptime(f"{date_str} {hh}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+        stem = Path(path).stem  # "2026-04-28_14-30" or "14-30"
+        if "_" in stem:
+            # YYYY-MM-DD_HH-MM 형식
+            date_part, time_part = stem.split("_", 1)
+            hh, mm = time_part.split("-")
+            dt = datetime.strptime(f"{date_part} {hh}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+        else:
+            # HH-MM 형식 (구형 파일 호환)
+            date_str = Path(path).parent.name
+            hh, mm = stem.split("-")
+            dt = datetime.strptime(f"{date_str} {hh}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
         return dt.timestamp()
     except (ValueError, IndexError):
         return None

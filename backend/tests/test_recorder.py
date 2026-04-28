@@ -20,7 +20,7 @@ def test_ffmpeg_cmd_output_pattern():
         segment_minutes=10,
     )
     joined = " ".join(cmd)
-    assert "%H-%M.mp4" in joined
+    assert "%Y-%m-%d_%H-%M.mp4" in joined
 
 def test_ffmpeg_cmd_no_video_transcoding():
     cmd = build_ffmpeg_cmd(
@@ -33,8 +33,8 @@ def test_ffmpeg_cmd_no_video_transcoding():
     assert "-c:a" in cmd and "aac" in cmd
 
 
-def test_ffmpeg_cmd_filename_only_time():
-    """파일명이 HH-MM.mp4 형식이어야 한다 (날짜 없음)."""
+def test_ffmpeg_cmd_filename_includes_date():
+    """파일명이 YYYY-MM-DD_HH-MM.mp4 형식이어야 한다."""
     from services.recorder import build_ffmpeg_cmd
     cmd = build_ffmpeg_cmd(
         source_rtsp="rtsp://127.0.0.1:8554/cam1",
@@ -43,7 +43,7 @@ def test_ffmpeg_cmd_filename_only_time():
     )
     pattern = [p for p in cmd if p.endswith(".mp4")][0]
     import os
-    assert os.path.basename(pattern) == "%H-%M.mp4"
+    assert os.path.basename(pattern) == "%Y-%m-%d_%H-%M.mp4"
 
 
 def test_parse_stderr_line_returns_path():
@@ -60,9 +60,17 @@ def test_parse_stderr_line_returns_none_for_other():
 
 def test_ts_from_path_kst():
     from services.recorder import _ts_from_path
+    # 신형 YYYY-MM-DD_HH-MM 형식
+    ts = _ts_from_path("/recordings/cam1/2026-04-28/2026-04-28_14-30.mp4")
+    assert ts is not None
+    assert 1777354000 < ts < 1777355000
+
+
+def test_ts_from_path_legacy_format():
+    from services.recorder import _ts_from_path
+    # 구형 HH-MM 형식 (하위 호환)
     ts = _ts_from_path("/recordings/cam1/2026-04-28/14-30.mp4")
     assert ts is not None
-    # KST 2026-04-28 14:30 = Unix timestamp 근처
     assert 1777354000 < ts < 1777355000
 
 
