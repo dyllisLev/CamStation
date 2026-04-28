@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Camera, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile } from '../types';
+import type { Camera, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -20,6 +20,9 @@ export const getStatus = (): Promise<SystemStatus> =>
 
 export const listRecordings = (cam: string, date: string): Promise<string[]> =>
   api.get(`/recordings/${encodeURIComponent(cam)}/${date}`).then(r => r.data);
+
+export const getStorageStats = (): Promise<StorageStats> =>
+  api.get('/recordings/stats').then(r => r.data);
 
 export const getLayouts = (): Promise<LayoutProfile[]> =>
   api.get('/layouts').then(r => r.data);

@@ -28,7 +28,7 @@ export function CameraTile({ camera, hasMotion }: Props) {
           </span>
         )}
       </div>
-      <WebRTCPlayer camId={camera.id} />
+      <WebRTCPlayer camId={camera.has_sub ? `${camera.id}_sub` : camera.id} />
     </div>
   );
 }

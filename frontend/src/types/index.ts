@@ -2,6 +2,7 @@ export interface Camera {
   id: string;
   name: string;
   online: boolean;
+  has_sub: boolean;
 }
 
 export interface RecordingSegment {
@@ -27,6 +28,7 @@ export interface Settings {
   segment_minutes: number;
   motion_threshold: number;
   max_storage_gb: number;
+  motion_enabled: boolean;
 }
 
 export interface SystemStatus {
@@ -54,4 +56,22 @@ export interface LayoutProfile {
   timeline_collapsed: boolean;
   created_at: number;
   updated_at: number;
+}
+
+export interface CameraStorageStats {
+  camera_id: string;
+  total_gb: number;
+  hourly_gb: number;
+  oldest_date: string | null;
+  newest_date: string | null;
+  days_recorded: number;
+}
+
+export interface StorageStats {
+  disk_total_gb: number;
+  disk_used_gb: number;
+  disk_free_gb: number;
+  recordings_gb: number;
+  cameras: CameraStorageStats[];
+  hourly_gb_total: number;
 }

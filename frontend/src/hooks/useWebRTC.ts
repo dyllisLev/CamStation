@@ -9,9 +9,7 @@ export function useWebRTC(camId: string) {
     if (!camId) return;
 
     async function connect() {
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-      });
+      const pc = new RTCPeerConnection({ iceServers: [] });
       pcRef.current = pc;
 
       pc.addTransceiver('video', { direction: 'recvonly' });

@@ -1,15 +1,25 @@
 import { useState, useEffect } from 'react';
-import { getSettings, updateSettings } from '../api/client';
-import type { Settings } from '../types';
+import { getSettings, updateSettings, getStorageStats } from '../api/client';
+import type { Settings, StorageStats } from '../types';
 
 export function SettingsPage() {
   const [form, setForm] = useState<Settings>({
     retention_days: 30, segment_minutes: 10,
     motion_threshold: 0.02, max_storage_gb: 0,
+    motion_enabled: true,
   });
   const [saved, setSaved] = useState(false);
+  const [stats, setStats] = useState<StorageStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
   useEffect(() => { getSettings().then(setForm).catch(console.error); }, []);
+
+  useEffect(() => {
+    getStorageStats()
+      .then(setStats)
+      .catch(console.error)
+      .finally(() => setStatsLoading(false));
+  }, []);
 
   const handleSave = async () => {
     await updateSettings(form);
@@ -30,13 +40,118 @@ export function SettingsPage() {
     </div>
   );
 
+  const diskPct = stats ? (stats.disk_used_gb / stats.disk_total_gb) * 100 : 0;
+  const diskColor = diskPct > 90 ? '#ef5350' : diskPct > 75 ? '#ffa726' : '#42a5f5';
+
   return (
-    <div style={{ padding: 24, color: '#eee', maxWidth: 400 }}>
+    <div style={{ padding: 24, color: '#eee', maxWidth: 600 }}>
       <h2 style={{ marginBottom: 20, fontSize: 16 }}>설정</h2>
+
+      {/* Storage Stats */}
+      <div style={{ marginBottom: 28, background: '#1e1e1e', border: '1px solid #333', borderRadius: 6, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 'bold', marginBottom: 12, color: '#90caf9' }}>저장소 현황</div>
+
+        {statsLoading ? (
+          <div style={{ fontSize: 12, color: '#666' }}>불러오는 중...</div>
+        ) : stats ? (
+          <>
+            {/* Disk usage bar */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#aaa', marginBottom: 4 }}>
+                <span>디스크 사용량</span>
+                <span style={{ color: diskColor }}>
+                  {stats.disk_used_gb.toFixed(1)} GB / {stats.disk_total_gb.toFixed(1)} GB ({diskPct.toFixed(0)}%)
+                </span>
+              </div>
+              <div style={{ background: '#333', borderRadius: 3, height: 8, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(diskPct, 100)}%`, height: '100%', background: diskColor, borderRadius: 3, transition: 'width 0.3s' }} />
+              </div>
+              <div style={{ fontSize: 11, color: '#666', marginTop: 3 }}>
+                녹화 데이터: {stats.recordings_gb.toFixed(1)} GB &nbsp;·&nbsp; 여유: {stats.disk_free_gb.toFixed(1)} GB
+              </div>
+            </div>
+
+            {/* Per-camera table */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+              <thead>
+                <tr style={{ color: '#777', borderBottom: '1px solid #333' }}>
+                  <th style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 'normal' }}>카메라</th>
+                  <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 'normal' }}>총 용량</th>
+                  <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 'normal' }}>시간당</th>
+                  <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 'normal' }}>일/기간</th>
+                  <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 'normal' }}>가장 오래된 날짜</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...stats.cameras].sort((a, b) => b.total_gb - a.total_gb).map(cam => (
+                  <tr key={cam.camera_id} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                    <td style={{ padding: '5px 6px', color: '#ddd' }}>{cam.camera_id}</td>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#eee' }}>{cam.total_gb.toFixed(1)} GB</td>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#81c784' }}>{cam.hourly_gb >= 1 ? cam.hourly_gb.toFixed(2) : (cam.hourly_gb * 1024).toFixed(0) + ' MB'}/h</td>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#aaa' }}>{cam.days_recorded}일</td>
+                    <td style={{ padding: '5px 6px', textAlign: 'right', color: '#666' }}>{cam.oldest_date ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: '1px solid #444', color: '#aaa' }}>
+                  <td style={{ padding: '5px 6px' }}>합계</td>
+                  <td style={{ padding: '5px 6px', textAlign: 'right', color: '#eee' }}>{stats.recordings_gb.toFixed(1)} GB</td>
+                  <td style={{ padding: '5px 6px', textAlign: 'right', color: '#81c784' }}>
+                    {stats.hourly_gb_total >= 1 ? stats.hourly_gb_total.toFixed(2) : (stats.hourly_gb_total * 1024).toFixed(0) + ' MB'}/h
+                  </td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+
+            {/* Daily projection */}
+            <div style={{ marginTop: 8, fontSize: 11, color: '#666', borderTop: '1px solid #2a2a2a', paddingTop: 8 }}>
+              하루 예상 사용량: ~{(stats.hourly_gb_total * 24).toFixed(1)} GB/일
+              {form.max_storage_gb > 0 && (
+                <span style={{ marginLeft: 12 }}>
+                  · 현재 용량으로 약 {Math.floor(form.max_storage_gb / (stats.hourly_gb_total * 24))}일치 보관 가능
+                </span>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: '#ef5350' }}>통계를 불러올 수 없습니다.</div>
+        )}
+      </div>
+
+      {/* Settings form */}
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#aaa', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={form.motion_enabled}
+            onChange={e => setForm(p => ({ ...p, motion_enabled: e.target.checked }))}
+            style={{ width: 16, height: 16, cursor: 'pointer' }}
+          />
+          모션 감지 활성화
+        </label>
+      </div>
       {field('보존 기간 (일)', 'retention_days')}
       {field('세그먼트 길이 (분)', 'segment_minutes')}
       {field('모션 감도 임계값', 'motion_threshold', 0.01)}
-      {field('최대 저장 용량 GB (0 = 무제한)', 'max_storage_gb')}
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'block', fontSize: 12, color: '#aaa', marginBottom: 4 }}>
+          자동 삭제 용량 한도 GB <span style={{ color: '#666' }}>(0 = 사용 안 함)</span>
+        </label>
+        <input
+          type="number"
+          step={1}
+          value={form.max_storage_gb}
+          onChange={e => setForm(p => ({ ...p, max_storage_gb: Number(e.target.value) }))}
+          style={{ background: '#2a2a2a', border: '1px solid #444', color: '#eee', borderRadius: 4, padding: '4px 8px', width: 120 }}
+        />
+        {form.max_storage_gb > 0 && stats && stats.disk_used_gb > form.max_storage_gb * 0.9 && (
+          <div style={{ fontSize: 11, color: '#ffa726', marginTop: 4 }}>
+            현재 녹화 용량({stats.recordings_gb.toFixed(1)} GB)이 한도({form.max_storage_gb} GB)에 근접했습니다. 다음 정리 시 오래된 영상이 삭제됩니다.
+          </div>
+        )}
+      </div>
       <button onClick={handleSave} style={{ background: '#1565c0', border: 'none', color: '#fff', padding: '8px 20px', borderRadius: 4, cursor: 'pointer', marginTop: 8 }}>
         {saved ? '저장됨 ✓' : '저장'}
       </button>

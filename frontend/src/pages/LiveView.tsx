@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useCameras } from '../hooks/useCameras';
 import { useAllTimelines } from '../hooks/useAllTimelines';
 import { useLayouts } from '../hooks/useLayouts';
@@ -19,6 +20,22 @@ export function LiveView({ onNavigate }: Props) {
     setGridLayout, loadLayout, saveLayout, saveAsLayout, cancelEdit, deleteLayoutById,
     toggleTimelineCollapsed,
   } = useLayouts(cameras);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
   const now = Date.now() / 1000;
   const motionCams = new Set(
@@ -61,13 +78,17 @@ export function LiveView({ onNavigate }: Props) {
           style={{ background: 'none', border: 'none', color: '#777', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}
         >설정</button>
         <span style={{ marginLeft: 'auto', background: '#c62828', color: '#fff', fontSize: 10, fontWeight: 'bold', padding: '2px 7px', borderRadius: 10 }}>● LIVE</span>
+        <button
+          onClick={toggleFullscreen}
+          title={isFullscreen ? '전체화면 종료' : '전체화면'}
+          style={{ background: 'none', border: '1px solid #444', color: '#aaa', fontSize: 11, padding: '2px 7px', borderRadius: 4, cursor: 'pointer', lineHeight: 1 }}
+>{isFullscreen ? '⊠ 종료' : '⛶ 전체화면'}</button>
       </div>
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
         {gridLayout.length > 0 && (
           <CameraGrid
             cameras={cameras}
             motionCams={motionCams}
-            height={window.innerHeight - 150}
             layout={gridLayout}
             onLayoutChange={setGridLayout}
           />
