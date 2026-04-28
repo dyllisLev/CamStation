@@ -4,5 +4,6 @@ Description=CamStation auto-updater
 [Service]
 Type=oneshot
 ExecStart=/opt/camstation/deploy/deploy.sh
+Environment=HOME=/root
 StandardOutput=journal
 StandardError=journal
