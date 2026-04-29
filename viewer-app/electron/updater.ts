@@ -45,7 +45,8 @@ export async function checkForUpdates(serverUrl: string): Promise<void> {
     await downloadFile(`${serverUrl}/api/settings/viewer-app`, newExePath);
 
     // Windows: use a batch script to replace the running EXE after quit
-    const exePath = process.execPath;
+    // PORTABLE_EXECUTABLE_FILE = 원본 포터블 EXE 경로 (process.execPath는 임시 압축 해제 경로)
+    const exePath = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
     const batPath = path.join(tempDir, 'camviewer-update.bat');
     const bat = [
       '@echo off',
