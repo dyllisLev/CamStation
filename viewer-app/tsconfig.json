@@ -7,7 +7,7 @@
     "rootDir": "electron",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibChecks": true,
+    "skipLibCheck": true,
     "resolveJsonModule": true
   },
   "include": ["electron/**/*"]
