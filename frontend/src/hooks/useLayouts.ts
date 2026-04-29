@@ -62,7 +62,7 @@ export function useLayouts(cameras: Camera[]) {
       .then(data => {
         setLayouts(data);
         const lastId = localStorage.getItem(LAST_LAYOUT_KEY);
-        const last = data.find(l => l.id === lastId);
+        const last = data.find(l => l.id === lastId) ?? (data.length > 0 ? data[0] : null);
         if (last) {
           const merged = mergeWithCameras(last.data, cameras);
           skipNextChangeRef.current = true;
@@ -70,6 +70,7 @@ export function useLayouts(cameras: Camera[]) {
           setSavedSnapshot(merged);
           setCurrentId(last.id);
           setTimelineCollapsed(last.timeline_collapsed ?? false);
+          localStorage.setItem(LAST_LAYOUT_KEY, last.id);
         } else {
           const def = defaultLayout(cameras);
           skipNextChangeRef.current = true;
