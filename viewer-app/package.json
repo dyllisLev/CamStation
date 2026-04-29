@@ -1,0 +1,39 @@
+{
+  "name": "camviewer",
+  "version": "1.0.0",
+  "description": "CamStation 라이브 뷰어",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:ts": "tsc",
+    "build": "tsc && electron-builder",
+    "build:portable": "tsc && electron-builder --config.win.target=portable",
+    "pack": "tsc && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  },
+  "build": {
+    "appId": "com.camstation.viewer",
+    "productName": "CamViewer",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "src/**/*"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
