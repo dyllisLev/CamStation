@@ -10,6 +10,9 @@ const CODECS = [
   'opus',
 ];
 
+// If no binary data arrives for this long, force-close the WS to trigger reconnect
+const STALL_MS = 10_000;
+
 // ManagedMediaSource is Safari 17+ only (standard MediaSource doesn't work on iOS)
 function getMediaSourceClass(): typeof MediaSource | null {
   if ('ManagedMediaSource' in window) {
@@ -34,86 +37,140 @@ export function useMSE(camId: string) {
     const video: HTMLVideoElement = videoEl;
 
     const msClassOrNull = getMediaSourceClass();
-    if (!msClassOrNull) return; // No MSE support on this browser
-    const MSClass: typeof MediaSource = msClassOrNull; // non-nullable for closures
+    if (!msClassOrNull) return;
+    const MSClass: typeof MediaSource = msClassOrNull;
 
-    const useSrcObject = 'ManagedMediaSource' in window; // Safari 17+
+    const useSrcObject = 'ManagedMediaSource' in window;
 
     let destroyed = false;
-    let ws: WebSocket | null = null;
+    let gen = 0;
+    let activeWs: WebSocket | null = null;
+    let activeMs: InstanceType<typeof MediaSource> | null = null;
+    let activeSrcUrl = '';
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function clearStallTimer() {
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+    }
+
+    // Properly tears down the current pipeline before each reconnect
+    function teardown() {
+      clearStallTimer();
+      // Null handlers first so no stale callbacks fire after close
+      if (activeWs) {
+        activeWs.onopen = null;
+        activeWs.onmessage = null;
+        activeWs.onclose = null;
+        activeWs.onerror = null;
+        activeWs.close();
+        activeWs = null;
+      }
+      if (activeMs) {
+        try { if (activeMs.readyState === 'open') activeMs.endOfStream(); } catch {}
+        activeMs = null;
+      }
+      if (activeSrcUrl) {
+        URL.revokeObjectURL(activeSrcUrl);
+        activeSrcUrl = '';
+      }
+      video.src = '';
+      video.srcObject = null;
+    }
+
+    function scheduleReconnect() {
+      if (!destroyed) reconnectTimer = setTimeout(connect, 3000);
+    }
 
     function connect() {
       if (destroyed) return;
+      teardown();
 
-      let sb: SourceBuffer | null = null;
-      const buf = new Uint8Array(2 * 1024 * 1024); // 2 MB pre-allocated buffer
+      const myGen = ++gen;
+
+      // 2 MB scratch buffer for segments arriving while SourceBuffer is busy
+      const buf = new Uint8Array(2 * 1024 * 1024);
       let bufLen = 0;
+      let sb: SourceBuffer | null = null;
       let hasVideo = false;
-      let srcUrl = '';
 
       const ms = new MSClass();
+      activeMs = ms;
 
       if (useSrcObject) {
-        // ManagedMediaSource (Safari 17+): use srcObject
         video.srcObject = ms;
       } else {
-        srcUrl = URL.createObjectURL(ms);
-        video.src = srcUrl;
+        activeSrcUrl = URL.createObjectURL(ms);
+        video.src = activeSrcUrl;
         video.srcObject = null;
+        console.log(`[MSE] ${camId} → ${activeSrcUrl}`);
       }
 
       function flush() {
         if (!sb || sb.updating || bufLen === 0) return;
-        try { sb.appendBuffer(buf.slice(0, bufLen)); bufLen = 0; } catch {}
+        const data = buf.slice(0, bufLen).buffer;
+        bufLen = 0;
+        try { sb.appendBuffer(data); } catch {}
       }
 
       ms.addEventListener('sourceopen', () => {
-        if (srcUrl) { URL.revokeObjectURL(srcUrl); srcUrl = ''; }
+        if (myGen !== gen || destroyed) return;
+        if (activeSrcUrl) { URL.revokeObjectURL(activeSrcUrl); activeSrcUrl = ''; }
 
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(
+        const ws = new WebSocket(
           `${proto}://${location.host}/go2rtc/api/ws?src=${encodeURIComponent(camId)}`
         );
+        activeWs = ws;
         ws.binaryType = 'arraybuffer';
 
-        const codecs = buildCodecList(MSClass);
-
         ws.onopen = () => {
-          // go2rtc protocol: client announces supported codecs first
-          ws!.send(JSON.stringify({ type: 'mse', value: codecs }));
+          if (myGen !== gen) return;
+          ws.send(JSON.stringify({ type: 'mse', value: buildCodecList(MSClass) }));
         };
 
         ws.onmessage = (e) => {
+          if (myGen !== gen) return;
+
           if (typeof e.data === 'string') {
             const msg = JSON.parse(e.data) as { type: string; value: string };
             if (msg.type === 'mse') {
-              // go2rtc responds with the MIME type to use for SourceBuffer
               try {
                 sb = ms.addSourceBuffer(msg.value);
                 sb.mode = 'segments';
                 sb.addEventListener('updateend', () => {
+                  if (myGen !== gen) return;
                   flush();
-                  // Keep at live edge
                   if (sb && !sb.updating && sb.buffered.length) {
                     const end = sb.buffered.end(sb.buffered.length - 1);
-                    const trim = end - 5;
                     const start0 = sb.buffered.start(0);
-                    if (trim > start0) { try { sb.remove(start0, trim); } catch {} }
-                    if (video.currentTime < trim) video.currentTime = trim;
+                    // Only trim when buffer grows large, keep 5s at live edge
+                    if (end - start0 > 10) {
+                      const trim = end - 5;
+                      if (trim > start0) { try { sb.remove(start0, trim); } catch {} }
+                    }
+                    // Only snap to live edge if we've fallen significantly behind
+                    if (end - video.currentTime > 5) {
+                      video.currentTime = end - 0.5;
+                    }
                   }
                 });
               } catch {}
             }
           } else {
-            // Binary: fMP4 segment
+            // Binary fMP4 segment: reset stall watchdog
+            clearStallTimer();
+            stallTimer = setTimeout(() => { if (!destroyed) ws.close(); }, STALL_MS);
+
             const b = new Uint8Array(e.data as ArrayBuffer);
             if (sb && !sb.updating && bufLen === 0) {
               try { sb.appendBuffer(e.data as ArrayBuffer); } catch {}
-            } else {
+            } else if (bufLen + b.byteLength <= buf.byteLength) {
               buf.set(b, bufLen);
               bufLen += b.byteLength;
             }
+            // else: drop chunk rather than overflow the scratch buffer
+
             if (!hasVideo) {
               hasVideo = true;
               setConnected(true);
@@ -123,23 +180,28 @@ export function useMSE(camId: string) {
         };
 
         ws.onclose = () => {
+          if (myGen !== gen) return;
           setConnected(false);
-          if (!destroyed) reconnectTimer = setTimeout(connect, 3000);
+          scheduleReconnect();
         };
 
-        ws.onerror = () => ws?.close();
+        ws.onerror = () => { if (myGen !== gen) return; ws.close(); };
       }, { once: true });
 
-      // Start buffering/playback early
       video.play().catch(() => {});
     }
+
+    // video.error is the last resort — browser-level decode failure
+    const onVideoError = () => { if (!destroyed) { setConnected(false); scheduleReconnect(); } };
+    video.addEventListener('error', onVideoError);
 
     connect();
 
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
+      video.removeEventListener('error', onVideoError);
+      teardown();
       setConnected(false);
     };
   }, [camId]);
