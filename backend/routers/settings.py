@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+import os
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from database import get_setting, set_setting
 from models import Settings
 from services.motion import set_motion_enabled
@@ -26,3 +28,28 @@ async def update_settings(s: Settings):
     set_motion_enabled(s.motion_enabled)
     trigger_cleanup()
     return s
+
+
+def _viewer_dir() -> str:
+    return os.getenv("VIEWER_DIR", "/opt/camstation/viewer")
+
+
+@router.get("/viewer-version")
+async def get_viewer_version():
+    version_file = os.path.join(_viewer_dir(), "version.txt")
+    if not os.path.exists(version_file):
+        raise HTTPException(status_code=404, detail="Viewer app not deployed")
+    with open(version_file) as f:
+        return {"version": f.read().strip()}
+
+
+@router.get("/viewer-app")
+async def download_viewer_app():
+    exe_path = os.path.join(_viewer_dir(), "CamViewer.exe")
+    if not os.path.exists(exe_path):
+        raise HTTPException(status_code=404, detail="Viewer app not deployed")
+    return FileResponse(
+        exe_path,
+        media_type="application/octet-stream",
+        filename="CamViewer.exe",
+    )
