@@ -14,6 +14,7 @@ interface Props {
   motionCams: Set<string>;
   layout: Layout[];
   onLayoutChange: (layout: Layout[]) => void;
+  readOnly?: boolean;
 }
 
 const H = 8;  // edge handle thickness px
@@ -45,7 +46,7 @@ const ResizeHandle = React.forwardRef<HTMLDivElement, { handleAxis?: string }>(
   )
 );
 
-export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Props) {
+export function CameraGrid({ cameras, motionCams, layout, onLayoutChange, readOnly }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(window.innerWidth);
   const [containerHeight, setContainerHeight] = useState(0);
@@ -87,6 +88,8 @@ export function CameraGrid({ cameras, motionCams, layout, onLayoutChange }: Prop
           rowHeight={rowHeight}
           width={containerWidth}
           onLayoutChange={onLayoutChange}
+          isDraggable={!readOnly}
+          isResizable={!readOnly}
           draggableHandle=".cam-drag-handle"
           resizeHandles={['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']}
           resizeHandle={<ResizeHandle />}

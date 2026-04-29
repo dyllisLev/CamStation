@@ -26,6 +26,7 @@ export function ViewerPage() {
         motionCams={motionCams}
         layout={gridLayout}
         onLayoutChange={setGridLayout}
+        readOnly
       />
     </div>
   );

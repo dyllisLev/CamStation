@@ -30,11 +30,15 @@ function downloadFile(url: string, dest: string): Promise<void> {
   });
 }
 
+let pendingVersion: string | null = null;
+
 export async function checkForUpdates(serverUrl: string): Promise<void> {
   try {
     const body = await get(`${serverUrl}/api/settings/viewer-version`);
     const { version: serverVersion } = JSON.parse(body) as { version: string };
     if (serverVersion === app.getVersion()) return;
+    if (serverVersion === pendingVersion) return;
+    pendingVersion = serverVersion;
 
     const tempDir = app.getPath('temp');
     const newExePath = path.join(tempDir, 'CamViewer-new.exe');
