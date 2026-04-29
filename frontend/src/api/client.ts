@@ -44,3 +44,6 @@ export const getSystemVersion = (): Promise<SystemVersion> =>
 
 export const triggerUpdate = (): Promise<{ status: string }> =>
   api.post('/system/update').then(r => r.data);
+
+export const getViewerVersion = (): Promise<{ version: string }> =>
+  api.get('/settings/viewer-version').then(r => r.data);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate } from '../api/client';
+import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate, getViewerVersion } from '../api/client';
 import type { Settings, StorageStats, SystemVersion } from '../types';
 
 export function SettingsPage() {
@@ -14,6 +14,7 @@ export function SettingsPage() {
   const [version, setVersion] = useState<SystemVersion | null>(null);
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [viewerVersion, setViewerVersion] = useState<string | null>(null);
 
   useEffect(() => { getSettings().then(setForm).catch(console.error); }, []);
 
@@ -29,6 +30,10 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => { loadVersion(); }, [loadVersion]);
+
+  useEffect(() => {
+    getViewerVersion().then(v => setViewerVersion(v.version)).catch(() => {});
+  }, []);
 
   const handleSave = async () => {
     await updateSettings(form);
@@ -241,6 +246,33 @@ export function SettingsPage() {
         ) : (
           <div style={{ fontSize: 12, color: '#666' }}>버전 정보를 불러오는 중...</div>
         )}
+      </div>
+
+      {/* Viewer App */}
+      <div style={{ marginTop: 32, background: '#1e1e1e', border: '1px solid #333', borderRadius: 6, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 'bold', marginBottom: 12, color: '#90caf9' }}>뷰어 앱 (Windows)</div>
+        <div style={{ fontSize: 12, color: '#aaa', marginBottom: 12 }}>
+          {viewerVersion
+            ? <>버전: <span style={{ color: '#eee' }}>{viewerVersion}</span></>
+            : <span style={{ color: '#666' }}>배포된 뷰어 없음</span>
+          }
+        </div>
+        <a
+          href="/api/settings/viewer-app"
+          download="CamViewer.exe"
+          style={{
+            display: 'inline-block',
+            background: viewerVersion ? '#1565c0' : '#333',
+            color: viewerVersion ? '#fff' : '#555',
+            padding: '6px 16px',
+            borderRadius: 4,
+            fontSize: 12,
+            textDecoration: 'none',
+            pointerEvents: viewerVersion ? 'auto' : 'none',
+          }}
+        >
+          CamViewer.exe 다운로드
+        </a>
       </div>
     </div>
   );
