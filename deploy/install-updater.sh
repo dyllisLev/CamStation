@@ -9,7 +9,7 @@ INSTALL_DIR="/opt/camstation"
 GITHUB_REPO="dyllisLev/CamStation"
 GITHUB_REMOTE="https://github.com/$GITHUB_REPO.git"
 
-echo "=== CamStation 배포 환경 초기화 ==="
+echo "=== CamStation 배포 환경 초기화 (6단계) ==="
 echo "서버: $SERVER"
 echo ""
 
@@ -47,23 +47,10 @@ ssh "$SERVER" "
   fi
 "
 
-# 4. main.py에 system 라우터 등록
-echo "[4/7] main.py에 system 라우터 등록..."
-ssh "$SERVER" "
-  MAIN=\"$INSTALL_DIR/backend/main.py\"
-  if ! grep -q 'system' \"\$MAIN\"; then
-    sed -i 's/from routers import /from routers import system, /' \"\$MAIN\"
-    sed -i 's/layouts\.router\]/layouts.router, system.router]/' \"\$MAIN\"
-    echo 'system router registered in main.py'
-  else
-    echo 'system router already in main.py, skipping'
-  fi
-"
-
-# 5. systemd 서비스 유닛 설치
+# 4. systemd 서비스 유닛 설치
 # 기동 순서: vstarcam-tls-proxy → go2rtc → camstation-backend → nginx
 # (vstarcam-tls-proxy.service: Before=go2rtc, camstation-backend.service: After=go2rtc)
-echo "[5/7] systemd 서비스 유닛 설치..."
+echo "[4/6] systemd 서비스 유닛 설치..."
 scp deploy/systemd/vstarcam-tls-proxy.service \
     deploy/systemd/go2rtc.service \
     deploy/systemd/camstation-backend.service \
@@ -79,8 +66,8 @@ ssh "$SERVER" "
   systemctl is-enabled vstarcam-tls-proxy go2rtc camstation-backend camstation-updater.timer
 "
 
-# 6. nginx 설정 배포
-echo "[6/7] nginx 설정 배포..."
+# 5. nginx 설정 배포
+echo "[5/6] nginx 설정 배포..."
 scp deploy/nginx/camstation.conf "$SERVER:/etc/nginx/sites-available/camstation"
 ssh "$SERVER" "
   ln -sf /etc/nginx/sites-available/camstation /etc/nginx/sites-enabled/camstation
@@ -88,8 +75,8 @@ ssh "$SERVER" "
   echo 'nginx config OK'
 "
 
-# 7. 자동 업데이터 타이머 시작
-echo "[7/7] 자동 업데이터 타이머 시작..."
+# 6. 자동 업데이터 타이머 시작
+echo "[6/6] 자동 업데이터 타이머 시작..."
 ssh "$SERVER" "
   systemctl start camstation-updater.timer
   echo 'Timer status:'

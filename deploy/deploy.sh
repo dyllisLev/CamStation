@@ -66,14 +66,21 @@ tar -xzf "$RELEASE_DIR/frontend-dist.tar.gz" -C "$RELEASE_DIR/frontend"
 rm "$RELEASE_DIR/frontend-dist.tar.gz"
 log "Frontend artifact extracted to $RELEASE_DIR/frontend/dist"
 
-# 백엔드 + 배포 스크립트 업데이트 (tracked 파일만)
+# 백엔드 + 배포 스크립트 업데이트
 cd "$INSTALL_DIR"
 git fetch origin 2>&1 | tee -a "$LOG_FILE"
-git checkout origin/main -- \
-  backend/config.py backend/database.py backend/main.py backend/models.py backend/requirements.txt \
-  backend/routers/ backend/services/ backend/tests/ \
-  config/ deploy/ 2>&1 | tee -a "$LOG_FILE"
+
+# 변경 감지용 해시 (재시작 필요 여부 판단)
+OLD_PROXY_HASH=$(md5sum deploy/vstarcam_tls_proxy.py 2>/dev/null | cut -d' ' -f1)
+OLD_GO2RTC_HASH=$(md5sum config/go2rtc.yaml 2>/dev/null | cut -d' ' -f1)
+
+git checkout origin/main -- backend/ config/ deploy/ 2>&1 | tee -a "$LOG_FILE"
 log "Backend, config, and deploy scripts updated"
+
+# Python 의존성 업데이트
+VENV_PIP="$INSTALL_DIR/backend/.venv/bin/pip"
+"$VENV_PIP" install -q -r backend/requirements.txt 2>&1 | tee -a "$LOG_FILE"
+log "Python dependencies up to date"
 
 # 롤백을 위해 이전 심링크 대상 저장
 PREV_DIST=$(readlink "$INSTALL_DIR/frontend/dist" 2>/dev/null || echo "")
@@ -105,12 +112,19 @@ if ! diff -q "$NGINX_SRC" "$NGINX_AVAIL" > /dev/null 2>&1; then
   log "Updated nginx config"
 fi
 
-# vstarcam-tls-proxy 재시작 (proxy 스크립트 변경 시)
-systemctl enable vstarcam-tls-proxy 2>/dev/null || true
-systemctl restart vstarcam-tls-proxy 2>&1 | tee -a "$LOG_FILE" || true
+# vstarcam-tls-proxy: proxy 스크립트가 변경됐을 때만 재시작
+NEW_PROXY_HASH=$(md5sum deploy/vstarcam_tls_proxy.py | cut -d' ' -f1)
+if [ "$OLD_PROXY_HASH" != "$NEW_PROXY_HASH" ]; then
+  log "vstarcam_tls_proxy.py changed, restarting..."
+  systemctl restart vstarcam-tls-proxy 2>&1 | tee -a "$LOG_FILE" || true
+fi
 
-# go2rtc config 반영
-systemctl restart go2rtc 2>&1 | tee -a "$LOG_FILE" || true
+# go2rtc: config가 변경됐을 때만 재시작
+NEW_GO2RTC_HASH=$(md5sum config/go2rtc.yaml | cut -d' ' -f1)
+if [ "$OLD_GO2RTC_HASH" != "$NEW_GO2RTC_HASH" ]; then
+  log "go2rtc.yaml changed, restarting go2rtc..."
+  systemctl restart go2rtc 2>&1 | tee -a "$LOG_FILE" || true
+fi
 
 # 서비스 재시작
 if ! systemctl restart camstation-backend nginx 2>&1 | tee -a "$LOG_FILE"; then
