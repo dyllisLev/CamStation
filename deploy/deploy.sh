@@ -94,6 +94,17 @@ for svc in "$INSTALL_DIR/deploy/systemd/"*.service; do
 done
 systemctl daemon-reload
 
+# nginx 설정 동기화
+NGINX_SRC="$INSTALL_DIR/deploy/nginx/camstation.conf"
+NGINX_AVAIL="/etc/nginx/sites-available/camstation"
+NGINX_ENABLED="/etc/nginx/sites-enabled/camstation"
+if ! diff -q "$NGINX_SRC" "$NGINX_AVAIL" > /dev/null 2>&1; then
+  cp "$NGINX_SRC" "$NGINX_AVAIL"
+  ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED"
+  nginx -t 2>&1 | tee -a "$LOG_FILE"
+  log "Updated nginx config"
+fi
+
 # vstarcam-tls-proxy 재시작 (proxy 스크립트 변경 시)
 systemctl enable vstarcam-tls-proxy 2>/dev/null || true
 systemctl restart vstarcam-tls-proxy 2>&1 | tee -a "$LOG_FILE" || true

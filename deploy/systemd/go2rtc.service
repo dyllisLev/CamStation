@@ -1,0 +1,12 @@
+[Unit]
+Description=go2rtc RTSP/WebRTC hub
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/go2rtc -config /opt/camstation/config/go2rtc.yaml
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
