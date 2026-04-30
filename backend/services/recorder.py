@@ -10,8 +10,17 @@ logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
 
-_processes: dict[str, asyncio.subprocess.Process] = {}
-_sub_processes: dict[str, asyncio.subprocess.Process] = {}
+# Task handles (while True 루프를 담은 asyncio.Task)
+_processes: dict[str, asyncio.Task] = {}
+_sub_processes: dict[str, asyncio.Task] = {}
+
+# 현재 실행 중인 ffmpeg Process (stop 시 terminate용)
+_active_procs: dict[str, asyncio.subprocess.Process] = {}
+_active_sub_procs: dict[str, asyncio.subprocess.Process] = {}
+
+# 정상 종료 신호 (루프가 종료 후 재시작하지 않도록)
+_stopping_rec: set[str] = set()
+_stopping_sub: set[str] = set()
 _segment_minutes: int = 10
 _recordings_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
