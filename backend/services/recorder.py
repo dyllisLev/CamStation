@@ -246,6 +246,32 @@ async def stop_recording(cam_id: str):
         logger.info("Stopped recording for %s", cam_id)
 
 
+async def _run_sub_keepalive(cam_id: str):
+    delay = 5
+    source = f"rtsp://127.0.0.1:8554/{cam_id}_sub"
+    while True:
+        if cam_id in _stopping_sub:
+            break
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-rtsp_transport", "tcp",
+            "-i", source,
+            "-c", "copy", "-f", "null", "/dev/null",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        _active_sub_procs[cam_id] = proc
+        logger.info("Started sub-stream keepalive for %s (pid %s)", cam_id, proc.pid)
+        t_start = asyncio.get_running_loop().time()
+        await proc.wait()
+        _active_sub_procs.pop(cam_id, None)
+        if cam_id in _stopping_sub:
+            break
+        ran = asyncio.get_running_loop().time() - t_start
+        delay = _next_delay(delay, ran)
+        logger.info("Sub-stream keepalive for %s exited (ran %.0fs), retrying in %ds", cam_id, ran, delay)
+        await asyncio.sleep(delay)
+
+
 async def start_sub_keepalive(cam_id: str):
     if cam_id in _sub_processes:
         return
