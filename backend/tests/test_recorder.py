@@ -77,3 +77,27 @@ def test_ts_from_path_legacy_format():
 def test_ts_from_path_invalid():
     from services.recorder import _ts_from_path
     assert _ts_from_path("/recordings/cam1/2026-04-28/garbage.mp4") is None
+
+
+def test_next_delay_resets_on_success():
+    from services.recorder import _next_delay
+    # ran >= 30 → delay 5s로 리셋
+    assert _next_delay(60, 30.0) == 5
+    assert _next_delay(60, 60.0) == 5
+    assert _next_delay(10, 30.0) == 5
+
+def test_next_delay_doubles_on_fast_fail():
+    from services.recorder import _next_delay
+    assert _next_delay(5, 0.5) == 10
+    assert _next_delay(10, 2.0) == 20
+    assert _next_delay(20, 1.0) == 40
+
+def test_next_delay_caps_at_max():
+    from services.recorder import _next_delay
+    assert _next_delay(40, 1.0) == 60   # 40*2=80 → cap 60
+    assert _next_delay(60, 1.0) == 60   # already at max
+
+def test_next_delay_boundary():
+    from services.recorder import _next_delay
+    assert _next_delay(20, 29.9) == 40  # below threshold → double
+    assert _next_delay(20, 30.0) == 5   # at threshold exactly → reset
