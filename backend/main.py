@@ -15,26 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 async def _start_sub_keepalives(sub_cam_ids: list[str]):
-    """메인 스트림이 연결된 후 순차적으로 서브 스트림 keepalive를 시작한다."""
-    if not sub_cam_ids:
-        return
-    for _ in range(30):
-        await asyncio.sleep(2)
-        try:
-            async with httpx.AsyncClient() as client:
-                r = await client.get(f"{GO2RTC_URL}/api/streams", timeout=3)
-                streams = r.json()
-            if all(
-                any("id" in p for p in streams.get(cam_id, {}).get("producers", []))
-                for cam_id in sub_cam_ids
-            ):
-                break
-        except Exception:
-            pass
     for cam_id in sub_cam_ids:
         await recorder.start_sub_keepalive(cam_id)
         await asyncio.sleep(1)
-    logger.info("Sub-stream keepalives started for %d cameras", len(sub_cam_ids))
+    logger.info("Sub-stream keepalive tasks started for %d cameras", len(sub_cam_ids))
 
 
 @asynccontextmanager
