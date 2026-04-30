@@ -190,60 +190,27 @@ async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str
     if cam_id in _processes:
         return
     from config import get_db_path
-    today = datetime.now(KST).strftime("%Y-%m-%d")
-    output_dir = os.path.join(recordings_dir, cam_id, today)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    source = f"rtsp://127.0.0.1:8554/{cam_id}"
-    cmd = build_ffmpeg_cmd(source, output_dir, segment_minutes)
-    env = dict(os.environ)
-    env["TZ"] = "Asia/Seoul"
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        env=env,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
+    task = asyncio.create_task(
+        _run_recording(cam_id, segment_minutes, recordings_dir, get_db_path())
     )
-    _processes[cam_id] = proc
-    _stderr_tasks[cam_id] = asyncio.create_task(_watch_stderr(cam_id, proc, get_db_path()))
-    logger.info("Started recording for %s (pid %s)", cam_id, proc.pid)
+    _processes[cam_id] = task
 
 
 async def stop_recording(cam_id: str):
-    from config import get_db_path
-    proc = _processes.pop(cam_id, None)
-    if proc:
+    task = _processes.pop(cam_id, None)
+    if not task:
+        return
+    _stopping_rec.add(cam_id)
+    proc = _active_procs.get(cam_id)
+    if proc and proc.returncode is None:
         proc.terminate()
-        await proc.wait()
-        task = _stderr_tasks.pop(cam_id, None)
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        # 마지막 세그먼트 완료 처리
-        ts_end = datetime.now(KST).timestamp()
-        last_path = _current_segment_paths.pop(cam_id, None)
-        size = _safe_getsize(last_path) if last_path else None
-        last_filename = os.path.basename(last_path) if last_path else None
-        try:
-            async with aiosqlite.connect(get_db_path()) as db:
-                if last_filename:
-                    await db.execute(
-                        "UPDATE recordings SET ts_end=?, file_size=? "
-                        "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
-                        (ts_end, size, cam_id, last_filename),
-                    )
-                else:
-                    await db.execute(
-                        "UPDATE recordings SET ts_end=?, file_size=? "
-                        "WHERE camera_id=? AND ts_end IS NULL",
-                        (ts_end, size, cam_id),
-                    )
-                await db.commit()
-        except Exception as e:
-            logger.error("stop_recording DB error for %s: %s", cam_id, e)
-        logger.info("Stopped recording for %s", cam_id)
+    try:
+        await task
+    except Exception:
+        pass
+    _stopping_rec.discard(cam_id)
+    _active_procs.pop(cam_id, None)
+    logger.info("Stopped recording for %s", cam_id)
 
 
 async def _run_sub_keepalive(cam_id: str):
@@ -275,23 +242,26 @@ async def _run_sub_keepalive(cam_id: str):
 async def start_sub_keepalive(cam_id: str):
     if cam_id in _sub_processes:
         return
-    source = f"rtsp://127.0.0.1:8554/{cam_id}_sub"
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y", "-rtsp_transport", "tcp",
-        "-i", source,
-        "-c", "copy", "-f", "null", "/dev/null",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    _sub_processes[cam_id] = proc
-    logger.info("Started sub-stream keepalive for %s (pid %s)", cam_id, proc.pid)
+    task = asyncio.create_task(_run_sub_keepalive(cam_id))
+    _sub_processes[cam_id] = task
+    logger.info("Started sub-stream keepalive task for %s", cam_id)
 
 
 async def stop_sub_keepalive(cam_id: str):
-    proc = _sub_processes.pop(cam_id, None)
-    if proc:
+    task = _sub_processes.pop(cam_id, None)
+    if not task:
+        return
+    _stopping_sub.add(cam_id)
+    proc = _active_sub_procs.get(cam_id)
+    if proc and proc.returncode is None:
         proc.terminate()
-        await proc.wait()
+    try:
+        await task
+    except Exception:
+        pass
+    _stopping_sub.discard(cam_id)
+    _active_sub_procs.pop(cam_id, None)
+    logger.info("Stopped sub-stream keepalive for %s", cam_id)
 
 
 async def _midnight_watchdog():
