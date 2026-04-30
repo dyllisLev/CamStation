@@ -22,7 +22,7 @@ _stderr_tasks: dict[str, asyncio.Task] = {}
 def _next_delay(current: int, ran: float, *, success_threshold: float = 30.0, max_delay: int = 60) -> int:
     if ran >= success_threshold:
         return 5
-    return min(current * 2, max_delay)
+    return min(max(current * 2, 5), max_delay)
 
 
 def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) -> list[str]:
