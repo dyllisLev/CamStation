@@ -119,6 +119,73 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
         _current_segment_paths[cam_id] = new_path
 
 
+async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str, db_path: str):
+    delay = 5
+    while True:
+        if cam_id in _stopping_rec:
+            break
+        today = datetime.now(KST).strftime("%Y-%m-%d")
+        output_dir = os.path.join(recordings_dir, cam_id, today)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        source = f"rtsp://127.0.0.1:8554/{cam_id}"
+        cmd = build_ffmpeg_cmd(source, output_dir, segment_minutes)
+        env = dict(os.environ)
+        env["TZ"] = "Asia/Seoul"
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _active_procs[cam_id] = proc
+        stderr_task = asyncio.create_task(_watch_stderr(cam_id, proc, db_path))
+        _stderr_tasks[cam_id] = stderr_task
+        logger.info("Started recording for %s (pid %s)", cam_id, proc.pid)
+        t_start = asyncio.get_running_loop().time()
+        await proc.wait()
+        ran = asyncio.get_running_loop().time() - t_start
+
+        # stderr task 정리
+        if not stderr_task.done():
+            stderr_task.cancel()
+            try:
+                await stderr_task
+            except asyncio.CancelledError:
+                pass
+        _stderr_tasks.pop(cam_id, None)
+
+        # 마지막 세그먼트 DB 업데이트
+        ts_end = datetime.now(KST).timestamp()
+        last_path = _current_segment_paths.pop(cam_id, None)
+        size = _safe_getsize(last_path) if last_path else None
+        last_filename = os.path.basename(last_path) if last_path else None
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                if last_filename:
+                    await db.execute(
+                        "UPDATE recordings SET ts_end=?, file_size=? "
+                        "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
+                        (ts_end, size, cam_id, last_filename),
+                    )
+                else:
+                    await db.execute(
+                        "UPDATE recordings SET ts_end=?, file_size=? "
+                        "WHERE camera_id=? AND ts_end IS NULL",
+                        (ts_end, size, cam_id),
+                    )
+                await db.commit()
+        except Exception as e:
+            logger.error("_run_recording DB error for %s: %s", cam_id, e)
+
+        _active_procs.pop(cam_id, None)
+        if cam_id in _stopping_rec:
+            break
+
+        delay = _next_delay(delay, ran)
+        logger.info("Recording for %s exited (ran %.0fs), retrying in %ds", cam_id, ran, delay)
+        await asyncio.sleep(delay)
+
+
 async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str):
     if cam_id in _processes:
         return
