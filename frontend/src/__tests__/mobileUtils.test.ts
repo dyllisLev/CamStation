@@ -39,6 +39,7 @@ describe('getSwipeDirection', () => {
   it('returns null for small movements', () => {
     expect(getSwipeDirection(0)).toBeNull()
     expect(getSwipeDirection(49)).toBeNull()
+    expect(getSwipeDirection(50)).toBeNull()
     expect(getSwipeDirection(-50)).toBeNull()
   })
 })

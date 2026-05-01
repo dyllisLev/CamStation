@@ -10,8 +10,10 @@ export function getPageCameras(cameras: Camera[], page: number): Camera[] {
   return cameras.slice(page * CAMERAS_PER_PAGE, (page + 1) * CAMERAS_PER_PAGE)
 }
 
+const SWIPE_THRESHOLD_PX = 50
+
 export function getSwipeDirection(dx: number): 'left' | 'right' | null {
-  if (dx < -50) return 'left'
-  if (dx > 50) return 'right'
+  if (dx < -SWIPE_THRESHOLD_PX) return 'left'
+  if (dx > SWIPE_THRESHOLD_PX) return 'right'
   return null
 }
