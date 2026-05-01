@@ -6,3 +6,4 @@ node_modules/
 *.xlsx
 *.xls
 *.apk
+.superpowers/
