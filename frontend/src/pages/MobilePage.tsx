@@ -21,13 +21,6 @@ export function MobilePage() {
   const [view, setView] = useState<MobileView>({ screen: 'grid' })
 
   useEffect(() => {
-    const existing = document.querySelector('link[rel="manifest"]')
-    if (!existing) {
-      const link = document.createElement('link')
-      link.rel = 'manifest'
-      link.href = '/mobile.webmanifest'
-      document.head.appendChild(link)
-    }
     let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
     if (!meta) {
       meta = document.createElement('meta') as HTMLMetaElement
