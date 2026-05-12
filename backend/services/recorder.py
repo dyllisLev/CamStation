@@ -6,6 +6,7 @@ import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import logging
+from database import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,10 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
     while True:
         if cam_id in _stopping_rec:
             break
+
+        # Always read the current segment_minutes from DB (reflects user changes without restart)
+        current_segment_min = int(await get_setting("segment_minutes") or "10")
+
         today = datetime.now(KST).strftime("%Y-%m-%d")
         output_dir = os.path.join(temp_dir, cam_id, today)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -162,7 +167,7 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
                 except OSError:
                     pass
         source = f"rtsp://127.0.0.1:8554/{cam_id}"
-        cmd = build_ffmpeg_cmd(source, output_dir, segment_minutes)
+        cmd = build_ffmpeg_cmd(source, output_dir, current_segment_min)
         env = dict(os.environ)
         env["TZ"] = "Asia/Seoul"
         proc = await asyncio.create_subprocess_exec(
