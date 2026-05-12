@@ -126,11 +126,23 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                     # 이전 세그먼트가 완료됨 → 최종 경로로 이동 후 DB 업데이트
                     moved = await _move_to_recordings(prev_path, cam_id, recordings_dir)
                     if moved:
-                        await db.execute(
+                        result = await db.execute(
                             "UPDATE recordings SET ts_end=?, file_size=? "
                             "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
                             (new_ts, size, cam_id, prev_filename),
                         )
+                        if result.rowcount == 0:
+                            # crash/재시작 후 prev segment가 이전 프로세스에서 INSERT된 경우
+                            # (ts_end가 이미 채워져 있거나 filename 불일치) → 대안 쿼리
+                            logger.warning(
+                                "_watch_stderr: UPDATE 0 rows for %s/%s, trying fallback",
+                                cam_id, prev_filename,
+                            )
+                            await db.execute(
+                                "UPDATE recordings SET ts_end=?, file_size=? "
+                                "WHERE camera_id=? AND filename=?",
+                                (new_ts, size, cam_id, prev_filename),
+                            )
                 await db.execute(
                     "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
                     (cam_id, filename, new_ts),
