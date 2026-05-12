@@ -7,7 +7,7 @@ from database import init_db, get_setting
 from services import recorder
 from services.cleaner import run_cleanup_loop
 from services.motion import monitor_motion, set_motion_enabled
-from config import GO2RTC_URL, RECORDINGS_DIR, get_db_path
+from config import GO2RTC_URL, RECORDINGS_DIR, TEMP_DIR, get_db_path
 from routers import system, cameras, streams, timeline, recordings as recordings_router, settings, status, layouts
 
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     from services.backfill import backfill_recordings
     await backfill_recordings(RECORDINGS_DIR, get_db_path(), active_cam_ids=[])
 
-    await recorder.start_all(cam_ids, segment_min, RECORDINGS_DIR)
+    await recorder.start_all(cam_ids, segment_min, RECORDINGS_DIR, TEMP_DIR)
     sub_task = asyncio.create_task(_start_sub_keepalives(sub_cam_ids))
 
     cleanup_task = asyncio.create_task(run_cleanup_loop(RECORDINGS_DIR, get_setting))

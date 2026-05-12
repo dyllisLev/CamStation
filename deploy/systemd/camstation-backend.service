@@ -8,6 +8,7 @@ ExecStart=/opt/camstation/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --
 Restart=always
 RestartSec=5
 Environment=RECORDINGS_DIR=/opt/camstation/recordings
+Environment=CAMSTATION_TEMP_DIR=/opt/camstation/temp
 Environment=CAMSTATION_DB_PATH=/opt/camstation/data/camstation.db
 Environment=GO2RTC_URL=http://127.0.0.1:1984
 Environment=GO2RTC_CONFIG=/opt/camstation/config/go2rtc.yaml

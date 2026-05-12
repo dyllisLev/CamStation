@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import aiosqlite
+import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import logging
@@ -23,8 +24,9 @@ _stopping_rec: set[str] = set()
 _stopping_sub: set[str] = set()
 _segment_minutes: int = 10
 _recordings_dir: str = ""
+_temp_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
-_current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 파일 전체 경로
+_current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 temp 파일 전체 경로
 _stderr_tasks: dict[str, asyncio.Task] = {}
 
 
@@ -82,7 +84,25 @@ def _safe_getsize(path: str) -> int | None:
         return None
 
 
-async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: str):
+async def _move_to_recordings(temp_path: str, cam_id: str, recordings_dir: str) -> bool:
+    """temp 경로의 파일을 최종 recordings 경로로 이동"""
+    try:
+        # temp_path: /opt/camstation/temp/cam_id/2026-05-12/2026-05-12_07-30.mp4
+        # final:     /opt/camstation/recordings/cam_id/2026-05-12/2026-05-12_07-30.mp4
+        temp_p = Path(temp_path)
+        date_str = temp_p.parent.name  # "2026-05-12"
+        final_dir = Path(recordings_dir) / cam_id / date_str
+        final_dir.mkdir(parents=True, exist_ok=True)
+        final_path = final_dir / temp_p.name
+        shutil.move(str(temp_p), str(final_path))
+        logger.info("Moved segment: %s -> %s", temp_path, final_path)
+        return True
+    except Exception as e:
+        logger.error("Failed to move segment %s: %s", temp_path, e)
+        return False
+
+
+async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: str, recordings_dir: str):
     prev_path: str | None = None
 
     async for raw in proc.stderr:
@@ -102,11 +122,14 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                 if prev_path is not None:
                     size = _safe_getsize(prev_path)
                     prev_filename = os.path.basename(prev_path)
-                    await db.execute(
-                        "UPDATE recordings SET ts_end=?, file_size=? "
-                        "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
-                        (new_ts, size, cam_id, prev_filename),
-                    )
+                    # 이전 세그먼트가 완료됨 → 최종 경로로 이동 후 DB 업데이트
+                    moved = await _move_to_recordings(prev_path, cam_id, recordings_dir)
+                    if moved:
+                        await db.execute(
+                            "UPDATE recordings SET ts_end=?, file_size=? "
+                            "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
+                            (new_ts, size, cam_id, prev_filename),
+                        )
                 await db.execute(
                     "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
                     (cam_id, filename, new_ts),
@@ -119,14 +142,25 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
         _current_segment_paths[cam_id] = new_path
 
 
-async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str, db_path: str):
+async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str, temp_dir: str, db_path: str):
     delay = 5
+    first_run = True
     while True:
         if cam_id in _stopping_rec:
             break
         today = datetime.now(KST).strftime("%Y-%m-%d")
-        output_dir = os.path.join(recordings_dir, cam_id, today)
+        output_dir = os.path.join(temp_dir, cam_id, today)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        # 첫 실행 시 이전 실행에서 남은 temp 파일 정리 (완료되지 않은 orphan 제거)
+        if first_run:
+            first_run = False
+            for f in Path(output_dir).glob("*.mp4"):
+                try:
+                    f.unlink()
+                    logger.info("Cleaned up orphan temp file: %s", f)
+                except OSError:
+                    pass
         source = f"rtsp://127.0.0.1:8554/{cam_id}"
         cmd = build_ffmpeg_cmd(source, output_dir, segment_minutes)
         env = dict(os.environ)
@@ -138,9 +172,9 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
             stderr=asyncio.subprocess.PIPE,
         )
         _active_procs[cam_id] = proc
-        stderr_task = asyncio.create_task(_watch_stderr(cam_id, proc, db_path))
+        stderr_task = asyncio.create_task(_watch_stderr(cam_id, proc, db_path, recordings_dir))
         _stderr_tasks[cam_id] = stderr_task
-        logger.info("Started recording for %s (pid %s)", cam_id, proc.pid)
+        logger.info("Started recording for %s (pid %s) -> temp:%s", cam_id, proc.pid, output_dir)
         t_start = asyncio.get_running_loop().time()
         await proc.wait()
         ran = asyncio.get_running_loop().time() - t_start
@@ -154,24 +188,27 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
                 pass
         _stderr_tasks.pop(cam_id, None)
 
-        # 마지막 세그먼트 DB 업데이트
+        # 마지막 세그먼트: temp → 최종 경로 이동 후 DB 업데이트
         ts_end = datetime.now(KST).timestamp()
         last_path = _current_segment_paths.pop(cam_id, None)
-        size = _safe_getsize(last_path) if last_path else None
         last_filename = os.path.basename(last_path) if last_path else None
+        last_size = None
+        if last_path:
+            last_size = _safe_getsize(last_path)
+            await _move_to_recordings(last_path, cam_id, recordings_dir)
         try:
             async with aiosqlite.connect(db_path) as db:
                 if last_filename:
                     await db.execute(
                         "UPDATE recordings SET ts_end=?, file_size=? "
                         "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
-                        (ts_end, size, cam_id, last_filename),
+                        (ts_end, last_size, cam_id, last_filename),
                     )
                 else:
                     await db.execute(
                         "UPDATE recordings SET ts_end=?, file_size=? "
                         "WHERE camera_id=? AND ts_end IS NULL",
-                        (ts_end, size, cam_id),
+                        (ts_end, last_size, cam_id),
                     )
                 await db.commit()
         except Exception as e:
@@ -186,12 +223,12 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
         await asyncio.sleep(delay)
 
 
-async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str):
+async def start_recording(cam_id: str, segment_minutes: int, recordings_dir: str, temp_dir: str):
     if cam_id in _processes:
         return
     from config import get_db_path
     task = asyncio.create_task(
-        _run_recording(cam_id, segment_minutes, recordings_dir, get_db_path())
+        _run_recording(cam_id, segment_minutes, recordings_dir, temp_dir, get_db_path())
     )
     _processes[cam_id] = task
 
@@ -283,17 +320,18 @@ async def _midnight_watchdog():
             await stop_sub_keepalive(cam_id)
         await asyncio.sleep(2)
         for cam_id in cam_ids:
-            await start_recording(cam_id, _segment_minutes, _recordings_dir)
+            await start_recording(cam_id, _segment_minutes, _recordings_dir, _temp_dir)
         for cam_id in sub_cam_ids:
             await start_sub_keepalive(cam_id)
 
 
-async def start_all(cam_ids: list[str], segment_minutes: int, recordings_dir: str):
-    global _segment_minutes, _recordings_dir, _watchdog_task
+async def start_all(cam_ids: list[str], segment_minutes: int, recordings_dir: str, temp_dir: str):
+    global _segment_minutes, _recordings_dir, _temp_dir, _watchdog_task
     _segment_minutes = segment_minutes
     _recordings_dir = recordings_dir
+    _temp_dir = temp_dir
     for cam_id in cam_ids:
-        await start_recording(cam_id, segment_minutes, recordings_dir)
+        await start_recording(cam_id, segment_minutes, recordings_dir, temp_dir)
     _watchdog_task = asyncio.create_task(_midnight_watchdog())
 
 
