@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { MotionEvent, RecordingSegment } from '../types'
 import {
   NEW_LIVE_TIMELINE_COLLAPSED_KEY,
+  calculateGridRowsPixelHeight,
+  calculateLiveGridRowHeight,
+  clampLayoutToGridBounds,
   filterRecordingSegments,
   formatDuration,
   formatStorageSize,
+  getBoundedLayoutOrFallback,
   getTimelineToggleLabel,
+  layoutFitsWithinGridRows,
   mergeTimelineRanges,
   readNewLiveTimelineCollapsedPreference,
   segmentOverlapsMotion,
@@ -84,5 +89,57 @@ describe('신규 라이브 타임라인 표시 상태', () => {
     expect(readNewLiveTimelineCollapsedPreference((key) => storage.get(key) ?? null)).toBe(true)
     expect(getTimelineToggleLabel(true)).toBe('타임라인 보기')
     expect(getTimelineToggleLabel(false)).toBe('타임라인 숨기기')
+  })
+})
+
+describe('신규 라이브 그리드 영역 제한', () => {
+  it('고정 행 수가 라이브뷰 실제 세로 픽셀을 넘지 않도록 행 높이를 계산한다', () => {
+    const rowHeight = calculateLiveGridRowHeight(1000, 12, 6)
+
+    expect(calculateGridRowsPixelHeight(12, rowHeight, 6)).toBeLessThanOrEqual(1000)
+    expect(calculateGridRowsPixelHeight(12, rowHeight + 1, 6)).toBeGreaterThan(1000)
+  })
+
+  it('카메라 타일들의 y+h 합산 바닥이 라이브뷰 최대 행을 넘으면 영역 밖 배치로 판정한다', () => {
+    const within = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 7 },
+      { i: 'fire', x: 0, y: 7, w: 8, h: 5 },
+    ]
+    const overflow = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 8 },
+      { i: 'fire', x: 0, y: 8, w: 8, h: 5 },
+    ]
+
+    expect(layoutFitsWithinGridRows(within, 12, 12)).toBe(true)
+    expect(layoutFitsWithinGridRows(overflow, 12, 12)).toBe(false)
+  })
+
+  it('리사이즈가 다른 카메라를 라이브뷰 하단 밖으로 밀면 마지막 정상 배치로 되돌린다', () => {
+    const lastValid = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 7, minH: 2 },
+      { i: 'fire', x: 0, y: 7, w: 8, h: 5, minH: 2 },
+    ]
+    const pushedOutside = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 8, minH: 2 },
+      { i: 'fire', x: 0, y: 8, w: 8, h: 5, minH: 2 },
+    ]
+
+    expect(getBoundedLayoutOrFallback(pushedOutside, lastValid, 12, 12)).toEqual(lastValid)
+  })
+
+  it('기존 동적 행 높이로 저장된 큰 배치는 비율을 유지한 채 라이브뷰 12행 안으로 축소한다', () => {
+    const legacyLayout = [
+      { i: 'yard', x: 0, y: 0, w: 6, h: 28, minH: 2 },
+      { i: 'fire', x: 0, y: 28, w: 6, h: 28, minH: 2 },
+      { i: 'side-top', x: 6, y: 0, w: 3, h: 17, minH: 2 },
+      { i: 'side-middle', x: 6, y: 17, w: 3, h: 17, minH: 2 },
+      { i: 'side-bottom', x: 6, y: 34, w: 3, h: 17, minH: 2 },
+    ]
+
+    const bounded = clampLayoutToGridBounds(legacyLayout, 12, 12)
+
+    expect(bounded.find(item => item.i === 'yard')).toMatchObject({ y: 0, h: 6 })
+    expect(bounded.find(item => item.i === 'fire')).toMatchObject({ y: 6, h: 6 })
+    expect(Math.max(...bounded.map(item => item.y + item.h))).toBeLessThanOrEqual(12)
   })
 })

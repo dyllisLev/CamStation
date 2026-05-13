@@ -21,10 +21,13 @@ import {
 import type { Camera, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
 import {
   NEW_LIVE_TIMELINE_COLLAPSED_KEY,
+  calculateLiveGridRowHeight,
+  clampLayoutToGridBounds,
   filterRecordingSegments,
   formatClock,
   formatDuration,
   formatStorageSize,
+  getBoundedLayoutOrFallback,
   getTimelineToggleLabel,
   mergeTimelineRanges,
   readNewLiveTimelineCollapsedPreference,
@@ -40,6 +43,8 @@ type Navigate = (page: NewPage) => void
 type TimelineMotion = { ts_start: number; ts_end: number | null }
 
 const GRID_COLS = 12
+const LIVE_GRID_MAX_ROWS = 12
+const LIVE_GRID_MARGIN: [number, number] = [6, 6]
 const RESIZE_HANDLE_SIZE = 14
 const RESIZE_EDGE_SIZE = 8
 
@@ -146,6 +151,15 @@ function NewCameraGrid({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  const boundedLayout = useMemo(
+    () => clampLayoutToGridBounds(layout, LIVE_GRID_MAX_ROWS, GRID_COLS),
+    [layout],
+  )
+  const lastAcceptedLayoutRef = useRef<Layout[]>(boundedLayout)
+
+  useEffect(() => {
+    lastAcceptedLayoutRef.current = boundedLayout
+  }, [boundedLayout])
 
   useEffect(() => {
     const el = containerRef.current
@@ -157,23 +171,34 @@ function NewCameraGrid({
     return () => resizeObserver.disconnect()
   }, [])
 
-  const maxRows = Math.max(8, ...layout.map(item => item.y + item.h))
-  const rowHeight = containerSize.height > 0 ? Math.max(18, Math.floor((containerSize.height - 12) / maxRows)) : 24
+  const rowHeight = containerSize.height > 0
+    ? calculateLiveGridRowHeight(containerSize.height, LIVE_GRID_MAX_ROWS, LIVE_GRID_MARGIN[1])
+    : 1
+
+  const handleBoundedLayoutChange = useCallback((nextLayout: Layout[]) => {
+    const boundedNextLayout = getBoundedLayoutOrFallback(nextLayout, lastAcceptedLayoutRef.current, LIVE_GRID_MAX_ROWS, GRID_COLS)
+    lastAcceptedLayoutRef.current = boundedNextLayout
+    onLayoutChange(boundedNextLayout)
+  }, [onLayoutChange])
 
   return (
     <div ref={containerRef} className="new-grid-stage">
       {containerSize.width > 0 && containerSize.height > 0 && (
         <GridLayout
-          layout={layout}
+          layout={boundedLayout}
           cols={GRID_COLS}
           rowHeight={rowHeight}
           width={containerSize.width}
-          onLayoutChange={onLayoutChange}
+          onLayoutChange={handleBoundedLayoutChange}
           draggableHandle=".cam-drag-handle"
           resizeHandles={['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']}
           resizeHandle={<ResizeHandle />}
-          margin={[6, 6]}
+          margin={LIVE_GRID_MARGIN}
           containerPadding={[0, 0]}
+          maxRows={LIVE_GRID_MAX_ROWS}
+          isBounded
+          autoSize={false}
+          style={{ height: '100%' }}
         >
           {cameras.map(camera => (
             <div key={camera.id} className="new-grid-item">

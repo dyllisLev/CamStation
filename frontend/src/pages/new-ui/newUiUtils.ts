@@ -4,6 +4,77 @@ export const NEW_LIVE_TIMELINE_COLLAPSED_KEY = 'camstation-new-live-timeline-col
 
 type StorageReader = (key: string) => string | null
 
+type GridBoundsItem = {
+  i: string
+  x: number
+  y: number
+  w: number
+  h: number
+  minW?: number | null
+  minH?: number | null
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function layoutBottom(layout: GridBoundsItem[]): number {
+  return Math.max(0, ...layout.map(item => item.y + item.h))
+}
+
+export function calculateGridRowsPixelHeight(rows: number, rowHeight: number, marginY: number): number {
+  if (rows <= 0) return 0
+  return rows * rowHeight + (rows - 1) * marginY
+}
+
+export function calculateLiveGridRowHeight(containerHeight: number, maxRows: number, marginY: number): number {
+  const availableHeight = containerHeight - Math.max(0, maxRows - 1) * marginY
+  return Math.max(1, Math.floor(availableHeight / Math.max(1, maxRows)))
+}
+
+export function layoutFitsWithinGridRows(layout: GridBoundsItem[], maxRows: number, cols: number): boolean {
+  return layout.every(item => (
+    item.x >= 0
+    && item.y >= 0
+    && item.w > 0
+    && item.h > 0
+    && item.x + item.w <= cols
+    && item.y + item.h <= maxRows
+  ))
+}
+
+export function clampLayoutToGridBounds<T extends GridBoundsItem>(layout: T[], maxRows: number, cols: number): T[] {
+  const bottom = layoutBottom(layout)
+  const scaleY = bottom > maxRows ? maxRows / bottom : 1
+
+  return layout.map(item => {
+    const minW = clampNumber(item.minW ?? 1, 1, cols)
+    const minH = clampNumber(item.minH ?? 1, 1, maxRows)
+    const scaledY = scaleY < 1 ? Math.round(item.y * scaleY) : item.y
+    const scaledH = scaleY < 1 ? Math.round(item.h * scaleY) : item.h
+    const w = clampNumber(item.w, minW, cols)
+    const h = clampNumber(scaledH, minH, maxRows)
+    const x = clampNumber(item.x, 0, cols - w)
+    const y = clampNumber(scaledY, 0, maxRows - h)
+    return { ...item, x, y, w, h }
+  })
+}
+
+export function getBoundedLayoutOrFallback<T extends GridBoundsItem>(
+  nextLayout: T[],
+  fallbackLayout: T[],
+  maxRows: number,
+  cols: number,
+): T[] {
+  if (layoutFitsWithinGridRows(nextLayout, maxRows, cols)) {
+    return clampLayoutToGridBounds(nextLayout, maxRows, cols)
+  }
+  if (fallbackLayout.length > 0) {
+    return clampLayoutToGridBounds(fallbackLayout, maxRows, cols)
+  }
+  return clampLayoutToGridBounds(nextLayout, maxRows, cols)
+}
+
 export function readNewLiveTimelineCollapsedPreference(readStorage: StorageReader): boolean {
   return readStorage(NEW_LIVE_TIMELINE_COLLAPSED_KEY) === 'true'
 }
