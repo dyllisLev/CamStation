@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import re
 import aiosqlite
@@ -85,13 +86,41 @@ def _safe_getsize(path: str) -> int | None:
         return None
 
 
+def _date_from_segment_path(path: str) -> str:
+    """세그먼트가 속한 날짜를 결정한다.
+
+    ffmpeg 출력 디렉토리는 프로세스 시작 시점의 날짜로 고정될 수 있다. 프로세스가
+    자정을 넘겨 계속 실행되면 parent dir은 전날이지만 filename은 현재 날짜가 된다.
+    최종 recordings 경로는 filename의 YYYY-MM-DD를 우선 사용해야 한다.
+    """
+    p = Path(path)
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}$", p.stem)
+    if m:
+        return m.group(1)
+    return p.parent.name
+
+
+async def _terminate_process(proc: asyncio.subprocess.Process, timeout: float = 10.0):
+    """Terminate ffmpeg; if it does not exit promptly, kill it."""
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("ffmpeg pid %s did not exit after terminate; killing", getattr(proc, "pid", "?"))
+        proc.kill()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+
+
 async def _move_to_recordings(temp_path: str, cam_id: str, recordings_dir: str) -> bool:
     """temp 경로의 파일을 최종 recordings 경로로 이동"""
     try:
-        # temp_path: /opt/camstation/temp/cam_id/2026-05-12/2026-05-12_07-30.mp4
-        # final:     /opt/camstation/recordings/cam_id/2026-05-12/2026-05-12_07-30.mp4
+        # temp_path: /opt/camstation/temp/cam_id/2026-05-12/2026-05-13_07-30.mp4
+        # final:     /opt/camstation/recordings/cam_id/2026-05-13/2026-05-13_07-30.mp4
         temp_p = Path(temp_path)
-        date_str = temp_p.parent.name  # "2026-05-12"
+        date_str = _date_from_segment_path(temp_path)
         final_dir = Path(recordings_dir) / cam_id / date_str
         final_dir.mkdir(parents=True, exist_ok=True)
         final_path = final_dir / temp_p.name
@@ -257,9 +286,14 @@ async def stop_recording(cam_id: str):
     _stopping_rec.add(cam_id)
     proc = _active_procs.get(cam_id)
     if proc and proc.returncode is None:
-        proc.terminate()
+        await _terminate_process(proc)
     try:
-        await task
+        await asyncio.wait_for(task, timeout=20)
+    except asyncio.TimeoutError:
+        logger.warning("Recording task for %s did not stop; cancelling", cam_id)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     except Exception:
         pass
     _stopping_rec.discard(cam_id)
@@ -308,9 +342,14 @@ async def stop_sub_keepalive(cam_id: str):
     _stopping_sub.add(cam_id)
     proc = _active_sub_procs.get(cam_id)
     if proc and proc.returncode is None:
-        proc.terminate()
+        await _terminate_process(proc)
     try:
-        await task
+        await asyncio.wait_for(task, timeout=20)
+    except asyncio.TimeoutError:
+        logger.warning("Sub-stream keepalive task for %s did not stop; cancelling", cam_id)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     except Exception:
         pass
     _stopping_sub.discard(cam_id)

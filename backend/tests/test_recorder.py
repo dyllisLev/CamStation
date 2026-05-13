@@ -101,3 +101,49 @@ def test_next_delay_boundary():
     from services.recorder import _next_delay
     assert _next_delay(20, 29.9) == 40  # below threshold → double
     assert _next_delay(20, 30.0) == 5   # at threshold exactly → reset
+
+
+def test_date_from_segment_path_prefers_filename_date():
+    from services.recorder import _date_from_segment_path
+
+    assert _date_from_segment_path(
+        "/opt/camstation/temp/camera-yard/2026-05-12/2026-05-13_10-00.mp4"
+    ) == "2026-05-13"
+
+
+def test_date_from_segment_path_falls_back_to_parent_for_legacy_filename():
+    from services.recorder import _date_from_segment_path
+
+    assert _date_from_segment_path(
+        "/opt/camstation/temp/camera-yard/2026-05-12/10-00.mp4"
+    ) == "2026-05-12"
+
+
+@pytest.mark.asyncio
+async def test_terminate_process_kills_when_terminate_does_not_exit():
+    from services.recorder import _terminate_process
+
+    class HangingProc:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            if not self.killed:
+                import asyncio
+                await asyncio.sleep(10)
+            return self.returncode
+
+    proc = HangingProc()
+    await _terminate_process(proc, timeout=0.01)
+
+    assert proc.terminated is True
+    assert proc.killed is True
