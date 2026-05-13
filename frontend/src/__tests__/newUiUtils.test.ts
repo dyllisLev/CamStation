@@ -144,6 +144,15 @@ describe('신규 라이브 그리드 영역 제한', () => {
     expect(getBoundedLayoutOrFallback(pushedOutside, lastValid, 12, 12)).toEqual(lastValid)
   })
 
+  it('그리드가 일시적으로 빈 배치를 보고해도 기존 카메라 배치를 지우지 않는다', () => {
+    const lastValid = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 7, minH: 2 },
+      { i: 'fire', x: 0, y: 7, w: 8, h: 5, minH: 2 },
+    ]
+
+    expect(getBoundedLayoutOrFallback([], lastValid, 12, 12)).toEqual(lastValid)
+  })
+
   it('기존 동적 행 높이로 저장된 큰 배치는 비율을 유지한 채 라이브뷰 12행 안으로 축소한다', () => {
     const legacyLayout = [
       { i: 'yard', x: 0, y: 0, w: 6, h: 28, minH: 2 },

@@ -77,6 +77,9 @@ export function getBoundedLayoutOrFallback<T extends GridBoundsItem>(
   maxRows: number,
   cols: number,
 ): T[] {
+  if (nextLayout.length === 0 && fallbackLayout.length > 0) {
+    return clampLayoutToGridBounds(fallbackLayout, maxRows, cols)
+  }
   if (layoutFitsWithinGridRows(nextLayout, maxRows, cols)) {
     return clampLayoutToGridBounds(nextLayout, maxRows, cols)
   }
