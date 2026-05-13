@@ -14,7 +14,7 @@ async def list_layouts():
     async with aiosqlite.connect(get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, name, data, timeline_collapsed, created_at, updated_at FROM layouts ORDER BY updated_at DESC"
+            "SELECT id, name, data, timeline_collapsed, grid_cols, grid_rows, created_at, updated_at FROM layouts ORDER BY updated_at DESC"
         )
         rows = await cursor.fetchall()
     return [
@@ -23,6 +23,8 @@ async def list_layouts():
             name=row["name"],
             data=json.loads(row["data"]),
             timeline_collapsed=bool(row["timeline_collapsed"]),
+            grid_cols=row["grid_cols"],
+            grid_rows=row["grid_rows"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -39,8 +41,8 @@ async def create_layout(req: CreateLayoutRequest):
     data_json = json.dumps([item.model_dump(exclude_none=True) for item in req.data])
     async with aiosqlite.connect(get_db_path()) as db:
         await db.execute(
-            "INSERT INTO layouts (id, name, data, timeline_collapsed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (layout_id, req.name.strip(), data_json, int(req.timeline_collapsed), now, now),
+            "INSERT INTO layouts (id, name, data, timeline_collapsed, grid_cols, grid_rows, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (layout_id, req.name.strip(), data_json, int(req.timeline_collapsed), req.grid_cols, req.grid_rows, now, now),
         )
         await db.commit()
     return LayoutProfile(
@@ -48,6 +50,8 @@ async def create_layout(req: CreateLayoutRequest):
         name=req.name.strip(),
         data=req.data,
         timeline_collapsed=req.timeline_collapsed,
+        grid_cols=req.grid_cols,
+        grid_rows=req.grid_rows,
         created_at=now,
         updated_at=now,
     )
@@ -58,7 +62,7 @@ async def update_layout(layout_id: str, req: UpdateLayoutRequest):
     async with aiosqlite.connect(get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, name, data, timeline_collapsed, created_at FROM layouts WHERE id = ?", (layout_id,)
+            "SELECT id, name, data, timeline_collapsed, grid_cols, grid_rows, created_at FROM layouts WHERE id = ?", (layout_id,)
         )
         row = await cursor.fetchone()
         if not row:
@@ -71,9 +75,11 @@ async def update_layout(layout_id: str, req: UpdateLayoutRequest):
             else row["data"]
         )
         new_tc = req.timeline_collapsed if req.timeline_collapsed is not None else bool(row["timeline_collapsed"])
+        new_grid_cols = req.grid_cols if req.grid_cols is not None else row["grid_cols"]
+        new_grid_rows = req.grid_rows if req.grid_rows is not None else row["grid_rows"]
         await db.execute(
-            "UPDATE layouts SET name = ?, data = ?, timeline_collapsed = ?, updated_at = ? WHERE id = ?",
-            (new_name, new_data, int(new_tc), now, layout_id),
+            "UPDATE layouts SET name = ?, data = ?, timeline_collapsed = ?, grid_cols = ?, grid_rows = ?, updated_at = ? WHERE id = ?",
+            (new_name, new_data, int(new_tc), new_grid_cols, new_grid_rows, now, layout_id),
         )
         await db.commit()
     return LayoutProfile(
@@ -81,6 +87,8 @@ async def update_layout(layout_id: str, req: UpdateLayoutRequest):
         name=new_name,
         data=json.loads(new_data),
         timeline_collapsed=new_tc,
+        grid_cols=new_grid_cols,
+        grid_rows=new_grid_rows,
         created_at=row["created_at"],
         updated_at=now,
     )

@@ -27,12 +27,12 @@ export const getStorageStats = (): Promise<StorageStats> =>
 export const getLayouts = (): Promise<LayoutProfile[]> =>
   api.get('/layouts').then(r => r.data);
 
-export const createLayout = (req: { name: string; data: LayoutItem[]; timeline_collapsed: boolean }): Promise<LayoutProfile> =>
+export const createLayout = (req: { name: string; data: LayoutItem[]; timeline_collapsed: boolean; grid_cols?: number; grid_rows?: number | null }): Promise<LayoutProfile> =>
   api.post('/layouts', req).then(r => r.data);
 
 export const updateLayout = (
   id: string,
-  req: { name?: string; data?: LayoutItem[]; timeline_collapsed?: boolean },
+  req: { name?: string; data?: LayoutItem[]; timeline_collapsed?: boolean; grid_cols?: number; grid_rows?: number | null },
 ): Promise<LayoutProfile> =>
   api.put(`/layouts/${id}`, req).then(r => r.data);
 

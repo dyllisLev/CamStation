@@ -49,6 +49,8 @@ class LayoutProfile(BaseModel):
     name: str
     data: list[LayoutItem]
     timeline_collapsed: bool = False
+    grid_cols: int = 12
+    grid_rows: int | None = None
     created_at: int
     updated_at: int
 
@@ -57,12 +59,16 @@ class CreateLayoutRequest(BaseModel):
     name: str
     data: list[LayoutItem]
     timeline_collapsed: bool = False
+    grid_cols: int = 12
+    grid_rows: int | None = None
 
 
 class UpdateLayoutRequest(BaseModel):
     name: str | None = None
     data: list[LayoutItem] | None = None
     timeline_collapsed: bool | None = None
+    grid_cols: int | None = None
+    grid_rows: int | None = None
 
 
 class CameraStorageStats(BaseModel):

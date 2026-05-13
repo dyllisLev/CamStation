@@ -33,6 +33,8 @@ async def init_db():
                 name               TEXT    NOT NULL,
                 data               TEXT    NOT NULL,
                 timeline_collapsed INTEGER NOT NULL DEFAULT 0,
+                grid_cols          INTEGER NOT NULL DEFAULT 12,
+                grid_rows          INTEGER,
                 created_at         INTEGER NOT NULL,
                 updated_at         INTEGER NOT NULL
             );
@@ -50,6 +52,12 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_rec_cam_ts
                 ON recordings(camera_id, ts_start);
         """)
+        cursor = await db.execute("PRAGMA table_info(layouts)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "grid_cols" not in columns:
+            await db.execute("ALTER TABLE layouts ADD COLUMN grid_cols INTEGER NOT NULL DEFAULT 12")
+        if "grid_rows" not in columns:
+            await db.execute("ALTER TABLE layouts ADD COLUMN grid_rows INTEGER")
         await db.commit()
 
 async def get_setting(key: str) -> Optional[str]:

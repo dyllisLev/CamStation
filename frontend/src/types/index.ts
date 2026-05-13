@@ -55,6 +55,8 @@ export interface LayoutProfile {
   name: string;
   data: LayoutItem[];
   timeline_collapsed: boolean;
+  grid_cols: number;
+  grid_rows: number | null;
   created_at: number;
   updated_at: number;
 }

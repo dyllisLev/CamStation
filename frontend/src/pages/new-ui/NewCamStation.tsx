@@ -42,9 +42,9 @@ type Navigate = (page: NewPage) => void
 
 type TimelineMotion = { ts_start: number; ts_end: number | null }
 
-const GRID_COLS = 12
-const LIVE_GRID_MAX_ROWS = 12
-const LIVE_GRID_MARGIN: [number, number] = [6, 6]
+const GRID_COLS = 48
+const LIVE_GRID_MAX_ROWS = 48
+const LIVE_GRID_MARGIN: [number, number] = [4, 4]
 const RESIZE_HANDLE_SIZE = 14
 const RESIZE_EDGE_SIZE = 8
 
@@ -363,7 +363,7 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
     loadLayout,
     saveLayout,
     saveAsLayout,
-  } = useLayouts(cameras)
+  } = useLayouts(cameras, { gridCols: GRID_COLS, gridRows: LIVE_GRID_MAX_ROWS })
   const [selectedCamId, setSelectedCamId] = useState('')
   const [focusedCamera, setFocusedCamera] = useState<Camera | null>(null)
   const [sidePanelHidden, setSidePanelHidden] = useState(false)

@@ -54,6 +54,36 @@ async def test_update_data(client):
     assert r2.json()["data"][0]["x"] == 6
 
 
+async def test_layout_grid_resolution_metadata_roundtrips(client):
+    payload = {
+        "name": "세밀 배치",
+        "data": [{"i": "cam1", "x": 0, "y": 0, "w": 24, "h": 16, "minW": 8, "minH": 8}],
+        "grid_cols": 48,
+        "grid_rows": 48,
+    }
+
+    created = await client.post("/api/layouts", json=payload)
+    assert created.status_code == 201
+    body = created.json()
+    assert body["grid_cols"] == 48
+    assert body["grid_rows"] == 48
+
+    layout_id = body["id"]
+    updated = await client.put(f"/api/layouts/{layout_id}", json={
+        "data": [{"i": "cam1", "x": 4, "y": 4, "w": 20, "h": 12, "minW": 8, "minH": 8}],
+        "grid_cols": 48,
+        "grid_rows": 48,
+    })
+    assert updated.status_code == 200
+    assert updated.json()["grid_cols"] == 48
+    assert updated.json()["grid_rows"] == 48
+
+    listed = await client.get("/api/layouts")
+    listed_body = listed.json()[0]
+    assert listed_body["grid_cols"] == 48
+    assert listed_body["grid_rows"] == 48
+
+
 async def test_update_nonexistent_returns_404(client):
     r = await client.put("/api/layouts/nonexistent", json={"name": "x"})
     assert r.status_code == 404
