@@ -29,14 +29,16 @@ import {
   formatStorageSize,
   getBoundedLayoutOrFallback,
   getTimelineToggleLabel,
+  isNewViewerMode,
   mergeTimelineRanges,
   readNewLiveTimelineCollapsedPreference,
   recordingUrl,
+  shouldRestrictNewViewerPage,
 } from './newUiUtils'
-import type { RecordingFilter, TimelineRange } from './newUiUtils'
+import type { NewUiPage, RecordingFilter, TimelineRange } from './newUiUtils'
 import './newCamStation.css'
 
-type NewPage = 'live' | 'recordings' | 'settings'
+type NewPage = NewUiPage
 
 type Navigate = (page: NewPage) => void
 
@@ -48,10 +50,10 @@ const LIVE_GRID_MARGIN: [number, number] = [4, 4]
 const RESIZE_HANDLE_SIZE = 14
 const RESIZE_EDGE_SIZE = 8
 
-function initialPageFromPath(): NewPage {
-  const path = window.location.pathname
-  if (path.startsWith('/new/recordings')) return 'recordings'
-  if (path.startsWith('/new/settings')) return 'settings'
+function initialPageFromPath(pathname = window.location.pathname, viewerMode = isNewViewerMode(window.location.search)): NewPage {
+  if (viewerMode) return 'live'
+  if (pathname.startsWith('/new/recordings')) return 'recordings'
+  if (pathname.startsWith('/new/settings')) return 'settings'
   return 'live'
 }
 
@@ -77,10 +79,22 @@ function ResizeHandle({ handleAxis = 'se', ...rest }: { handleAxis?: string }) {
   return <div {...rest} style={styleByAxis[handleAxis] ?? base} className={`new-resize-handle new-resize-handle-${handleAxis}`} />
 }
 
-function NewHeader({ page, onNavigate, children }: { page: NewPage; onNavigate: Navigate; children?: ReactNode }) {
+function NewHeader({
+  page,
+  onNavigate,
+  viewerMode = false,
+  children,
+}: {
+  page: NewPage
+  onNavigate: Navigate
+  viewerMode?: boolean
+  children?: ReactNode
+}) {
   const navigate = (next: NewPage) => {
+    if (shouldRestrictNewViewerPage(next, viewerMode)) return
     onNavigate(next)
-    window.history.pushState(null, '', pageToPath(next))
+    const nextPath = pageToPath(next)
+    window.history.pushState(null, '', viewerMode ? `${nextPath}?viewer=1` : nextPath)
   }
 
   return (
@@ -94,8 +108,12 @@ function NewHeader({ page, onNavigate, children }: { page: NewPage; onNavigate: 
       </div>
       <nav className="new-nav" aria-label="신규 UI 주요 화면">
         <button className={page === 'live' ? 'new-active' : ''} onClick={() => navigate('live')}>라이브</button>
-        <button className={page === 'recordings' ? 'new-active' : ''} onClick={() => navigate('recordings')}>녹화</button>
-        <button className={page === 'settings' ? 'new-active' : ''} onClick={() => navigate('settings')}>설정</button>
+        {!viewerMode && (
+          <>
+            <button className={page === 'recordings' ? 'new-active' : ''} onClick={() => navigate('recordings')}>녹화</button>
+            <button className={page === 'settings' ? 'new-active' : ''} onClick={() => navigate('settings')}>설정</button>
+          </>
+        )}
       </nav>
       {children}
     </header>
@@ -351,7 +369,17 @@ function NewTwoRowTimeline({
   )
 }
 
-function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: NewPage; onNavigate: Navigate }) {
+function NewLivePage({
+  cameras,
+  page,
+  onNavigate,
+  viewerMode = false,
+}: {
+  cameras: Camera[]
+  page: NewPage
+  onNavigate: Navigate
+  viewerMode?: boolean
+}) {
   const today = format(new Date(), 'yyyy-MM-dd')
   const timelineData = useAllTimelines(cameras, today)
   const {
@@ -443,7 +471,7 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
 
   return (
     <div className="new-app new-live-app">
-      <NewHeader page={page} onNavigate={onNavigate}>
+      <NewHeader page={page} onNavigate={onNavigate} viewerMode={viewerMode}>
         <select className="new-select" value={currentId ?? ''} onChange={(event) => loadLayout(event.target.value, cameras)} aria-label="저장된 배치 선택">
           {layouts.length === 0 && <option value="">저장된 배치 없음</option>}
           {layouts.map(layout => <option key={layout.id} value={layout.id}>{layout.name}{layout.id === currentId && isDirty ? ' *' : ''}</option>)}
@@ -530,7 +558,7 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
         onToggleCollapsed={toggleLiveTimelineCollapsed}
         bodyId={liveTimelineBodyId}
         isLive
-        onSeek={handleSeek}
+        onSeek={viewerMode ? undefined : handleSeek}
       />
 
       {focusedCamera && (
@@ -849,16 +877,30 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
 }
 
 export function NewCamStation() {
-  const [page, setPage] = useState<NewPage>(initialPageFromPath)
+  const viewerMode = isNewViewerMode(window.location.search)
+  const [page, setPage] = useState<NewPage>(() => initialPageFromPath(window.location.pathname, viewerMode))
   const cameras = useCameras()
 
   useEffect(() => {
-    const onPopState = () => setPage(initialPageFromPath())
+    if (viewerMode && window.location.pathname !== '/new') {
+      window.history.replaceState(null, '', '/new?viewer=1')
+    }
+  }, [viewerMode])
+
+  useEffect(() => {
+    const onPopState = () => {
+      const nextViewerMode = isNewViewerMode(window.location.search)
+      const nextPage = initialPageFromPath(window.location.pathname, nextViewerMode)
+      if (nextViewerMode && window.location.pathname !== '/new') {
+        window.history.replaceState(null, '', '/new?viewer=1')
+      }
+      setPage(nextPage)
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
-  if (page === 'recordings') return <NewRecordingsPage cameras={cameras} page={page} onNavigate={setPage} />
-  if (page === 'settings') return <NewSettingsPage page={page} onNavigate={setPage} />
-  return <NewLivePage cameras={cameras} page={page} onNavigate={setPage} />
+  if (!viewerMode && page === 'recordings') return <NewRecordingsPage cameras={cameras} page={page} onNavigate={setPage} />
+  if (!viewerMode && page === 'settings') return <NewSettingsPage page={page} onNavigate={setPage} />
+  return <NewLivePage cameras={cameras} page="live" onNavigate={setPage} viewerMode={viewerMode} />
 }

@@ -10,9 +10,11 @@ import {
   formatStorageSize,
   getBoundedLayoutOrFallback,
   getTimelineToggleLabel,
+  isNewViewerMode,
   layoutFitsWithinGridRows,
   mergeTimelineRanges,
   readNewLiveTimelineCollapsedPreference,
+  shouldRestrictNewViewerPage,
   segmentOverlapsMotion,
 } from '../pages/new-ui/newUiUtils'
 
@@ -89,6 +91,21 @@ describe('신규 라이브 타임라인 표시 상태', () => {
     expect(readNewLiveTimelineCollapsedPreference((key) => storage.get(key) ?? null)).toBe(true)
     expect(getTimelineToggleLabel(true)).toBe('타임라인 보기')
     expect(getTimelineToggleLabel(false)).toBe('타임라인 숨기기')
+  })
+})
+
+describe('신규 UI 뷰어 모드 제한', () => {
+  it('viewer=1 검색 파라미터를 EXE 전용 신규 UI 모드로 판정한다', () => {
+    expect(isNewViewerMode('?viewer=1')).toBe(true)
+    expect(isNewViewerMode('?viewer=0')).toBe(false)
+    expect(isNewViewerMode('')).toBe(false)
+  })
+
+  it('EXE 전용 신규 UI 모드에서는 녹화와 설정 화면 접근을 제한한다', () => {
+    expect(shouldRestrictNewViewerPage('live', true)).toBe(false)
+    expect(shouldRestrictNewViewerPage('recordings', true)).toBe(true)
+    expect(shouldRestrictNewViewerPage('settings', true)).toBe(true)
+    expect(shouldRestrictNewViewerPage('settings', false)).toBe(false)
   })
 })
 

@@ -1,8 +1,19 @@
 import type { MotionEvent, RecordingSegment } from '../../types'
 
 export const NEW_LIVE_TIMELINE_COLLAPSED_KEY = 'camstation-new-live-timeline-collapsed'
+export const NEW_VIEWER_MODE_QUERY_PARAM = 'viewer'
+
+export type NewUiPage = 'live' | 'recordings' | 'settings'
 
 type StorageReader = (key: string) => string | null
+
+export function isNewViewerMode(search: string): boolean {
+  return new URLSearchParams(search).get(NEW_VIEWER_MODE_QUERY_PARAM) === '1'
+}
+
+export function shouldRestrictNewViewerPage(page: NewUiPage, viewerMode: boolean): boolean {
+  return viewerMode && page !== 'live'
+}
 
 type GridBoundsItem = {
   i: string
