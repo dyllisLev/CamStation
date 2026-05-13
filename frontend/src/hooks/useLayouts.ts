@@ -109,33 +109,34 @@ export function useLayouts(cameras: Camera[], options: LayoutGridOptions = {}) {
     initializedRef.current = true;
     prevCameraIdsRef.current = cameras.map(c => c.id).join(',');
 
+    // Show cameras immediately with a deterministic fallback layout.
+    // The viewer should not stay on the loading message just because the saved-layout
+    // request is slow or briefly unavailable during backend/nginx restarts.
+    const def = defaultLayout(cameras, targetCols, fixedTargetRows ?? LEGACY_GRID_ROWS);
+    skipNextChangeRef.current = true;
+    setGridLayoutState(def);
+    setSavedSnapshot(def);
+
     getLayouts()
       .then(data => {
         setLayouts(data);
         const lastId = localStorage.getItem(LAST_LAYOUT_KEY);
         const last = data.find(l => l.id === lastId) ?? (data.length > 0 ? data[0] : null);
-        if (last) {
-          const targetRows = fixedTargetRows ?? sourceRowsFor(last);
-          const normalized = normalizeProfileLayout(last, targetCols, fixedTargetRows);
-          const merged = mergeWithCameras(normalized.map(toLayoutItem), cameras, targetCols, targetRows);
-          skipNextChangeRef.current = true;
-          setGridLayoutState(merged);
-          setSavedSnapshot(merged);
-          setCurrentId(last.id);
-          setTimelineCollapsed(last.timeline_collapsed ?? false);
-          localStorage.setItem(LAST_LAYOUT_KEY, last.id);
-        } else {
-          const def = defaultLayout(cameras, targetCols, fixedTargetRows ?? LEGACY_GRID_ROWS);
-          skipNextChangeRef.current = true;
-          setGridLayoutState(def);
-          setSavedSnapshot(def);
-        }
+        if (!last) return;
+
+        const targetRows = fixedTargetRows ?? sourceRowsFor(last);
+        const normalized = normalizeProfileLayout(last, targetCols, fixedTargetRows);
+        const merged = mergeWithCameras(normalized.map(toLayoutItem), cameras, targetCols, targetRows);
+        skipNextChangeRef.current = true;
+        setGridLayoutState(merged);
+        setSavedSnapshot(merged);
+        setCurrentId(last.id);
+        setTimelineCollapsed(last.timeline_collapsed ?? false);
+        localStorage.setItem(LAST_LAYOUT_KEY, last.id);
       })
       .catch(() => {
-        const def = defaultLayout(cameras, targetCols, fixedTargetRows ?? LEGACY_GRID_ROWS);
-        skipNextChangeRef.current = true;
-        setGridLayoutState(def);
-        setSavedSnapshot(def);
+        // Keep the already visible fallback layout. The next page load/poll cycle can
+        // recover saved layouts; most importantly, the viewer stays usable.
       });
   }, [cameras, cameras.length, fixedTargetRows, targetCols]);
 
