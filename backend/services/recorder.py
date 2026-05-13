@@ -43,6 +43,7 @@ def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) ->
     output_pattern = os.path.join(output_dir, "%Y-%m-%d_%H-%M.mp4")
     return [
         "ffmpeg", "-y",
+        "-nostats",
         "-rtsp_transport", "tcp",
         "-i", source_rtsp,
         "-c:v", "copy",

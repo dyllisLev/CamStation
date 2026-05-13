@@ -33,6 +33,18 @@ def test_ffmpeg_cmd_no_video_transcoding():
     assert "-c:a" in cmd and "aac" in cmd
 
 
+def test_ffmpeg_cmd_disables_progress_stats_on_stderr():
+    """ffmpeg의 줄바꿈 없는 진행상태 출력이 stderr watcher를 죽이지 않게 한다."""
+    cmd = build_ffmpeg_cmd(
+        source_rtsp="rtsp://127.0.0.1:8554/camera-yard",
+        output_dir="/tmp",
+        segment_minutes=10,
+    )
+
+    assert "-nostats" in cmd
+    assert cmd.index("-nostats") < cmd.index("-i")
+
+
 def test_ffmpeg_cmd_filename_includes_date():
     """파일명이 YYYY-MM-DD_HH-MM.mp4 형식이어야 한다."""
     from services.recorder import build_ffmpeg_cmd
