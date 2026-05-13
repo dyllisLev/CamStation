@@ -1,5 +1,17 @@
 import type { MotionEvent, RecordingSegment } from '../../types'
 
+export const NEW_LIVE_TIMELINE_COLLAPSED_KEY = 'camstation-new-live-timeline-collapsed'
+
+type StorageReader = (key: string) => string | null
+
+export function readNewLiveTimelineCollapsedPreference(readStorage: StorageReader): boolean {
+  return readStorage(NEW_LIVE_TIMELINE_COLLAPSED_KEY) === 'true'
+}
+
+export function getTimelineToggleLabel(collapsed: boolean): string {
+  return collapsed ? '타임라인 보기' : '타임라인 숨기기'
+}
+
 export type RecordingFilter = 'all' | 'motion' | 'offline'
 
 export interface TimelineRange {

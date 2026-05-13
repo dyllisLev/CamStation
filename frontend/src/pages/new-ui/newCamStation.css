@@ -132,6 +132,11 @@
   font-weight: 760;
 }
 
+.new-timeline-command {
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--new-accent), transparent 80%) inset;
+}
+
 .new-disabled,
 button:disabled {
   opacity: .45;

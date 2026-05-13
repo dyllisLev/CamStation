@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { MotionEvent, RecordingSegment } from '../types'
 import {
+  NEW_LIVE_TIMELINE_COLLAPSED_KEY,
   filterRecordingSegments,
   formatDuration,
   formatStorageSize,
+  getTimelineToggleLabel,
   mergeTimelineRanges,
+  readNewLiveTimelineCollapsedPreference,
   segmentOverlapsMotion,
 } from '../pages/new-ui/newUiUtils'
 
@@ -65,5 +68,21 @@ describe('표시 포맷', () => {
   it('관제 UI에서 쓰는 시간과 용량을 짧은 한국어 표기로 만든다', () => {
     expect(formatDuration(610)).toBe('10분 10초')
     expect(formatStorageSize(1024 * 1024 * 1536)).toBe('1.5 GB')
+  })
+})
+
+describe('신규 라이브 타임라인 표시 상태', () => {
+  it('저장된 신규 UI 설정이 없으면 기존 배치의 접힘 상태와 무관하게 기본으로 타임라인을 보여준다', () => {
+    const storage = new Map<string, string>()
+
+    expect(readNewLiveTimelineCollapsedPreference((key) => storage.get(key) ?? null)).toBe(false)
+  })
+
+  it('신규 UI 전용 설정이 접힘이면 보기 버튼 문구를 제공한다', () => {
+    const storage = new Map([[NEW_LIVE_TIMELINE_COLLAPSED_KEY, 'true']])
+
+    expect(readNewLiveTimelineCollapsedPreference((key) => storage.get(key) ?? null)).toBe(true)
+    expect(getTimelineToggleLabel(true)).toBe('타임라인 보기')
+    expect(getTimelineToggleLabel(false)).toBe('타임라인 숨기기')
   })
 })

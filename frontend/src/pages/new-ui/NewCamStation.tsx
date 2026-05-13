@@ -20,11 +20,14 @@ import {
 } from '../../api/client'
 import type { Camera, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
 import {
+  NEW_LIVE_TIMELINE_COLLAPSED_KEY,
   filterRecordingSegments,
   formatClock,
   formatDuration,
   formatStorageSize,
+  getTimelineToggleLabel,
   mergeTimelineRanges,
+  readNewLiveTimelineCollapsedPreference,
   recordingUrl,
 } from './newUiUtils'
 import type { RecordingFilter, TimelineRange } from './newUiUtils'
@@ -243,6 +246,7 @@ function NewTwoRowTimeline({
   date,
   collapsed = false,
   onToggleCollapsed,
+  bodyId: providedBodyId,
   isLive = false,
   onSeek,
 }: {
@@ -252,6 +256,7 @@ function NewTwoRowTimeline({
   date: string
   collapsed?: boolean
   onToggleCollapsed?: () => void
+  bodyId?: string
   isLive?: boolean
   onSeek?: (cameraId: string, ts: number) => void
 }) {
@@ -275,7 +280,7 @@ function NewTwoRowTimeline({
   const selectedMotion = selectedData?.motion_events ?? []
   const aggregateRanges = mergeTimelineRanges(cameras.flatMap(camera => timelineData[camera.id]?.segments ?? []), cursorTs)
   const aggregateMotion: TimelineMotion[] = cameras.flatMap(camera => timelineData[camera.id]?.motion_events ?? [])
-  const bodyId = `new-timeline-${date}-${selectedCamId || 'none'}`
+  const bodyId = providedBodyId ?? `new-timeline-${date}-${selectedCamId || 'none'}`
 
   return (
     <footer className={`new-timeline ${collapsed ? 'new-collapsed' : ''}`} aria-label="선택 카메라와 전체 카메라 2줄 타임라인">
@@ -286,7 +291,7 @@ function NewTwoRowTimeline({
         {isLive && <div className="new-live-pill"><span className="new-pulse" />LIVE</div>}
         {onToggleCollapsed && (
           <button className="new-ghost" type="button" onClick={onToggleCollapsed} aria-controls={bodyId} aria-expanded={!collapsed}>
-            {collapsed ? '타임라인 펼치기' : '타임라인 접기'}
+            {getTimelineToggleLabel(collapsed)}
           </button>
         )}
       </div>
@@ -329,19 +334,21 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
     currentId,
     gridLayout,
     isDirty,
-    timelineCollapsed,
     setGridLayout,
     loadLayout,
     saveLayout,
     saveAsLayout,
-    toggleTimelineCollapsed,
   } = useLayouts(cameras)
   const [selectedCamId, setSelectedCamId] = useState('')
   const [focusedCamera, setFocusedCamera] = useState<Camera | null>(null)
   const [sidePanelHidden, setSidePanelHidden] = useState(false)
   const [layoutSaved, setLayoutSaved] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [liveTimelineCollapsed, setLiveTimelineCollapsed] = useState(() =>
+    readNewLiveTimelineCollapsedPreference((key) => window.localStorage.getItem(key)),
+  )
   const [motionNow, setMotionNow] = useState(() => Date.now() / 1000)
+  const liveTimelineBodyId = 'new-live-timeline-body'
 
   useEffect(() => {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement))
@@ -395,6 +402,12 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
     window.open(recordingUrl(cameraId, segmentDate, segment.filename), '_blank')
   }
 
+  const toggleLiveTimelineCollapsed = () => {
+    const next = !liveTimelineCollapsed
+    window.localStorage.setItem(NEW_LIVE_TIMELINE_COLLAPSED_KEY, String(next))
+    setLiveTimelineCollapsed(next)
+  }
+
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen()
@@ -414,6 +427,15 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
         <button className="new-ghost" type="button" onClick={handleSaveAs}>새 이름 저장</button>
         <button className="new-ghost" type="button" onClick={() => setSidePanelHidden(value => !value)} aria-pressed={sidePanelHidden}>
           {sidePanelHidden ? '우측 패널 보기' : '우측 패널 숨기기'}
+        </button>
+        <button
+          className={`${liveTimelineCollapsed ? 'new-primary' : 'new-ghost'} new-timeline-command`}
+          type="button"
+          onClick={toggleLiveTimelineCollapsed}
+          aria-controls={liveTimelineBodyId}
+          aria-expanded={!liveTimelineCollapsed}
+        >
+          {getTimelineToggleLabel(liveTimelineCollapsed)}
         </button>
         <div className="new-spacer" />
         <div className="new-live-pill"><span className="new-pulse" />LIVE</div>
@@ -479,8 +501,9 @@ function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: N
         timelineData={timelineData}
         selectedCamId={selectedCamera?.id ?? ''}
         date={today}
-        collapsed={timelineCollapsed}
-        onToggleCollapsed={toggleTimelineCollapsed}
+        collapsed={liveTimelineCollapsed}
+        onToggleCollapsed={toggleLiveTimelineCollapsed}
+        bodyId={liveTimelineBodyId}
         isLive
         onSeek={handleSeek}
       />
