@@ -1,0 +1,816 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, MouseEvent, ReactNode } from 'react'
+import GridLayout from 'react-grid-layout'
+import type { Layout } from 'react-grid-layout'
+import { format } from 'date-fns'
+import 'react-grid-layout/css/styles.css'
+import 'react-resizable/css/styles.css'
+import { WebRTCPlayer } from '../../components/WebRTCPlayer'
+import { useAllTimelines } from '../../hooks/useAllTimelines'
+import { useCameras } from '../../hooks/useCameras'
+import { useLayouts } from '../../hooks/useLayouts'
+import {
+  getSettings,
+  getStorageStats,
+  getSystemVersion,
+  getViewerVersion,
+  listRecordings,
+  triggerUpdate,
+  updateSettings,
+} from '../../api/client'
+import type { Camera, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
+import {
+  filterRecordingSegments,
+  formatClock,
+  formatDuration,
+  formatStorageSize,
+  mergeTimelineRanges,
+  recordingUrl,
+} from './newUiUtils'
+import type { RecordingFilter, TimelineRange } from './newUiUtils'
+import './newCamStation.css'
+
+type NewPage = 'live' | 'recordings' | 'settings'
+
+type Navigate = (page: NewPage) => void
+
+type TimelineMotion = { ts_start: number; ts_end: number | null }
+
+const GRID_COLS = 12
+const RESIZE_HANDLE_SIZE = 14
+const RESIZE_EDGE_SIZE = 8
+
+function initialPageFromPath(): NewPage {
+  const path = window.location.pathname
+  if (path.startsWith('/new/recordings')) return 'recordings'
+  if (path.startsWith('/new/settings')) return 'settings'
+  return 'live'
+}
+
+function pageToPath(page: NewPage): string {
+  if (page === 'live') return '/new'
+  return `/new/${page}`
+}
+
+function ResizeHandle({ handleAxis = 'se', ...rest }: { handleAxis?: string }) {
+  const edge = RESIZE_EDGE_SIZE
+  const corner = RESIZE_HANDLE_SIZE
+  const base: CSSProperties = { position: 'absolute', zIndex: 10 }
+  const styleByAxis: Record<string, CSSProperties> = {
+    n: { ...base, top: 0, left: corner, right: corner, height: edge, cursor: 'ns-resize' },
+    s: { ...base, bottom: 0, left: corner, right: corner, height: edge, cursor: 'ns-resize' },
+    e: { ...base, right: 0, top: corner, bottom: corner, width: edge, cursor: 'ew-resize' },
+    w: { ...base, left: 0, top: corner, bottom: corner, width: edge, cursor: 'ew-resize' },
+    ne: { ...base, top: 0, right: 0, width: corner, height: corner, cursor: 'ne-resize' },
+    nw: { ...base, top: 0, left: 0, width: corner, height: corner, cursor: 'nw-resize' },
+    se: { ...base, bottom: 0, right: 0, width: corner, height: corner, cursor: 'se-resize' },
+    sw: { ...base, bottom: 0, left: 0, width: corner, height: corner, cursor: 'sw-resize' },
+  }
+  return <div {...rest} style={styleByAxis[handleAxis] ?? base} className={`new-resize-handle new-resize-handle-${handleAxis}`} />
+}
+
+function NewHeader({ page, onNavigate, children }: { page: NewPage; onNavigate: Navigate; children?: ReactNode }) {
+  const navigate = (next: NewPage) => {
+    onNavigate(next)
+    window.history.pushState(null, '', pageToPath(next))
+  }
+
+  return (
+    <header className="new-command">
+      <div className="new-brand" aria-label="CamStation 신규 UI">
+        <div className="new-brand-mark">CS</div>
+        <div>
+          <div className="new-brand-title">CamStation</div>
+          <div className="new-mini">HOME MONITOR</div>
+        </div>
+      </div>
+      <nav className="new-nav" aria-label="신규 UI 주요 화면">
+        <button className={page === 'live' ? 'new-active' : ''} onClick={() => navigate('live')}>라이브</button>
+        <button className={page === 'recordings' ? 'new-active' : ''} onClick={() => navigate('recordings')}>녹화</button>
+        <button className={page === 'settings' ? 'new-active' : ''} onClick={() => navigate('settings')}>설정</button>
+      </nav>
+      {children}
+    </header>
+  )
+}
+
+function NewCameraTile({
+  camera,
+  hasMotion,
+  selected,
+  onSelect,
+  onFocus,
+}: {
+  camera: Camera
+  hasMotion: boolean
+  selected: boolean
+  onSelect: () => void
+  onFocus: () => void
+}) {
+  const streamId = camera.has_sub ? `${camera.id}_sub` : camera.id
+  return (
+    <article className={`new-camera-tile ${selected ? 'new-selected' : ''} ${camera.online ? '' : 'new-offline'}`} onClick={onSelect}>
+      <WebRTCPlayer camId={streamId} style={{ background: '#05070a' }} />
+      <div className="new-tile-head cam-drag-handle">
+        <span className="new-state" />
+        <strong>{camera.name}</strong>
+        <span className="new-cam-id">{camera.id}</span>
+      </div>
+      <button className="new-focus-btn" type="button" onClick={(event) => { event.stopPropagation(); onFocus() }}>
+        집중 보기
+      </button>
+      {hasMotion && <span className="new-motion-tag">MOTION</span>}
+    </article>
+  )
+}
+
+function NewCameraGrid({
+  cameras,
+  layout,
+  motionCams,
+  selectedCamId,
+  onLayoutChange,
+  onSelectCamera,
+  onFocusCamera,
+}: {
+  cameras: Camera[]
+  layout: Layout[]
+  motionCams: Set<string>
+  selectedCamId: string
+  onLayoutChange: (layout: Layout[]) => void
+  onSelectCamera: (camera: Camera) => void
+  onFocusCamera: (camera: Camera) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => setContainerSize({ width: el.offsetWidth, height: el.offsetHeight })
+    measure()
+    const resizeObserver = new ResizeObserver(measure)
+    resizeObserver.observe(el)
+    return () => resizeObserver.disconnect()
+  }, [])
+
+  const maxRows = Math.max(8, ...layout.map(item => item.y + item.h))
+  const rowHeight = containerSize.height > 0 ? Math.max(18, Math.floor((containerSize.height - 12) / maxRows)) : 24
+
+  return (
+    <div ref={containerRef} className="new-grid-stage">
+      {containerSize.width > 0 && containerSize.height > 0 && (
+        <GridLayout
+          layout={layout}
+          cols={GRID_COLS}
+          rowHeight={rowHeight}
+          width={containerSize.width}
+          onLayoutChange={onLayoutChange}
+          draggableHandle=".cam-drag-handle"
+          resizeHandles={['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']}
+          resizeHandle={<ResizeHandle />}
+          margin={[6, 6]}
+          containerPadding={[0, 0]}
+        >
+          {cameras.map(camera => (
+            <div key={camera.id} className="new-grid-item">
+              <NewCameraTile
+                camera={camera}
+                hasMotion={motionCams.has(camera.id)}
+                selected={camera.id === selectedCamId}
+                onSelect={() => onSelectCamera(camera)}
+                onFocus={() => onFocusCamera(camera)}
+              />
+            </div>
+          ))}
+        </GridLayout>
+      )}
+    </div>
+  )
+}
+
+function pctInDay(ts: number, dayStart: number, dayEnd: number): number {
+  const value = ((ts - dayStart) / (dayEnd - dayStart)) * 100
+  return Math.min(100, Math.max(0, value))
+}
+
+function TimelineBar({
+  ranges,
+  motionEvents,
+  dayStart,
+  dayEnd,
+  cursorTs,
+  aggregate,
+  onSeek,
+}: {
+  ranges: TimelineRange[]
+  motionEvents: TimelineMotion[]
+  dayStart: number
+  dayEnd: number
+  cursorTs: number
+  aggregate?: boolean
+  onSeek?: (ts: number) => void
+}) {
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onSeek) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientX - rect.left) / rect.width
+    onSeek(dayStart + ratio * (dayEnd - dayStart))
+  }
+
+  return (
+    <div className={`new-daybar ${aggregate ? 'new-aggregate' : ''}`} onClick={handleClick}>
+      {ranges.map((range, index) => {
+        const left = pctInDay(range.ts_start, dayStart, dayEnd)
+        const right = pctInDay(range.ts_end, dayStart, dayEnd)
+        return <span key={`${range.ts_start}-${index}`} className="new-chunk" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.18)}%` }} />
+      })}
+      {motionEvents.map((event, index) => {
+        const eventEnd = event.ts_end || event.ts_start + 5
+        const left = pctInDay(event.ts_start, dayStart, dayEnd)
+        const right = pctInDay(eventEnd, dayStart, dayEnd)
+        return <span key={`motion-${event.ts_start}-${index}`} className="new-motion" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.24)}%` }} />
+      })}
+      <span className="new-cursor" style={{ left: `${pctInDay(cursorTs, dayStart, dayEnd)}%` }} />
+    </div>
+  )
+}
+
+function NewTwoRowTimeline({
+  cameras,
+  timelineData,
+  selectedCamId,
+  date,
+  collapsed = false,
+  onToggleCollapsed,
+  isLive = false,
+  onSeek,
+}: {
+  cameras: Camera[]
+  timelineData: Record<string, TimelineData>
+  selectedCamId: string
+  date: string
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
+  isLive?: boolean
+  onSeek?: (cameraId: string, ts: number) => void
+}) {
+  const [currentTime, setCurrentTime] = useState(new Date())
+
+  useEffect(() => {
+    if (!isLive) return
+    const id = window.setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => window.clearInterval(id)
+  }, [isLive])
+
+  const dayStart = new Date(`${date}T00:00:00`).getTime() / 1000
+  const dayEnd = dayStart + 86400
+  const cursorTs = currentTime.getTime() / 1000
+  const selectedCamera = cameras.find(camera => camera.id === selectedCamId) ?? cameras[0]
+  const selectedData = selectedCamera ? timelineData[selectedCamera.id] : undefined
+  const selectedRanges: TimelineRange[] = (selectedData?.segments ?? []).map(segment => ({
+    ts_start: segment.ts_start,
+    ts_end: segment.ts_end ?? cursorTs,
+  }))
+  const selectedMotion = selectedData?.motion_events ?? []
+  const aggregateRanges = mergeTimelineRanges(cameras.flatMap(camera => timelineData[camera.id]?.segments ?? []), cursorTs)
+  const aggregateMotion: TimelineMotion[] = cameras.flatMap(camera => timelineData[camera.id]?.motion_events ?? [])
+  const bodyId = `new-timeline-${date}-${selectedCamId || 'none'}`
+
+  return (
+    <footer className={`new-timeline ${collapsed ? 'new-collapsed' : ''}`} aria-label="선택 카메라와 전체 카메라 2줄 타임라인">
+      <div className="new-timeline-top">
+        <div className="new-clock">{format(currentTime, 'HH:mm:ss')}</div>
+        <div className="new-mini">{date} · 1줄 선택 카메라 · 2줄 전체 집계</div>
+        <div className="new-spacer" />
+        {isLive && <div className="new-live-pill"><span className="new-pulse" />LIVE</div>}
+        {onToggleCollapsed && (
+          <button className="new-ghost" type="button" onClick={onToggleCollapsed} aria-controls={bodyId} aria-expanded={!collapsed}>
+            {collapsed ? '타임라인 펼치기' : '타임라인 접기'}
+          </button>
+        )}
+      </div>
+      {!collapsed && (
+        <div className="new-timeline-body" id={bodyId}>
+          <div className="new-track">
+            <div className="new-track-name"><strong>{selectedCamera?.name ?? '카메라 없음'}</strong>선택 카메라</div>
+            <TimelineBar
+              ranges={selectedRanges}
+              motionEvents={selectedMotion}
+              dayStart={dayStart}
+              dayEnd={dayEnd}
+              cursorTs={cursorTs}
+              onSeek={selectedCamera && onSeek ? (ts) => onSeek(selectedCamera.id, ts) : undefined}
+            />
+          </div>
+          <div className="new-track">
+            <div className="new-track-name"><strong>전체 카메라</strong>녹화 있음</div>
+            <TimelineBar
+              ranges={aggregateRanges}
+              motionEvents={aggregateMotion}
+              dayStart={dayStart}
+              dayEnd={dayEnd}
+              cursorTs={cursorTs}
+              aggregate
+            />
+          </div>
+          <div className="new-ticks"><span />{['00', '04', '08', '12', '16', '20', '24'].map(tick => <span key={tick}>{tick}</span>)}</div>
+        </div>
+      )}
+    </footer>
+  )
+}
+
+function NewLivePage({ cameras, page, onNavigate }: { cameras: Camera[]; page: NewPage; onNavigate: Navigate }) {
+  const today = format(new Date(), 'yyyy-MM-dd')
+  const timelineData = useAllTimelines(cameras, today)
+  const {
+    layouts,
+    currentId,
+    gridLayout,
+    isDirty,
+    timelineCollapsed,
+    setGridLayout,
+    loadLayout,
+    saveLayout,
+    saveAsLayout,
+    toggleTimelineCollapsed,
+  } = useLayouts(cameras)
+  const [selectedCamId, setSelectedCamId] = useState('')
+  const [focusedCamera, setFocusedCamera] = useState<Camera | null>(null)
+  const [sidePanelHidden, setSidePanelHidden] = useState(false)
+  const [layoutSaved, setLayoutSaved] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [motionNow, setMotionNow] = useState(() => Date.now() / 1000)
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  useEffect(() => {
+    const id = window.setInterval(() => setMotionNow(Date.now() / 1000), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const motionCams = useMemo(() => new Set(
+    cameras
+      .map(camera => camera.id)
+      .filter(id => (timelineData[id]?.motion_events ?? []).some(event => motionNow - (event.ts_end ?? event.ts_start) < 30)),
+  ), [cameras, motionNow, timelineData])
+
+  const selectedCamera = cameras.find(camera => camera.id === selectedCamId) ?? cameras[0]
+  const onlineCount = cameras.filter(camera => camera.online).length
+
+  const flashSaved = () => {
+    setLayoutSaved(true)
+    window.setTimeout(() => setLayoutSaved(false), 1400)
+  }
+
+  const handleSave = async () => {
+    if (currentId) {
+      await saveLayout()
+      flashSaved()
+      return
+    }
+    const name = window.prompt('새 배치 이름', '신규 관제 배치')
+    if (!name) return
+    await saveAsLayout(name)
+    flashSaved()
+  }
+
+  const handleSaveAs = async () => {
+    const name = window.prompt('새 배치 이름', '신규 관제 배치')
+    if (!name) return
+    await saveAsLayout(name)
+    flashSaved()
+  }
+
+  const handleSeek = (cameraId: string, ts: number) => {
+    const segments = timelineData[cameraId]?.segments ?? []
+    const segment = [...segments].reverse().find(item => item.ts_start <= ts && (item.ts_end ?? ts) >= ts)
+    if (!segment) return
+    const segmentDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date(segment.ts_start * 1000))
+    window.open(recordingUrl(cameraId, segmentDate, segment.filename), '_blank')
+  }
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen()
+    } else {
+      document.exitFullscreen()
+    }
+  }
+
+  return (
+    <div className="new-app new-live-app">
+      <NewHeader page={page} onNavigate={onNavigate}>
+        <select className="new-select" value={currentId ?? ''} onChange={(event) => loadLayout(event.target.value, cameras)} aria-label="저장된 배치 선택">
+          {layouts.length === 0 && <option value="">저장된 배치 없음</option>}
+          {layouts.map(layout => <option key={layout.id} value={layout.id}>{layout.name}{layout.id === currentId && isDirty ? ' *' : ''}</option>)}
+        </select>
+        <button className="new-primary" type="button" onClick={handleSave}>{layoutSaved ? '저장됨' : '배치 저장'}</button>
+        <button className="new-ghost" type="button" onClick={handleSaveAs}>새 이름 저장</button>
+        <button className="new-ghost" type="button" onClick={() => setSidePanelHidden(value => !value)} aria-pressed={sidePanelHidden}>
+          {sidePanelHidden ? '우측 패널 보기' : '우측 패널 숨기기'}
+        </button>
+        <div className="new-spacer" />
+        <div className="new-live-pill"><span className="new-pulse" />LIVE</div>
+        <button className="new-ghost" type="button" onClick={toggleFullscreen}>{isFullscreen ? '전체화면 종료' : '전체화면'}</button>
+      </NewHeader>
+
+      <section className={`new-live-workspace ${sidePanelHidden ? 'new-panel-hidden' : ''}`}>
+        <main className="new-grid-wrap" aria-label="신규 라이브 카메라 그리드">
+          {gridLayout.length > 0 ? (
+            <NewCameraGrid
+              cameras={cameras}
+              layout={gridLayout}
+              motionCams={motionCams}
+              selectedCamId={selectedCamera?.id ?? ''}
+              onLayoutChange={setGridLayout}
+              onSelectCamera={(camera) => setSelectedCamId(camera.id)}
+              onFocusCamera={(camera) => { setSelectedCamId(camera.id); setFocusedCamera(camera) }}
+            />
+          ) : (
+            <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
+          )}
+        </main>
+        {!sidePanelHidden && (
+          <aside className="new-side-panel" aria-label="운영 패널">
+            <section className="new-panel-card">
+              <div className="new-section-title">
+                <span>저장된 배치 <em>{layouts.length} profiles</em></span>
+                <button className="new-icon-button" type="button" onClick={() => setSidePanelHidden(true)} aria-label="우측 패널 숨기기">−</button>
+              </div>
+              <div className="new-layout-list">
+                {layouts.map(layout => (
+                  <button
+                    key={layout.id}
+                    type="button"
+                    className={`new-layout-row ${layout.id === currentId ? 'new-active-row' : ''}`}
+                    onClick={() => loadLayout(layout.id, cameras)}
+                  >
+                    <span>{layout.name}</span>
+                    <em>{layout.id === currentId && isDirty ? '편집됨' : format(new Date(layout.updated_at * 1000), 'HH:mm')}</em>
+                  </button>
+                ))}
+                {layouts.length === 0 && <div className="new-muted">저장된 배치가 없습니다. 현재 화면을 새 이름으로 저장할 수 있습니다.</div>}
+              </div>
+            </section>
+            <section className="new-panel-card">
+              <div className="new-section-title">카메라 상태 <em>{onlineCount} / {cameras.length} online</em></div>
+              <div className="new-camera-list">
+                {cameras.map(camera => (
+                  <button key={camera.id} className={`new-camera-row ${camera.id === selectedCamera?.id ? 'new-active-row' : ''}`} type="button" onClick={() => setSelectedCamId(camera.id)}>
+                    <span className={`new-state ${camera.online ? '' : 'new-danger'}`} />
+                    <span>{camera.name}</span>
+                    <em>{motionCams.has(camera.id) ? 'motion' : camera.online ? 'live' : 'offline'}</em>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </aside>
+        )}
+      </section>
+
+      <NewTwoRowTimeline
+        cameras={cameras}
+        timelineData={timelineData}
+        selectedCamId={selectedCamera?.id ?? ''}
+        date={today}
+        collapsed={timelineCollapsed}
+        onToggleCollapsed={toggleTimelineCollapsed}
+        isLive
+        onSeek={handleSeek}
+      />
+
+      {focusedCamera && (
+        <div className="new-modal" role="dialog" aria-modal="true" aria-label={`${focusedCamera.name} 집중 보기`}>
+          <div className="new-focus-view">
+            <div className="new-focus-bar">
+              <strong>{focusedCamera.name}</strong>
+              <button className="new-ghost" type="button" onClick={() => setFocusedCamera(null)}>닫기</button>
+            </div>
+            <WebRTCPlayer camId={focusedCamera.has_sub ? `${focusedCamera.id}_sub` : focusedCamera.id} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NewRecordingsPage({ cameras, page, onNavigate }: { cameras: Camera[]; page: NewPage; onNavigate: Navigate }) {
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [selectedCamId, setSelectedCamId] = useState('')
+  const [filter, setFilter] = useState<RecordingFilter>('all')
+  const [segments, setSegments] = useState<RecordingSegment[]>([])
+  const [selectedFilename, setSelectedFilename] = useState('')
+  const [downloadReady, setDownloadReady] = useState(false)
+  const timelineData = useAllTimelines(cameras, selectedDate)
+  const activeCamId = selectedCamId || cameras[0]?.id || ''
+
+  useEffect(() => {
+    if (!activeCamId) return
+    listRecordings(activeCamId, selectedDate)
+      .then(data => {
+        setSegments(data)
+        setSelectedFilename('')
+      })
+      .catch(() => setSegments([]))
+  }, [activeCamId, selectedDate])
+
+  const selectedCamera = cameras.find(camera => camera.id === activeCamId) ?? cameras[0]
+  const selectedMotionEvents = useMemo(
+    () => (activeCamId ? timelineData[activeCamId]?.motion_events ?? [] : []),
+    [activeCamId, timelineData],
+  )
+  const visibleSegments = useMemo(
+    () => filterRecordingSegments(segments, selectedMotionEvents, filter),
+    [segments, selectedMotionEvents, filter],
+  )
+
+  const activeFilename = visibleSegments.some(segment => segment.filename === selectedFilename)
+    ? selectedFilename
+    : visibleSegments[0]?.filename ?? ''
+  const selectedSegment = visibleSegments.find(segment => segment.filename === activeFilename) ?? null
+  const selectedUrl = selectedSegment && selectedCamera ? recordingUrl(selectedCamera.id, selectedDate, selectedSegment.filename) : ''
+  const handleDownloadFeedback = () => {
+    setDownloadReady(true)
+    window.setTimeout(() => setDownloadReady(false), 1400)
+  }
+
+  const handleSeek = (cameraId: string, ts: number) => {
+    if (cameraId !== selectedCamera?.id) setSelectedCamId(cameraId)
+    const segment = [...segments].reverse().find(item => item.ts_start <= ts && (item.ts_end ?? ts) >= ts)
+    if (segment) setSelectedFilename(segment.filename)
+  }
+
+  return (
+    <div className="new-app new-recordings-app">
+      <NewHeader page={page} onNavigate={onNavigate}>
+        <input className="new-control" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} aria-label="녹화 날짜" />
+        <select className="new-select" value={activeCamId} onChange={(event) => setSelectedCamId(event.target.value)} aria-label="카메라 선택">
+          {cameras.map(camera => <option key={camera.id} value={camera.id}>{camera.name}</option>)}
+        </select>
+        {selectedUrl ? (
+          <a className="new-primary new-download-link" href={selectedUrl} download onClick={handleDownloadFeedback}>{downloadReady ? '다운로드 준비됨' : '선택 파일 다운로드'}</a>
+        ) : (
+          <span className="new-primary new-disabled">선택 파일 다운로드</span>
+        )}
+      </NewHeader>
+
+      <main className="new-recordings-workspace">
+        <aside className="new-recording-sidebar">
+          <section className="new-panel-card">
+            <label className="new-label">빠른 필터
+              <select value={filter} onChange={(event) => setFilter(event.target.value as RecordingFilter)}>
+                <option value="all">전체 녹화</option>
+                <option value="motion">모션 발생 구간만</option>
+                <option value="offline">오프라인 전후</option>
+              </select>
+            </label>
+            <div className="new-filter-pills" aria-label="빠른 필터 버튼">
+              {(['all', 'motion', 'offline'] as RecordingFilter[]).map(item => (
+                <button key={item} className={filter === item ? 'new-active' : ''} type="button" onClick={() => setFilter(item)}>
+                  {item === 'all' ? '전체' : item === 'motion' ? '모션' : '오프라인 전후'}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="new-segment-list" aria-label="녹화 세그먼트 목록">
+            {visibleSegments.map(segment => {
+              const duration = segment.ts_end ? segment.ts_end - segment.ts_start : 0
+              return (
+                <button
+                  key={segment.filename}
+                  type="button"
+                  className={`new-segment ${segment.filename === activeFilename ? 'new-active-row' : ''}`}
+                  onClick={() => setSelectedFilename(segment.filename)}
+                >
+                  <span className="new-seg-top"><strong>{formatClock(segment.ts_start)}{segment.ts_end ? ` - ${formatClock(segment.ts_end)}` : ''}</strong><em>{formatStorageSize(segment.file_size)}</em></span>
+                  <span className="new-seg-meta"><span>{duration > 0 ? formatDuration(duration) : '진행 중'}</span><span>{segment.filename}</span></span>
+                </button>
+              )
+            })}
+            {visibleSegments.length === 0 && <div className="new-empty">조건에 맞는 녹화 세그먼트가 없습니다.</div>}
+          </section>
+        </aside>
+
+        <section className="new-recording-content">
+          <div className="new-player" aria-label="녹화 재생기">
+            {selectedUrl ? (
+              <video controls autoPlay src={selectedUrl} />
+            ) : (
+              <div className="new-player-placeholder">녹화 파일을 선택하세요.</div>
+            )}
+            <div className="new-player-meta">
+              <strong>{selectedCamera?.name ?? '카메라 없음'}</strong>
+              <span>{selectedSegment ? `${formatClock(selectedSegment.ts_start)} · ${selectedSegment.filename}` : '선택된 세그먼트 없음'}</span>
+            </div>
+          </div>
+          <section className="new-timeline-card">
+            <div className="new-card-head">
+              <h1>{selectedCamera?.name ?? '카메라'} · {selectedDate}</h1>
+              <span>선택 카메라 + 전체 중첩 타임라인</span>
+            </div>
+            <NewTwoRowTimeline
+              cameras={cameras}
+              timelineData={timelineData}
+              selectedCamId={selectedCamera?.id ?? ''}
+              date={selectedDate}
+              onSeek={handleSeek}
+            />
+          </section>
+        </section>
+      </main>
+    </div>
+  )
+}
+
+function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navigate }) {
+  const [form, setForm] = useState<Settings>({
+    retention_days: 30,
+    segment_minutes: 10,
+    motion_threshold: 0.02,
+    max_storage_gb: 0,
+    motion_enabled: true,
+  })
+  const [saved, setSaved] = useState(false)
+  const [stats, setStats] = useState<StorageStats | null>(null)
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [version, setVersion] = useState<SystemVersion | null>(null)
+  const [viewerVersion, setViewerVersion] = useState<string | null>(null)
+  const [updateLoading, setUpdateLoading] = useState(false)
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null)
+
+  const loadVersion = useCallback(() => {
+    getSystemVersion().then(setVersion).catch(console.error)
+  }, [])
+
+  useEffect(() => {
+    getSettings().then(setForm).catch(console.error)
+    getStorageStats().then(setStats).catch(console.error).finally(() => setStatsLoading(false))
+    getViewerVersion().then(data => setViewerVersion(data.version)).catch(() => {})
+    loadVersion()
+  }, [loadVersion])
+
+  const saveSettings = async () => {
+    await updateSettings(form)
+    setSaved(true)
+    window.setTimeout(() => setSaved(false), 1600)
+  }
+
+  const runUpdate = async () => {
+    setUpdateLoading(true)
+    setUpdateMessage(null)
+    const startingVersion = version?.current_version
+    try {
+      const result = await triggerUpdate()
+      if (result.status === 'already_running') {
+        setUpdateMessage('이미 업데이트 진행 중입니다.')
+        setUpdateLoading(false)
+        return
+      }
+      setUpdateMessage('업데이트 중... 완료되면 자동으로 새로고침됩니다.')
+      const deadline = Date.now() + 3 * 60 * 1000
+      const poll = async () => {
+        if (Date.now() > deadline) {
+          setUpdateMessage('업데이트 시간 초과. 페이지를 수동으로 새로고침하세요.')
+          setUpdateLoading(false)
+          return
+        }
+        try {
+          const nextVersion = await getSystemVersion()
+          if (nextVersion.current_version !== startingVersion) {
+            window.location.reload()
+            return
+          }
+        } catch {
+          // 백엔드 재시작 중일 수 있어 계속 폴링합니다.
+        }
+        window.setTimeout(poll, 3000)
+      }
+      window.setTimeout(poll, 5000)
+    } catch {
+      setUpdateMessage('업데이트 요청 실패.')
+      setUpdateLoading(false)
+    }
+  }
+
+  const setNumber = (key: 'retention_days' | 'segment_minutes' | 'motion_threshold' | 'max_storage_gb', value: string) => {
+    setForm(previous => ({ ...previous, [key]: Number(value) }))
+  }
+
+  const diskPct = stats && stats.disk_total_gb > 0 ? (stats.disk_used_gb / stats.disk_total_gb) * 100 : 0
+  const estimatedDays = stats && stats.hourly_gb_total > 0 && form.max_storage_gb > 0
+    ? Math.floor(form.max_storage_gb / (stats.hourly_gb_total * 24))
+    : form.retention_days
+
+  return (
+    <div className="new-app new-settings-app">
+      <NewHeader page={page} onNavigate={onNavigate}>
+        <button className="new-primary new-settings-save" type="button" onClick={saveSettings}>{saved ? '저장됨' : '설정 저장'}</button>
+      </NewHeader>
+
+      <main className="new-settings-content">
+        <section className="new-settings-main">
+          <article className="new-card new-storage-card">
+            <h1>저장소 현황</h1>
+            {statsLoading ? (
+              <div className="new-muted">저장소 통계를 불러오는 중입니다.</div>
+            ) : stats ? (
+              <>
+                <div className="new-storage-bar"><span style={{ width: `${Math.min(100, diskPct)}%` }} /></div>
+                <div className="new-stats-grid">
+                  <div className="new-stat"><strong>{stats.recordings_gb.toFixed(1)}GB</strong><span>녹화 데이터</span></div>
+                  <div className="new-stat"><strong>{diskPct.toFixed(0)}%</strong><span>디스크 사용량</span></div>
+                  <div className="new-stat"><strong>{estimatedDays}일</strong><span>예상 보관 가능</span></div>
+                </div>
+              </>
+            ) : (
+              <div className="new-muted new-warn">저장소 통계를 불러올 수 없습니다.</div>
+            )}
+          </article>
+
+          <article className="new-card">
+            <h2>녹화 정책</h2>
+            <div className="new-form-grid">
+              <label className="new-label">보존 기간
+                <input type="number" value={form.retention_days} onChange={(event) => setNumber('retention_days', event.target.value)} />
+              </label>
+              <label className="new-label">세그먼트 길이
+                <input type="number" value={form.segment_minutes} onChange={(event) => setNumber('segment_minutes', event.target.value)} />
+              </label>
+              <label className="new-label">모션 감도 임계값
+                <input type="number" step="0.01" value={form.motion_threshold} onChange={(event) => setNumber('motion_threshold', event.target.value)} />
+              </label>
+              <label className="new-label">자동 삭제 한도 GB
+                <input type="number" value={form.max_storage_gb} onChange={(event) => setNumber('max_storage_gb', event.target.value)} />
+              </label>
+            </div>
+          </article>
+
+          <article className="new-card">
+            <h2>카메라별 저장량</h2>
+            <div className="new-table-wrap">
+              <table>
+                <thead><tr><th>카메라</th><th>총 용량</th><th>시간당</th><th>보관일</th><th>가장 오래된 날짜</th></tr></thead>
+                <tbody>
+                  {(stats?.cameras ?? []).sort((a, b) => b.total_gb - a.total_gb).map(camera => (
+                    <tr key={camera.camera_id}>
+                      <td>{camera.camera_id}</td>
+                      <td>{camera.total_gb.toFixed(1)} GB</td>
+                      <td>{camera.hourly_gb >= 1 ? `${camera.hourly_gb.toFixed(2)} GB/h` : `${(camera.hourly_gb * 1024).toFixed(0)} MB/h`}</td>
+                      <td>{camera.days_recorded}일</td>
+                      <td>{camera.oldest_date ?? '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <aside className="new-settings-side">
+          <article className="new-card">
+            <h2>감지 설정</h2>
+            <label className="new-toggle">
+              <span><strong>모션 감지 활성화</strong><em>타임라인의 주황 이벤트와 녹화 필터에 사용됩니다.</em></span>
+              <input type="checkbox" checked={form.motion_enabled} onChange={(event) => setForm(previous => ({ ...previous, motion_enabled: event.target.checked }))} />
+            </label>
+          </article>
+          <article className="new-card">
+            <h2>시스템 업데이트</h2>
+            <div className="new-version-row"><span>현재 버전</span><strong>{version?.current_version ?? '확인 중'}</strong></div>
+            <div className="new-version-row"><span>최신 버전</span><strong className={version?.update_available ? 'new-warn' : 'new-ok'}>{version?.latest_version ?? '확인 불가'}</strong></div>
+            <button className="new-ghost" type="button" disabled={updateLoading || !version?.update_available} onClick={runUpdate}>
+              {updateLoading ? '업데이트 중...' : version?.update_available ? '지금 업데이트' : '최신 상태'}
+            </button>
+            {updateMessage && <p className="new-muted">{updateMessage}</p>}
+          </article>
+          <article className="new-card">
+            <h2>Viewer App</h2>
+            <div className="new-version-row"><span>Windows 빌드</span><strong>{viewerVersion ?? '배포 없음'}</strong></div>
+            <a className={`new-primary ${viewerVersion ? '' : 'new-disabled'}`} href="/api/settings/viewer-app" download="CamViewer.exe">CamViewer.exe 다운로드</a>
+          </article>
+        </aside>
+      </main>
+    </div>
+  )
+}
+
+export function NewCamStation() {
+  const [page, setPage] = useState<NewPage>(initialPageFromPath)
+  const cameras = useCameras()
+
+  useEffect(() => {
+    const onPopState = () => setPage(initialPageFromPath())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  if (page === 'recordings') return <NewRecordingsPage cameras={cameras} page={page} onNavigate={setPage} />
+  if (page === 'settings') return <NewSettingsPage page={page} onNavigate={setPage} />
+  return <NewLivePage cameras={cameras} page={page} onNavigate={setPage} />
+}
