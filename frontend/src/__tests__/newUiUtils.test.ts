@@ -153,6 +153,23 @@ describe('신규 라이브 그리드 영역 제한', () => {
     expect(getBoundedLayoutOrFallback([], lastValid, 12, 12)).toEqual(lastValid)
   })
 
+  it('그리드가 전체 카메라를 1칸짜리 세로줄로 축소 보고하면 기존 배치를 유지한다', () => {
+    const lastValid = [
+      { i: 'yard', x: 0, y: 0, w: 8, h: 7, minH: 2 },
+      { i: 'fire', x: 8, y: 0, w: 4, h: 7, minH: 2 },
+      { i: 'goat', x: 0, y: 7, w: 6, h: 5, minH: 2 },
+      { i: 'shed', x: 6, y: 7, w: 6, h: 5, minH: 2 },
+    ]
+    const collapsed = [
+      { i: 'yard', x: 0, y: 0, w: 1, h: 1 },
+      { i: 'fire', x: 0, y: 1, w: 1, h: 1 },
+      { i: 'goat', x: 0, y: 2, w: 1, h: 1 },
+      { i: 'shed', x: 0, y: 3, w: 1, h: 1 },
+    ]
+
+    expect(getBoundedLayoutOrFallback(collapsed, lastValid, 12, 12)).toEqual(lastValid)
+  })
+
   it('기존 동적 행 높이로 저장된 큰 배치는 비율을 유지한 채 라이브뷰 12행 안으로 축소한다', () => {
     const legacyLayout = [
       { i: 'yard', x: 0, y: 0, w: 6, h: 28, minH: 2 },

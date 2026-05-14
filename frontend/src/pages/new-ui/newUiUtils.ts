@@ -33,6 +33,29 @@ function layoutBottom(layout: GridBoundsItem[]): number {
   return Math.max(0, ...layout.map(item => item.y + item.h))
 }
 
+function layoutArea(layout: GridBoundsItem[]): number {
+  return layout.reduce((sum, item) => sum + Math.max(0, item.w) * Math.max(0, item.h), 0)
+}
+
+function hasSameLayoutItems(a: GridBoundsItem[], b: GridBoundsItem[]): boolean {
+  if (a.length !== b.length) return false
+  const bIds = new Set(b.map(item => item.i))
+  return a.every(item => bIds.has(item.i))
+}
+
+function isImplausiblyCollapsedLayout(nextLayout: GridBoundsItem[], fallbackLayout: GridBoundsItem[]): boolean {
+  if (nextLayout.length === 0 || fallbackLayout.length === 0) return false
+  if (!hasSameLayoutItems(nextLayout, fallbackLayout)) return false
+
+  const fallbackArea = layoutArea(fallbackLayout)
+  if (fallbackArea <= 0) return false
+
+  // react-grid-layout can transiently report auto-generated 1x1-ish layouts while
+  // the Electron window/ResizeObserver is settling. Treat a sudden whole-grid area
+  // collapse as invalid; normal user resizing one tile should not cross this ratio.
+  return layoutArea(nextLayout) / fallbackArea < 0.35
+}
+
 export function calculateGridRowsPixelHeight(rows: number, rowHeight: number, marginY: number): number {
   if (rows <= 0) return 0
   return rows * rowHeight + (rows - 1) * marginY
@@ -78,6 +101,9 @@ export function getBoundedLayoutOrFallback<T extends GridBoundsItem>(
   cols: number,
 ): T[] {
   if (nextLayout.length === 0 && fallbackLayout.length > 0) {
+    return clampLayoutToGridBounds(fallbackLayout, maxRows, cols)
+  }
+  if (isImplausiblyCollapsedLayout(nextLayout, fallbackLayout)) {
     return clampLayoutToGridBounds(fallbackLayout, maxRows, cols)
   }
   if (layoutFitsWithinGridRows(nextLayout, maxRows, cols)) {
