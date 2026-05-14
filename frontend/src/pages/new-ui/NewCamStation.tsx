@@ -202,6 +202,37 @@ function NewCameraGrid({
     onLayoutChange(boundedNextLayout)
   }, [onLayoutChange, readOnly])
 
+  if (readOnly) {
+    const cameraById = new Map(cameras.map(camera => [camera.id, camera]))
+    return (
+      <div className="new-grid-stage new-viewer-static-grid">
+        {boundedLayout.map(item => {
+          const camera = cameraById.get(item.i)
+          if (!camera) return null
+          const style: CSSProperties = {
+            position: 'absolute',
+            left: `${(item.x / GRID_COLS) * 100}%`,
+            top: `${(item.y / LIVE_GRID_MAX_ROWS) * 100}%`,
+            width: `${(item.w / GRID_COLS) * 100}%`,
+            height: `${(item.h / LIVE_GRID_MAX_ROWS) * 100}%`,
+            padding: 2,
+          }
+          return (
+            <div key={camera.id} className="new-grid-item" style={style}>
+              <NewCameraTile
+                camera={camera}
+                hasMotion={motionCams.has(camera.id)}
+                selected={camera.id === selectedCamId}
+                onSelect={() => onSelectCamera(camera)}
+                onFocus={() => onFocusCamera(camera)}
+              />
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   return (
     <div ref={containerRef} className="new-grid-stage">
       {containerSize.width > 0 && containerSize.height > 0 && (
