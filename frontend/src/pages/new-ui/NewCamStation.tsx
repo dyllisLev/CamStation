@@ -158,6 +158,7 @@ function NewCameraGrid({
   onLayoutChange,
   onSelectCamera,
   onFocusCamera,
+  readOnly = false,
 }: {
   cameras: Camera[]
   layout: Layout[]
@@ -166,6 +167,7 @@ function NewCameraGrid({
   onLayoutChange: (layout: Layout[]) => void
   onSelectCamera: (camera: Camera) => void
   onFocusCamera: (camera: Camera) => void
+  readOnly?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -194,10 +196,11 @@ function NewCameraGrid({
     : 1
 
   const handleBoundedLayoutChange = useCallback((nextLayout: Layout[]) => {
+    if (readOnly) return
     const boundedNextLayout = getBoundedLayoutOrFallback(nextLayout, lastAcceptedLayoutRef.current, LIVE_GRID_MAX_ROWS, GRID_COLS)
     lastAcceptedLayoutRef.current = boundedNextLayout
     onLayoutChange(boundedNextLayout)
-  }, [onLayoutChange])
+  }, [onLayoutChange, readOnly])
 
   return (
     <div ref={containerRef} className="new-grid-stage">
@@ -215,6 +218,8 @@ function NewCameraGrid({
           containerPadding={[0, 0]}
           maxRows={LIVE_GRID_MAX_ROWS}
           isBounded
+          isDraggable={!readOnly}
+          isResizable={!readOnly}
           autoSize={false}
           style={{ height: '100%' }}
         >
@@ -506,6 +511,7 @@ function NewLivePage({
               onLayoutChange={setGridLayout}
               onSelectCamera={(camera) => setSelectedCamId(camera.id)}
               onFocusCamera={(camera) => { setSelectedCamId(camera.id); setFocusedCamera(camera) }}
+              readOnly={viewerMode}
             />
           ) : (
             <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
