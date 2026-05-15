@@ -318,14 +318,16 @@ async def run_recording_health_loop(
     *,
     get_active_cam_ids,
     get_segment_minutes,
+    get_camera_ids=None,
     interval_sec: int = 300,
     alert_sender=None,
 ) -> None:
     while True:
         try:
             segment_minutes = int(await get_segment_minutes())
+            current_cam_ids = list(get_camera_ids()) if get_camera_ids is not None else cam_ids
             report = await check_recording_health(
-                cam_ids,
+                current_cam_ids,
                 recordings_dir,
                 temp_dir,
                 db_path,

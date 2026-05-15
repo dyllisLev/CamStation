@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
             get_db_path(),
             get_active_cam_ids=recorder.get_active,
             get_segment_minutes=lambda: get_setting("segment_minutes"),
+            get_camera_ids=cameras.get_enabled_camera_ids,
             interval_sec=RECORDING_HEALTH_CHECK_INTERVAL_SEC,
             alert_sender=alert_sender,
         )
