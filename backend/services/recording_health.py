@@ -314,6 +314,7 @@ async def run_recording_health_loop(
     get_active_cam_ids,
     get_segment_minutes,
     interval_sec: int = 300,
+    alert_sender=None,
 ) -> None:
     while True:
         try:
@@ -327,6 +328,8 @@ async def run_recording_health_loop(
                 active_cam_ids=list(get_active_cam_ids()),
             )
             log_recording_health_report(report)
+            if alert_sender is not None and not report.ok:
+                await alert_sender.send_recording_health_report(report)
         except asyncio.CancelledError:
             raise
         except Exception as e:

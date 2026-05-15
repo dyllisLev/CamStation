@@ -8,7 +8,17 @@ from services import recorder
 from services.cleaner import run_cleanup_loop
 from services.motion import monitor_motion, set_motion_enabled
 from services.recording_health import run_recording_health_loop
-from config import GO2RTC_URL, RECORDINGS_DIR, TEMP_DIR, RECORDING_HEALTH_CHECK_INTERVAL_SEC, get_db_path
+from services.webhook_alerts import WebhookAlertSender
+from config import (
+    GO2RTC_URL,
+    RECORDINGS_DIR,
+    TEMP_DIR,
+    RECORDING_HEALTH_CHECK_INTERVAL_SEC,
+    HERMES_WEBHOOK_URL,
+    HERMES_WEBHOOK_SECRET,
+    ALERT_COOLDOWN_SEC,
+    get_db_path,
+)
 from routers import system, cameras, streams, timeline, recordings as recordings_router, settings, status, layouts
 
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +59,11 @@ async def lifespan(app: FastAPI):
     sub_task = asyncio.create_task(_start_sub_keepalives(sub_cam_ids))
 
     cleanup_task = asyncio.create_task(run_cleanup_loop(RECORDINGS_DIR, get_setting))
+    alert_sender = WebhookAlertSender(
+        url=HERMES_WEBHOOK_URL,
+        secret=HERMES_WEBHOOK_SECRET,
+        cooldown_sec=ALERT_COOLDOWN_SEC,
+    )
     health_task = asyncio.create_task(
         run_recording_health_loop(
             cam_ids,
@@ -58,6 +73,7 @@ async def lifespan(app: FastAPI):
             get_active_cam_ids=recorder.get_active,
             get_segment_minutes=lambda: get_setting("segment_minutes"),
             interval_sec=RECORDING_HEALTH_CHECK_INTERVAL_SEC,
+            alert_sender=alert_sender,
         )
     )
     motion_tasks = [

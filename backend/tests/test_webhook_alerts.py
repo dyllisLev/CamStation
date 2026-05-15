@@ -1,0 +1,113 @@
+import hmac
+import hashlib
+import json
+
+import pytest
+
+pytestmark = pytest.mark.anyio
+
+
+async def test_webhook_alert_sender_posts_hmac_signed_payload():
+    from services.recording_health import RecordingHealthIssue, RecordingHealthReport
+    from services.webhook_alerts import WebhookAlertSender
+
+    calls = []
+
+    async def fake_post(url, *, content, headers, timeout):
+        calls.append((url, content, headers, timeout))
+        class Resp:
+            status_code = 202
+            text = "accepted"
+            def raise_for_status(self):
+                return None
+        return Resp()
+
+    sender = WebhookAlertSender(
+        url="http://hermes:8644/webhooks/camstation-alert",
+        secret="secret",
+        post_func=fake_post,
+        cooldown_sec=300,
+    )
+    report = RecordingHealthReport(
+        ok=False,
+        checked_at=1778800000,
+        camera_count=1,
+        active_count=1,
+        issues=[RecordingHealthIssue(
+            code="segment_not_moved",
+            severity="ERROR",
+            camera_id="cam1",
+            message="stale temp",
+            path="/tmp/a.mp4",
+            filename="a.mp4",
+            age_sec=7200,
+            file_size=123,
+        )],
+    )
+
+    delivered = await sender.send_recording_health_report(report)
+
+    assert delivered is True
+    assert len(calls) == 1
+    url, content, headers, timeout = calls[0]
+    assert url == "http://hermes:8644/webhooks/camstation-alert"
+    assert timeout == 5
+    assert headers["Content-Type"] == "application/json"
+    expected_sig = hmac.new(b"secret", content, hashlib.sha256).hexdigest()
+    assert headers["X-Webhook-Signature"] == expected_sig
+    payload = json.loads(content.decode())
+    assert payload["service"] == "camstation-backend"
+    assert payload["event"] == "recording_health_failed"
+    assert payload["severity"] == "ERROR"
+    assert payload["issues"][0]["code"] == "segment_not_moved"
+
+
+async def test_webhook_alert_sender_deduplicates_within_cooldown():
+    from services.recording_health import RecordingHealthIssue, RecordingHealthReport
+    from services.webhook_alerts import WebhookAlertSender
+
+    calls = []
+
+    async def fake_post(url, *, content, headers, timeout):
+        calls.append(content)
+        class Resp:
+            status_code = 202
+            text = "accepted"
+            def raise_for_status(self):
+                return None
+        return Resp()
+
+    now = [1000.0]
+    sender = WebhookAlertSender(
+        url="http://hermes:8644/webhooks/camstation-alert",
+        secret="secret",
+        post_func=fake_post,
+        cooldown_sec=300,
+        time_func=lambda: now[0],
+    )
+    report = RecordingHealthReport(
+        ok=False,
+        checked_at=1000,
+        camera_count=1,
+        active_count=1,
+        issues=[RecordingHealthIssue("db_open_segment_stale", "ERROR", "cam1", "stale")],
+    )
+
+    assert await sender.send_recording_health_report(report) is True
+    assert await sender.send_recording_health_report(report) is False
+    now[0] = 1301.0
+    assert await sender.send_recording_health_report(report) is True
+    assert len(calls) == 2
+
+
+async def test_webhook_alert_sender_noops_without_url_or_error():
+    from services.recording_health import RecordingHealthReport
+    from services.webhook_alerts import WebhookAlertSender
+
+    sender = WebhookAlertSender(url="", secret="secret")
+    report = RecordingHealthReport(ok=False, checked_at=1, camera_count=0, active_count=0, issues=[])
+    assert await sender.send_recording_health_report(report) is False
+
+    sender = WebhookAlertSender(url="http://x", secret="secret")
+    ok_report = RecordingHealthReport(ok=True, checked_at=1, camera_count=0, active_count=0, issues=[])
+    assert await sender.send_recording_health_report(ok_report) is False
