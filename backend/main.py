@@ -35,20 +35,37 @@ async def _start_sub_keepalives(sub_cam_ids: list[str]):
     logger.info("Sub-stream keepalive tasks started for %d cameras", len(sub_cam_ids))
 
 
+def _startup_camera_lists(all_stream_keys: list[str], enabled_ids: list[str]) -> tuple[list[str], list[str]]:
+    """Return startup recorder/keepalive camera lists using config-enabled cameras only.
+
+    go2rtc can briefly expose stale streams during service/config transitions.  The
+    CamStation backend must treat go2rtc.yaml enabled state as authoritative so a
+    disabled camera never restarts recording or participates in health alerts.
+    """
+    stream_keys = set(all_stream_keys)
+    main_streams = {k for k in stream_keys if not k.endswith("_sub")}
+    if main_streams:
+        cam_ids = [cam_id for cam_id in enabled_ids if cam_id in main_streams]
+    else:
+        cam_ids = list(enabled_ids)
+    sub_cam_ids = [cam_id for cam_id in cam_ids if f"{cam_id}_sub" in stream_keys]
+    return cam_ids, sub_cam_ids
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    cam_ids = []
-    sub_cam_ids = []
+    enabled_ids = cameras.get_enabled_camera_ids()
+    all_keys = []
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(f"{GO2RTC_URL}/api/streams", timeout=5)
             r.raise_for_status()
             all_keys = list(r.json().keys())
-            cam_ids = [k for k in all_keys if not k.endswith('_sub')]
-            sub_cam_ids = [k[:-4] for k in all_keys if k.endswith('_sub')]
     except Exception as e:
         logger.warning("Could not fetch cameras on startup: %s", e)
+    cam_ids, sub_cam_ids = _startup_camera_lists(all_keys, enabled_ids)
+    logger.info("Startup enabled cameras=%d go2rtc_streams=%d", len(cam_ids), len(all_keys))
 
     segment_min = int(await get_setting("segment_minutes") or "10")
     motion_threshold = float(await get_setting("motion_threshold") or "0.02")
