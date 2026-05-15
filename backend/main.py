@@ -19,7 +19,7 @@ from config import (
     ALERT_COOLDOWN_SEC,
     get_db_path,
 )
-from routers import system, cameras, streams, timeline, recordings as recordings_router, settings, status, layouts
+from routers import system, cameras, streams, timeline, recordings as recordings_router, settings, status, layouts, viewers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,5 +93,5 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 for r in [cameras.router, streams.router, timeline.router,
-          recordings_router.router, settings.router, status.router, layouts.router, system.router]:
+          recordings_router.router, settings.router, status.router, layouts.router, viewers.router, system.router]:
     app.include_router(r)

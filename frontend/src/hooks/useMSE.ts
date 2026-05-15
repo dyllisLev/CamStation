@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { markViewerCameraEvent } from '../viewerHealth';
 
 // Codecs go2rtc supports, in priority order
 const CODECS = [
@@ -49,6 +50,10 @@ export function useMSE(camId: string) {
     let activeSrcUrl = '';
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectCount = 0;
+    let lastVideoTime = video.currentTime || 0;
+    let lastVideoTimeAt = Date.now();
+    let videoProgressTimer: ReturnType<typeof setInterval> | null = null;
 
     function clearStallTimer() {
       if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
@@ -79,6 +84,8 @@ export function useMSE(camId: string) {
     }
 
     function scheduleReconnect() {
+      reconnectCount += 1;
+      markViewerCameraEvent(camId, { connected: false, reconnectCount });
       if (!destroyed) reconnectTimer = setTimeout(connect, 3000);
     }
 
@@ -126,6 +133,7 @@ export function useMSE(camId: string) {
 
         ws.onopen = () => {
           if (myGen !== gen) return;
+          markViewerCameraEvent(camId, { connected: true, videoReadyState: video.readyState, reconnectCount, error: null });
           ws.send(JSON.stringify({ type: 'mse', value: buildCodecList(MSClass) }));
         };
 
@@ -163,6 +171,15 @@ export function useMSE(camId: string) {
             stallTimer = setTimeout(() => { if (!destroyed) ws.close(); }, STALL_MS);
 
             const b = new Uint8Array(e.data as ArrayBuffer);
+            markViewerCameraEvent(camId, {
+              connected: true,
+              videoReadyState: video.readyState,
+              binaryBytes: b.byteLength,
+              videoTime: video.currentTime,
+              stalledMs: 0,
+              reconnectCount,
+              error: null,
+            });
             if (sb && !sb.updating && bufLen === 0) {
               try { sb.appendBuffer(e.data as ArrayBuffer); } catch {}
             } else if (bufLen + b.byteLength <= buf.byteLength) {
@@ -182,24 +199,54 @@ export function useMSE(camId: string) {
         ws.onclose = () => {
           if (myGen !== gen) return;
           setConnected(false);
+          markViewerCameraEvent(camId, { connected: false, videoReadyState: video.readyState, reconnectCount, error: null });
           scheduleReconnect();
         };
 
-        ws.onerror = () => { if (myGen !== gen) return; ws.close(); };
+        ws.onerror = () => {
+          if (myGen !== gen) return;
+          markViewerCameraEvent(camId, { connected: false, videoReadyState: video.readyState, reconnectCount, error: 'websocket_error' });
+          ws.close();
+        };
       }, { once: true });
 
       video.play().catch(() => {});
     }
 
     // video.error is the last resort — browser-level decode failure
-    const onVideoError = () => { if (!destroyed) { setConnected(false); scheduleReconnect(); } };
+    const onVideoError = () => {
+      if (!destroyed) {
+        markViewerCameraEvent(camId, { connected: false, videoReadyState: video.readyState, reconnectCount, error: 'video_error' });
+        setConnected(false);
+        scheduleReconnect();
+      }
+    };
     video.addEventListener('error', onVideoError);
+
+    videoProgressTimer = setInterval(() => {
+      const currentVideoTime = video.currentTime || 0;
+      const now = Date.now();
+      if (currentVideoTime !== lastVideoTime) {
+        lastVideoTime = currentVideoTime;
+        lastVideoTimeAt = now;
+      }
+      const stalledMs = now - lastVideoTimeAt;
+      markViewerCameraEvent(camId, {
+        connected: !!activeWs && activeWs.readyState === WebSocket.OPEN,
+        videoReadyState: video.readyState,
+        videoTime: currentVideoTime,
+        stalledMs,
+        reconnectCount,
+        error: stalledMs >= STALL_MS ? 'video_stalled' : null,
+      });
+    }, 5000);
 
     connect();
 
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (videoProgressTimer) clearInterval(videoProgressTimer);
       video.removeEventListener('error', onVideoError);
       teardown();
       setConnected(false);

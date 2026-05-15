@@ -15,4 +15,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getVersion: (): Promise<string> =>
     ipcRenderer.invoke('get-version'),
+
+  getViewerIdentity: (): Promise<{
+    clientId: string;
+    name: string;
+    appVersion: string;
+    platform: string;
+    hostname: string;
+    pid: number;
+    startedAt: number;
+  }> => ipcRenderer.invoke('get-viewer-identity'),
+
+  viewerAction: (action: string): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke('viewer-action', action),
 });

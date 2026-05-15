@@ -51,6 +51,38 @@ async def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_rec_cam_ts
                 ON recordings(camera_id, ts_start);
+
+            CREATE TABLE IF NOT EXISTS viewer_clients (
+                client_id        TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                app_version      TEXT,
+                server_url       TEXT,
+                platform         TEXT,
+                hostname         TEXT,
+                pid              INTEGER,
+                started_at       REAL,
+                last_seen        REAL NOT NULL,
+                expected_cameras INTEGER NOT NULL DEFAULT 0,
+                healthy_cameras  INTEGER NOT NULL DEFAULT 0,
+                state            TEXT NOT NULL DEFAULT 'unknown',
+                payload_json     TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_viewer_clients_last_seen
+                ON viewer_clients(last_seen);
+
+            CREATE TABLE IF NOT EXISTS viewer_commands (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id    TEXT NOT NULL,
+                command      TEXT NOT NULL,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                reason       TEXT,
+                created_at   REAL NOT NULL,
+                claimed_at   REAL,
+                completed_at REAL,
+                result_json  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_viewer_commands_client_status
+                ON viewer_commands(client_id, status, created_at);
         """)
         cursor = await db.execute("PRAGMA table_info(layouts)")
         columns = {row[1] for row in await cursor.fetchall()}

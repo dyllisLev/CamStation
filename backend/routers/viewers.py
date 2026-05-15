@@ -1,0 +1,233 @@
+import json
+import time
+
+import aiosqlite
+from fastapi import APIRouter, HTTPException, status
+
+from config import get_db_path
+from models import (
+    CompleteViewerCommand,
+    CreateViewerCommand,
+    ViewerClientStatus,
+    ViewerCommand,
+    ViewerHeartbeat,
+)
+
+router = APIRouter(prefix="/api/viewers", tags=["viewers"])
+
+
+def _camera_is_healthy(camera) -> bool:
+    return (
+        camera.connected
+        and camera.video_ready_state >= 2
+        and camera.error is None
+        and camera.stalled_ms < 30_000
+        and (camera.last_binary_at is not None or camera.last_video_time_at is not None)
+    )
+
+
+def _state(expected_cameras: int, healthy_cameras: int) -> str:
+    if expected_cameras <= 0:
+        return "unknown"
+    if healthy_cameras >= expected_cameras:
+        return "healthy"
+    return "degraded"
+
+
+def _client_from_row(row) -> ViewerClientStatus:
+    payload = json.loads(row[12] or "{}")
+    return ViewerClientStatus(
+        client_id=row[0],
+        name=row[1],
+        app_version=row[2],
+        server_url=row[3],
+        platform=row[4],
+        hostname=row[5],
+        pid=row[6],
+        started_at=row[7],
+        last_seen=row[8],
+        expected_cameras=row[9],
+        healthy_cameras=row[10],
+        state=row[11],
+        payload=payload,
+    )
+
+
+def _command_from_row(row) -> ViewerCommand:
+    result = json.loads(row[8]) if row[8] else None
+    return ViewerCommand(
+        id=row[0],
+        client_id=row[1],
+        command=row[2],
+        status=row[3],
+        reason=row[4],
+        created_at=row[5],
+        claimed_at=row[6],
+        completed_at=row[7],
+        result=result,
+    )
+
+
+@router.post("/heartbeat", response_model=ViewerClientStatus)
+async def heartbeat(payload: ViewerHeartbeat):
+    now = time.time()
+    expected = payload.expected_cameras or len(payload.cameras)
+    healthy = sum(1 for camera in payload.cameras if _camera_is_healthy(camera))
+    state = _state(expected, healthy)
+    payload_json = payload.model_dump_json()
+
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute(
+            """
+            INSERT INTO viewer_clients(
+                client_id, name, app_version, server_url, platform, hostname, pid,
+                started_at, last_seen, expected_cameras, healthy_cameras, state, payload_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(client_id) DO UPDATE SET
+                name=excluded.name,
+                app_version=excluded.app_version,
+                server_url=excluded.server_url,
+                platform=excluded.platform,
+                hostname=excluded.hostname,
+                pid=excluded.pid,
+                started_at=COALESCE(excluded.started_at, viewer_clients.started_at),
+                last_seen=excluded.last_seen,
+                expected_cameras=excluded.expected_cameras,
+                healthy_cameras=excluded.healthy_cameras,
+                state=excluded.state,
+                payload_json=excluded.payload_json
+            """,
+            (
+                payload.client_id,
+                payload.name,
+                payload.app_version,
+                payload.server_url,
+                payload.platform,
+                payload.hostname,
+                payload.pid,
+                payload.started_at,
+                now,
+                expected,
+                healthy,
+                state,
+                payload_json,
+            ),
+        )
+        await db.commit()
+
+    return await get_viewer(payload.client_id)
+
+
+@router.get("", response_model=list[ViewerClientStatus])
+async def list_viewers():
+    async with aiosqlite.connect(get_db_path()) as db:
+        cur = await db.execute(
+            """
+            SELECT client_id, name, app_version, server_url, platform, hostname, pid,
+                   started_at, last_seen, expected_cameras, healthy_cameras, state, payload_json
+            FROM viewer_clients
+            ORDER BY last_seen DESC
+            """
+        )
+        return [_client_from_row(row) for row in await cur.fetchall()]
+
+
+@router.get("/{client_id}", response_model=ViewerClientStatus)
+async def get_viewer(client_id: str):
+    async with aiosqlite.connect(get_db_path()) as db:
+        cur = await db.execute(
+            """
+            SELECT client_id, name, app_version, server_url, platform, hostname, pid,
+                   started_at, last_seen, expected_cameras, healthy_cameras, state, payload_json
+            FROM viewer_clients
+            WHERE client_id=?
+            """,
+            (client_id,),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="viewer not found")
+    return _client_from_row(row)
+
+
+@router.post("/{client_id}/commands", response_model=ViewerCommand, status_code=status.HTTP_201_CREATED)
+async def create_command(client_id: str, payload: CreateViewerCommand):
+    now = time.time()
+    async with aiosqlite.connect(get_db_path()) as db:
+        cur = await db.execute(
+            """
+            INSERT INTO viewer_commands(client_id, command, status, reason, created_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (client_id, payload.command, "pending", payload.reason, now),
+        )
+        await db.commit()
+        command_id = cur.lastrowid
+        cur = await db.execute(
+            """
+            SELECT id, client_id, command, status, reason, created_at, claimed_at, completed_at, result_json
+            FROM viewer_commands WHERE id=?
+            """,
+            (command_id,),
+        )
+        return _command_from_row(await cur.fetchone())
+
+
+@router.get("/{client_id}/commands/pending", response_model=list[ViewerCommand])
+async def claim_pending_commands(client_id: str):
+    now = time.time()
+    async with aiosqlite.connect(get_db_path()) as db:
+        cur = await db.execute(
+            """
+            SELECT id FROM viewer_commands
+            WHERE client_id=? AND status='pending'
+            ORDER BY created_at ASC
+            """,
+            (client_id,),
+        )
+        ids = [row[0] for row in await cur.fetchall()]
+        if ids:
+            await db.executemany(
+                "UPDATE viewer_commands SET status='claimed', claimed_at=? WHERE id=?",
+                [(now, command_id) for command_id in ids],
+            )
+            await db.commit()
+        cur = await db.execute(
+            """
+            SELECT id, client_id, command, status, reason, created_at, claimed_at, completed_at, result_json
+            FROM viewer_commands
+            WHERE client_id=? AND id IN (%s)
+            ORDER BY created_at ASC
+            """ % ",".join("?" for _ in ids),
+            (client_id, *ids),
+        ) if ids else None
+        rows = await cur.fetchall() if cur else []
+        return [_command_from_row(row) for row in rows]
+
+
+@router.post("/{client_id}/commands/{command_id}/complete", response_model=ViewerCommand)
+async def complete_command(client_id: str, command_id: int, payload: CompleteViewerCommand):
+    now = time.time()
+    result = {"ok": payload.ok, "message": payload.message, "details": payload.details}
+    new_status = "completed" if payload.ok else "failed"
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute(
+            """
+            UPDATE viewer_commands
+            SET status=?, completed_at=?, result_json=?
+            WHERE id=? AND client_id=?
+            """,
+            (new_status, now, json.dumps(result, ensure_ascii=False), command_id, client_id),
+        )
+        await db.commit()
+        cur = await db.execute(
+            """
+            SELECT id, client_id, command, status, reason, created_at, claimed_at, completed_at, result_json
+            FROM viewer_commands WHERE id=? AND client_id=?
+            """,
+            (command_id, client_id),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="command not found")
+    return _command_from_row(row)

@@ -84,3 +84,56 @@ export interface SystemVersion {
   latest_version: string | null;
   update_available: boolean;
 }
+
+export interface ViewerCameraState {
+  camera_id: string;
+  connected: boolean;
+  video_ready_state: number;
+  last_binary_at: number | null;
+  last_video_time: number | null;
+  last_video_time_at: number | null;
+  stalled_ms: number;
+  reconnect_count: number;
+  error: string | null;
+}
+
+export interface ViewerHeartbeatPayload {
+  client_id: string;
+  name: string;
+  app_version?: string | null;
+  server_url?: string | null;
+  platform?: string | null;
+  hostname?: string | null;
+  pid?: number | null;
+  started_at?: number | null;
+  expected_cameras: number;
+  cameras: ViewerCameraState[];
+}
+
+export interface ViewerClientStatus {
+  client_id: string;
+  name: string;
+  app_version: string | null;
+  server_url: string | null;
+  platform: string | null;
+  hostname: string | null;
+  pid: number | null;
+  started_at: number | null;
+  last_seen: number;
+  expected_cameras: number;
+  healthy_cameras: number;
+  state: 'healthy' | 'degraded' | 'offline' | 'unknown';
+  payload: ViewerHeartbeatPayload;
+}
+
+export interface ViewerCommand {
+  id: number;
+  client_id: string;
+  command: 'refresh_streams' | 'reload_page' | 'restart_app' | 'ping';
+  status: 'pending' | 'claimed' | 'completed' | 'failed';
+  reason: string | null;
+  created_at: number;
+  claimed_at: number | null;
+  completed_at: number | null;
+  result: Record<string, unknown> | null;
+}

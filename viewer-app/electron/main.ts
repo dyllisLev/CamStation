@@ -4,13 +4,29 @@ import path from 'path';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import os from 'os';
+import { randomUUID } from 'crypto';
 import { checkForUpdates } from './updater';
 import { buildViewerUrl, normalizeServerUrl, shouldRestrictViewerNavigation } from './viewerNavigation';
 
 interface Settings {
   serverUrl: string;
   fullscreenOnStart: boolean;
+  clientId?: string;
+  clientName?: string;
 }
+
+interface ViewerIdentity {
+  clientId: string;
+  name: string;
+  appVersion: string;
+  platform: string;
+  hostname: string;
+  pid: number;
+  startedAt: number;
+}
+
+const startedAt = Date.now() / 1000;
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json');
@@ -18,7 +34,8 @@ function getSettingsPath(): string {
 
 function loadSettings(): Settings {
   try {
-    return JSON.parse(fs.readFileSync(getSettingsPath(), 'utf8')) as Settings;
+    const settings = JSON.parse(fs.readFileSync(getSettingsPath(), 'utf8')) as Settings;
+    return { ...settings, serverUrl: settings.serverUrl ?? '', fullscreenOnStart: settings.fullscreenOnStart ?? false };
   } catch {
     return { serverUrl: '', fullscreenOnStart: false };
   }
@@ -26,6 +43,23 @@ function loadSettings(): Settings {
 
 function persistSettings(settings: Settings): void {
   fs.writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2));
+}
+
+function getViewerIdentity(): ViewerIdentity {
+  const settings = loadSettings();
+  if (!settings.clientId) {
+    settings.clientId = `camviewer-${randomUUID()}`;
+    persistSettings(settings);
+  }
+  return {
+    clientId: settings.clientId,
+    name: settings.clientName || os.hostname() || 'CamViewer',
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    hostname: os.hostname(),
+    pid: process.pid,
+    startedAt,
+  };
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -232,6 +266,22 @@ ipcMain.handle('launch-viewer', (_, url: string): void => {
 });
 
 ipcMain.handle('get-version', (): string => app.getVersion());
+
+ipcMain.handle('get-viewer-identity', (): ViewerIdentity => getViewerIdentity());
+
+ipcMain.handle('viewer-action', (_, action: string): { ok: boolean; message?: string } => {
+  if (action === 'ping') return { ok: true, message: 'pong' };
+  if (action === 'reload_page' || action === 'refresh_streams') {
+    mainWindow?.webContents.reloadIgnoringCache();
+    return { ok: true, message: 'reloaded' };
+  }
+  if (action === 'restart_app') {
+    app.relaunch();
+    app.exit(0);
+    return { ok: true, message: 'restarting' };
+  }
+  return { ok: false, message: `unknown action: ${action}` };
+});
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

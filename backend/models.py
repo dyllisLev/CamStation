@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional
 
 class Camera(BaseModel):
     id: str
@@ -86,3 +86,67 @@ class StorageStats(BaseModel):
     recordings_gb: float
     cameras: list[CameraStorageStats]
     hourly_gb_total: float
+
+
+class ViewerCameraState(BaseModel):
+    camera_id: str
+    connected: bool = False
+    video_ready_state: int = 0
+    last_binary_at: float | None = None
+    last_video_time: float | None = None
+    last_video_time_at: float | None = None
+    stalled_ms: int = 0
+    reconnect_count: int = 0
+    error: str | None = None
+
+
+class ViewerHeartbeat(BaseModel):
+    client_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+    app_version: str | None = None
+    server_url: str | None = None
+    platform: str | None = None
+    hostname: str | None = None
+    pid: int | None = None
+    started_at: float | None = None
+    expected_cameras: int = 0
+    cameras: list[ViewerCameraState] = Field(default_factory=list)
+
+
+class ViewerClientStatus(BaseModel):
+    client_id: str
+    name: str
+    app_version: str | None = None
+    server_url: str | None = None
+    platform: str | None = None
+    hostname: str | None = None
+    pid: int | None = None
+    started_at: float | None = None
+    last_seen: float
+    expected_cameras: int
+    healthy_cameras: int
+    state: Literal["healthy", "degraded", "offline", "unknown"]
+    payload: dict[str, Any]
+
+
+class CreateViewerCommand(BaseModel):
+    command: Literal["refresh_streams", "reload_page", "restart_app", "ping"]
+    reason: str | None = None
+
+
+class ViewerCommand(BaseModel):
+    id: int
+    client_id: str
+    command: str
+    status: Literal["pending", "claimed", "completed", "failed"]
+    reason: str | None = None
+    created_at: float
+    claimed_at: float | None = None
+    completed_at: float | None = None
+    result: dict[str, Any] | None = None
+
+
+class CompleteViewerCommand(BaseModel):
+    ok: bool
+    message: str | None = None
+    details: dict[str, Any] | None = None

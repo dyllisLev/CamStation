@@ -9,6 +9,7 @@ import { WebRTCPlayer } from '../../components/WebRTCPlayer'
 import { useAllTimelines } from '../../hooks/useAllTimelines'
 import { useCameras } from '../../hooks/useCameras'
 import { useLayouts } from '../../hooks/useLayouts'
+import { useViewerHeartbeat } from '../../useViewerHeartbeat'
 import {
   getSettings,
   getStorageStats,
@@ -917,6 +918,7 @@ export function NewCamStation() {
   const viewerMode = isNewViewerMode(window.location.search)
   const [page, setPage] = useState<NewPage>(() => initialPageFromPath(window.location.pathname, viewerMode))
   const cameras = useCameras()
+  useViewerHeartbeat(viewerMode, cameras)
 
   useEffect(() => {
     if (viewerMode && window.location.pathname !== '/new') {

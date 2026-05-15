@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Camera, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion } from '../types';
+import type { Camera, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion, ViewerClientStatus, ViewerCommand, ViewerHeartbeatPayload } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -47,3 +47,16 @@ export const triggerUpdate = (): Promise<{ status: string }> =>
 
 export const getViewerVersion = (): Promise<{ version: string }> =>
   api.get('/settings/viewer-version').then(r => r.data);
+
+export const sendViewerHeartbeat = (payload: ViewerHeartbeatPayload): Promise<ViewerClientStatus> =>
+  api.post('/viewers/heartbeat', payload).then(r => r.data);
+
+export const getPendingViewerCommands = (clientId: string): Promise<ViewerCommand[]> =>
+  api.get(`/viewers/${encodeURIComponent(clientId)}/commands/pending`).then(r => r.data);
+
+export const completeViewerCommand = (
+  clientId: string,
+  commandId: number,
+  result: { ok: boolean; message?: string; details?: Record<string, unknown> },
+): Promise<ViewerCommand> =>
+  api.post(`/viewers/${encodeURIComponent(clientId)}/commands/${commandId}/complete`, result).then(r => r.data);
