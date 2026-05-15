@@ -6,6 +6,19 @@ class Camera(BaseModel):
     name: str
     online: bool
     has_sub: bool = False
+    enabled: bool = True
+
+
+class CameraConfigStatus(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    online: bool = False
+    has_sub: bool = False
+
+
+class UpdateCameraEnabledRequest(BaseModel):
+    enabled: bool
 
 class MotionEvent(BaseModel):
     camera_id: str

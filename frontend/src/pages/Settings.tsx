@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate, getViewerVersion } from '../api/client';
-import type { Settings, StorageStats, SystemVersion } from '../types';
+import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate, getViewerVersion, getCameraConfig, updateCameraEnabled } from '../api/client';
+import type { Settings, StorageStats, SystemVersion, CameraConfigStatus } from '../types';
 
 export function SettingsPage() {
   const [form, setForm] = useState<Settings>({
@@ -15,6 +15,10 @@ export function SettingsPage() {
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [viewerVersion, setViewerVersion] = useState<string | null>(null);
+  const [cameraConfig, setCameraConfig] = useState<CameraConfigStatus[]>([]);
+  const [cameraConfigLoading, setCameraConfigLoading] = useState(true);
+  const [cameraToggling, setCameraToggling] = useState<string | null>(null);
+  const [cameraMsg, setCameraMsg] = useState<string | null>(null);
 
   useEffect(() => { getSettings().then(setForm).catch(console.error); }, []);
 
@@ -34,6 +38,35 @@ export function SettingsPage() {
   useEffect(() => {
     getViewerVersion().then(v => setViewerVersion(v.version)).catch(() => {});
   }, []);
+
+  const loadCameraConfig = useCallback(() => {
+    setCameraConfigLoading(true);
+    getCameraConfig()
+      .then(setCameraConfig)
+      .catch(err => {
+        console.error(err);
+        setCameraMsg('카메라 설정을 불러오지 못했습니다.');
+      })
+      .finally(() => setCameraConfigLoading(false));
+  }, []);
+
+  useEffect(() => { loadCameraConfig(); }, [loadCameraConfig]);
+
+  const handleToggleCamera = async (camera: CameraConfigStatus) => {
+    const nextEnabled = !camera.enabled;
+    setCameraToggling(camera.id);
+    setCameraMsg(null);
+    try {
+      const updated = await updateCameraEnabled(camera.id, nextEnabled);
+      setCameraConfig(prev => prev.map(item => item.id === updated.id ? updated : item));
+      setCameraMsg(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 완료. 뷰어에 자동 반영됩니다.`);
+    } catch (err) {
+      console.error(err);
+      setCameraMsg(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 실패.`);
+    } finally {
+      setCameraToggling(null);
+    }
+  };
 
   const handleSave = async () => {
     await updateSettings(form);
@@ -169,6 +202,62 @@ export function SettingsPage() {
         ) : (
           <div style={{ fontSize: 12, color: '#ef5350' }}>통계를 불러올 수 없습니다.</div>
         )}
+      </div>
+
+      {/* Camera Enablement */}
+      <div style={{ marginBottom: 28, background: '#1e1e1e', border: '1px solid #333', borderRadius: 6, padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 'bold', color: '#90caf9' }}>카메라 활성화</div>
+          <button
+            onClick={loadCameraConfig}
+            disabled={cameraConfigLoading || cameraToggling !== null}
+            style={{ background: '#2a2a2a', border: '1px solid #444', color: '#bbb', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}
+          >
+            새로고침
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#777', marginBottom: 10 }}>
+          비활성화된 카메라는 화면·녹화·상태 알림 대상에서 제외됩니다.
+        </div>
+        {cameraConfigLoading ? (
+          <div style={{ fontSize: 12, color: '#666' }}>불러오는 중...</div>
+        ) : cameraConfig.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#666' }}>카메라 설정이 없습니다.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {cameraConfig.map(camera => {
+              const busy = cameraToggling === camera.id;
+              return (
+                <div key={camera.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: '1px solid #2a2a2a', paddingBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: camera.enabled ? '#eee' : '#777', fontWeight: 600 }}>{camera.name}</div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                      {camera.enabled ? (camera.online ? '온라인' : '오프라인') : '비활성화'} · 보조 스트림 {camera.has_sub ? '있음' : '없음'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleToggleCamera(camera)}
+                    disabled={cameraToggling !== null}
+                    style={{
+                      minWidth: 82,
+                      background: camera.enabled ? '#4e342e' : '#1b5e20',
+                      border: `1px solid ${camera.enabled ? '#8d6e63' : '#388e3c'}`,
+                      color: '#fff',
+                      padding: '6px 12px',
+                      borderRadius: 4,
+                      cursor: cameraToggling === null ? 'pointer' : 'default',
+                      fontSize: 12,
+                      opacity: cameraToggling !== null && !busy ? 0.45 : 1,
+                    }}
+                  >
+                    {busy ? '처리 중...' : camera.enabled ? '비활성화' : '활성화'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {cameraMsg && <div style={{ marginTop: 10, fontSize: 11, color: cameraMsg.includes('실패') ? '#ef5350' : '#81c784' }}>{cameraMsg}</div>}
       </div>
 
       {/* Settings form */}

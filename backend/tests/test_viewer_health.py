@@ -103,3 +103,30 @@ async def test_viewer_health_ok_when_heartbeat_recent_and_all_streams_healthy(te
 
     assert report.ok is True
     assert report.issues == []
+
+
+async def test_viewer_health_ignores_disabled_camera_payload(test_db):
+    from services.viewer_health import check_viewer_health
+
+    await _insert_viewer(
+        test_db,
+        expected_cameras=2,
+        healthy_cameras=1,
+        state="degraded",
+        payload={
+            "cameras": [
+                {"camera_id": "cam1", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+                {"camera_id": "cam2", "connected": False, "video_ready_state": 0, "stalled_ms": 120000, "error": "stalled"},
+            ]
+        },
+    )
+
+    report = await check_viewer_health(
+        test_db,
+        now_ts=2000,
+        max_heartbeat_age_sec=60,
+        enabled_camera_ids=["cam1"],
+    )
+
+    assert report.ok is True
+    assert report.issues == []

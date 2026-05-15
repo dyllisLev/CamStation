@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { getPageCameras, getTotalPages, getSwipeDirection } from '../components/mobile/mobileUtils'
 import type { Camera } from '../types'
 
-const makeCam = (id: string): Camera => ({ id, name: id, online: true, has_sub: false })
+const makeCam = (id: string): Camera => ({ id, name: id, online: true, has_sub: false, enabled: true })
 const cams = Array.from({ length: 7 }, (_, i) => makeCam(`cam${i}`))
 
 describe('getTotalPages', () => {

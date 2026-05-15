@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
             interval_sec=VIEWER_HEALTH_CHECK_INTERVAL_SEC,
             max_heartbeat_age_sec=VIEWER_HEALTH_MAX_AGE_SEC,
             alert_sender=alert_sender,
+            get_enabled_camera_ids=cameras.get_enabled_camera_ids,
         )
     )
     motion_tasks = [

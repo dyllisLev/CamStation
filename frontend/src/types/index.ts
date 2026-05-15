@@ -3,6 +3,15 @@ export interface Camera {
   name: string;
   online: boolean;
   has_sub: boolean;
+  enabled: boolean;
+}
+
+export interface CameraConfigStatus {
+  id: string;
+  name: string;
+  enabled: boolean;
+  online: boolean;
+  has_sub: boolean;
 }
 
 export interface RecordingSegment {

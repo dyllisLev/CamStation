@@ -174,6 +174,38 @@ async def test_recording_health_detects_recent_recording_missing_on_disk(tmp_pat
     assert any(i.code == "recording_file_missing" for i in report.issues)
 
 
+async def test_recording_health_ignores_recent_rows_for_disabled_cameras(tmp_path):
+    from services.recording_health import check_recording_health
+
+    now = time.time()
+    db_path = tmp_path / "camstation.db"
+    await _init_recordings_db(db_path)
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO recordings(camera_id, filename, ts_start, ts_end, file_size) VALUES(?,?,?,?,?)",
+            ("disabled_cam", "2026-05-15_09-00.mp4", now - 1800, now - 60, 1234),
+        )
+        await db.execute(
+            "INSERT INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
+            ("disabled_cam", "2026-05-15_09-30.mp4", now - 7200),
+        )
+        await db.commit()
+
+    report = await check_recording_health(
+        ["cam1"],
+        str(tmp_path / "recordings"),
+        str(tmp_path / "temp"),
+        str(db_path),
+        segment_minutes=30,
+        active_cam_ids=["cam1"],
+        now_ts=now,
+        probe_func=None,
+    )
+
+    assert all(i.camera_id != "disabled_cam" for i in report.issues)
+
+
 async def test_recording_health_detects_mp4_duration_mismatch(tmp_path):
     from services.recording_health import FileProbe, check_recording_health
 

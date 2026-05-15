@@ -149,6 +149,7 @@ async def check_recording_health(
     segment_sec = max(segment_minutes, 1) * 60
     stale_after = segment_sec * stale_factor
     active = set(active_cam_ids)
+    monitored = set(cam_ids)
     issues: list[RecordingHealthIssue] = []
     base_recordings = Path(recordings_dir)
     base_temp = Path(temp_dir)
@@ -198,6 +199,8 @@ async def check_recording_health(
                 """
             )
             for row in open_rows:
+                if row["camera_id"] not in monitored:
+                    continue
                 age = now_ts - float(row["ts_start"])
                 if age > stale_after:
                     issues.append(_issue(
@@ -221,6 +224,8 @@ async def check_recording_health(
                 (cutoff,),
             )
             for row in recent_rows:
+                if row["camera_id"] not in monitored:
+                    continue
                 date_str = _date_from_filename_or_ts(row["filename"], float(row["ts_start"]))
                 final_path = base_recordings / row["camera_id"] / date_str / row["filename"]
                 if not final_path.exists():

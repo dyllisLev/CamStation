@@ -1,10 +1,16 @@
 import axios from 'axios';
-import type { Camera, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion, ViewerClientStatus, ViewerCommand, ViewerHeartbeatPayload } from '../types';
+import type { Camera, CameraConfigStatus, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion, ViewerClientStatus, ViewerCommand, ViewerHeartbeatPayload } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
 export const getCameras = (): Promise<Camera[]> =>
   api.get('/cameras').then(r => r.data);
+
+export const getCameraConfig = (): Promise<CameraConfigStatus[]> =>
+  api.get('/cameras/config').then(r => r.data);
+
+export const updateCameraEnabled = (cameraId: string, enabled: boolean): Promise<CameraConfigStatus> =>
+  api.patch(`/cameras/${encodeURIComponent(cameraId)}/enabled`, { enabled }).then(r => r.data);
 
 export const getTimeline = (cam: string, date: string): Promise<TimelineData> =>
   api.get('/timeline', { params: { cam, date } }).then(r => r.data);

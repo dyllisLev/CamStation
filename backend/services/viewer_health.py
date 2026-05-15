@@ -66,6 +66,7 @@ async def check_viewer_health(
     *,
     now_ts: float | None = None,
     max_heartbeat_age_sec: int = 60,
+    enabled_camera_ids: list[str] | None = None,
 ) -> ViewerHealthReport:
     """Check whether Windows viewer EXEs are alive and actually receiving streams.
 
@@ -75,6 +76,7 @@ async def check_viewer_health(
     """
     now_ts = now_ts or time.time()
     issues: list[ViewerHealthIssue] = []
+    enabled_set = set(enabled_camera_ids) if enabled_camera_ids is not None else None
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -120,6 +122,27 @@ async def check_viewer_health(
             ))
             continue
 
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        payload_cameras = payload.get("cameras") or []
+        if enabled_set is not None:
+            effective_cameras = [
+                camera for camera in payload_cameras
+                if str(camera.get("camera_id") or "") in enabled_set
+            ]
+            expected = len(enabled_set)
+            healthy = sum(
+                1 for camera in effective_cameras
+                if bool(camera.get("connected"))
+                and int(camera.get("video_ready_state") or 0) >= 2
+                and int(camera.get("stalled_ms") or 0) < 30_000
+                and camera.get("error") is None
+            )
+        else:
+            effective_cameras = payload_cameras
+
         if expected > 0 and healthy < expected:
             issues.append(_issue(
                 "viewer_stream_degraded",
@@ -134,11 +157,7 @@ async def check_viewer_health(
                 pid=pid,
             ))
 
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        for camera in payload.get("cameras") or []:
+        for camera in effective_cameras:
             connected = bool(camera.get("connected"))
             ready = int(camera.get("video_ready_state") or 0)
             stalled_ms = int(camera.get("stalled_ms") or 0)
@@ -202,12 +221,15 @@ async def run_viewer_health_loop(
     interval_sec: int = 300,
     max_heartbeat_age_sec: int = 60,
     alert_sender=None,
+    get_enabled_camera_ids=None,
 ) -> None:
     while True:
         try:
+            enabled_ids = list(get_enabled_camera_ids()) if get_enabled_camera_ids is not None else None
             report = await check_viewer_health(
                 db_path,
                 max_heartbeat_age_sec=max_heartbeat_age_sec,
+                enabled_camera_ids=enabled_ids,
             )
             log_viewer_health_report(report)
             if alert_sender is not None and not report.ok:
