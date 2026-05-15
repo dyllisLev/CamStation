@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   shouldInstallUpdate,
   buildWindowsPortableUpdateScript,
+  buildWindowsPortableRestartScript,
   normalizeVersion,
 } = require('../dist-electron/updaterCore.js');
 
@@ -30,4 +31,15 @@ test('포터블 EXE 교체 스크립트는 실행 중 파일 교체 후 자동 �
   assert.match(script, /move \/y "C:\\Temp\\CamViewer-new\.exe" "C:\\Apps\\CamViewer\.exe"/);
   assert.match(script, /start "" "C:\\Apps\\CamViewer\.exe"/);
   assert.match(script, /del "%~f0"/);
+});
+
+test('포터블 EXE 재시작 스크립트는 현재 앱 종료 후 원본 EXE를 다시 실행한다', () => {
+  const script = buildWindowsPortableRestartScript({
+    exePath: 'C:\\Apps\\CamViewer.exe',
+  });
+
+  assert.match(script, /timeout \/t 2 \/nobreak > nul/);
+  assert.match(script, /start "" "C:\\Apps\\CamViewer\.exe"/);
+  assert.match(script, /del "%~f0"/);
+  assert.doesNotMatch(script, /move \/y/);
 });

@@ -3,6 +3,10 @@ export interface WindowsPortableUpdateScriptOptions {
   exePath: string;
 }
 
+export interface WindowsPortableRestartScriptOptions {
+  exePath: string;
+}
+
 export function normalizeVersion(version: string | null | undefined): string {
   return (version ?? '').trim();
 }
@@ -27,6 +31,17 @@ export function buildWindowsPortableUpdateScript({
     '@echo off',
     'timeout /t 2 /nobreak > nul',
     `move /y "${newExePath}" "${exePath}"`,
+    `start "" "${exePath}"`,
+    'del "%~f0"',
+  ].join('\r\n');
+}
+
+export function buildWindowsPortableRestartScript({
+  exePath,
+}: WindowsPortableRestartScriptOptions): string {
+  return [
+    '@echo off',
+    'timeout /t 2 /nobreak > nul',
     `start "" "${exePath}"`,
     'del "%~f0"',
   ].join('\r\n');

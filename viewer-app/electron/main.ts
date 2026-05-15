@@ -6,7 +6,9 @@ import http from 'http';
 import https from 'https';
 import os from 'os';
 import { randomUUID } from 'crypto';
+import { exec } from 'child_process';
 import { checkForUpdates } from './updater';
+import { buildWindowsPortableRestartScript } from './updaterCore';
 import { buildViewerUrl, normalizeServerUrl, shouldRestrictViewerNavigation } from './viewerNavigation';
 
 interface Settings {
@@ -60,6 +62,21 @@ function getViewerIdentity(): ViewerIdentity {
     pid: process.pid,
     startedAt,
   };
+}
+
+function restartViewerApp(): { ok: boolean; message?: string } {
+  if (process.platform === 'win32') {
+    const exePath = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
+    const batPath = path.join(app.getPath('temp'), 'camviewer-restart.bat');
+    fs.writeFileSync(batPath, buildWindowsPortableRestartScript({ exePath }), 'latin1');
+    exec(`start /b "" "${batPath}"`, { windowsHide: true }, () => {
+      app.exit(0);
+    });
+    return { ok: true, message: 'restarting via portable launcher' };
+  }
+  app.relaunch();
+  setTimeout(() => app.exit(0), 500);
+  return { ok: true, message: 'restarting' };
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -276,9 +293,7 @@ ipcMain.handle('viewer-action', (_, action: string): { ok: boolean; message?: st
     return { ok: true, message: 'reloaded' };
   }
   if (action === 'restart_app') {
-    app.relaunch();
-    app.exit(0);
-    return { ok: true, message: 'restarting' };
+    return restartViewerApp();
   }
   return { ok: false, message: `unknown action: ${action}` };
 });
