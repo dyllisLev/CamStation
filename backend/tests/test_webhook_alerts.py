@@ -62,6 +62,52 @@ async def test_webhook_alert_sender_posts_hmac_signed_payload():
     assert payload["issues"][0]["code"] == "segment_not_moved"
 
 
+async def test_webhook_alert_sender_posts_viewer_health_payload():
+    from services.viewer_health import ViewerHealthIssue, ViewerHealthReport
+    from services.webhook_alerts import WebhookAlertSender
+
+    calls = []
+
+    async def fake_post(url, *, content, headers, timeout):
+        calls.append((url, content, headers, timeout))
+        class Resp:
+            def raise_for_status(self):
+                return None
+        return Resp()
+
+    sender = WebhookAlertSender(
+        url="http://hermes:8644/webhooks/camstation-alert",
+        secret="secret",
+        post_func=fake_post,
+    )
+    report = ViewerHealthReport(
+        ok=False,
+        checked_at=1778800000,
+        client_count=1,
+        issues=[ViewerHealthIssue(
+            code="viewer_heartbeat_stale",
+            severity="ERROR",
+            client_id="viewer-1",
+            message="stale",
+            name="NUC",
+            age_sec=120,
+            expected_cameras=8,
+            healthy_cameras=8,
+            app_version="1.0.4",
+            pid=1234,
+        )],
+    )
+
+    delivered = await sender.send_viewer_health_report(report)
+
+    assert delivered is True
+    payload = json.loads(calls[0][1].decode())
+    assert payload["event"] == "viewer_health_failed"
+    assert payload["severity"] == "ERROR"
+    assert payload["client_count"] == 1
+    assert payload["issues"][0]["code"] == "viewer_heartbeat_stale"
+
+
 async def test_webhook_alert_sender_deduplicates_within_cooldown():
     from services.recording_health import RecordingHealthIssue, RecordingHealthReport
     from services.webhook_alerts import WebhookAlertSender

@@ -8,12 +8,15 @@ from services import recorder
 from services.cleaner import run_cleanup_loop
 from services.motion import monitor_motion, set_motion_enabled
 from services.recording_health import run_recording_health_loop
+from services.viewer_health import run_viewer_health_loop
 from services.webhook_alerts import WebhookAlertSender
 from config import (
     GO2RTC_URL,
     RECORDINGS_DIR,
     TEMP_DIR,
     RECORDING_HEALTH_CHECK_INTERVAL_SEC,
+    VIEWER_HEALTH_CHECK_INTERVAL_SEC,
+    VIEWER_HEALTH_MAX_AGE_SEC,
     HERMES_WEBHOOK_URL,
     HERMES_WEBHOOK_SECRET,
     ALERT_COOLDOWN_SEC,
@@ -76,6 +79,14 @@ async def lifespan(app: FastAPI):
             alert_sender=alert_sender,
         )
     )
+    viewer_health_task = asyncio.create_task(
+        run_viewer_health_loop(
+            get_db_path(),
+            interval_sec=VIEWER_HEALTH_CHECK_INTERVAL_SEC,
+            max_heartbeat_age_sec=VIEWER_HEALTH_MAX_AGE_SEC,
+            alert_sender=alert_sender,
+        )
+    )
     motion_tasks = [
         asyncio.create_task(monitor_motion(cam_id, motion_threshold, get_db_path()))
         for cam_id in cam_ids
@@ -87,6 +98,7 @@ async def lifespan(app: FastAPI):
         t.cancel()
     cleanup_task.cancel()
     health_task.cancel()
+    viewer_health_task.cancel()
     sub_task.cancel()
     await recorder.stop_all()
 
