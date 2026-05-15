@@ -172,3 +172,41 @@ async def test_recording_health_detects_recent_recording_missing_on_disk(tmp_pat
 
     assert report.ok is False
     assert any(i.code == "recording_file_missing" for i in report.issues)
+
+
+async def test_recording_health_detects_mp4_duration_mismatch(tmp_path):
+    from services.recording_health import FileProbe, check_recording_health
+
+    now = time.time()
+    db_path = tmp_path / "camstation.db"
+    await _init_recordings_db(db_path)
+
+    recordings = tmp_path / "recordings" / "cam1" / "2026-05-15"
+    recordings.mkdir(parents=True)
+    bad = recordings / "2026-05-15_09-00.mp4"
+    bad.write_bytes(b"bad")
+
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO recordings(camera_id, filename, ts_start, ts_end, file_size) VALUES(?,?,?,?,?)",
+            ("cam1", bad.name, now - 1800, now - 60, bad.stat().st_size),
+        )
+        await db.commit()
+
+    async def fake_probe(path):
+        assert path == str(bad)
+        return FileProbe(format_duration=16658.0, max_stream_duration=1080.0)
+
+    report = await check_recording_health(
+        ["cam1"],
+        str(tmp_path / "recordings"),
+        str(tmp_path / "temp"),
+        str(db_path),
+        segment_minutes=30,
+        active_cam_ids=["cam1"],
+        now_ts=now,
+        probe_func=fake_probe,
+    )
+
+    assert report.ok is False
+    assert any(i.code == "recording_duration_mismatch" and i.path == str(bad) for i in report.issues)

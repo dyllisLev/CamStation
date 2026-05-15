@@ -1,4 +1,6 @@
 import asyncio
+import inspect
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -30,6 +32,57 @@ class RecordingHealthReport:
     camera_count: int
     active_count: int
     issues: list[RecordingHealthIssue] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FileProbe:
+    format_duration: float | None
+    max_stream_duration: float | None
+
+
+async def probe_mp4_duration(path: str) -> FileProbe | None:
+    """Return ffprobe format/stream durations for one MP4 file."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration:stream=duration",
+        "-of", "json",
+        path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        logger.warning("ffprobe timed out path=%s", path)
+        return None
+    if proc.returncode != 0:
+        logger.warning("ffprobe failed path=%s error=%s", path, stderr.decode(errors="replace").strip())
+        return None
+    try:
+        data = json.loads(stdout.decode())
+        format_duration = data.get("format", {}).get("duration")
+        stream_durations = [
+            float(s["duration"])
+            for s in data.get("streams", [])
+            if s.get("duration") not in (None, "N/A")
+        ]
+        return FileProbe(
+            format_duration=float(format_duration) if format_duration not in (None, "N/A") else None,
+            max_stream_duration=max(stream_durations) if stream_durations else None,
+        )
+    except (ValueError, TypeError, KeyError) as e:
+        logger.warning("ffprobe output parse failed path=%s error=%s", path, e)
+        return None
+
+
+async def _call_probe(probe_func, path: str) -> FileProbe | None:
+    result = probe_func(path)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _date_from_filename_or_ts(filename: str, ts_start: float) -> str:
@@ -84,6 +137,7 @@ async def check_recording_health(
     active_cam_ids: list[str],
     now_ts: float | None = None,
     stale_factor: float = 2.0,
+    probe_func=probe_mp4_duration,
 ) -> RecordingHealthReport:
     """Check whether continuous recording is actually producing and moving segments.
 
@@ -189,6 +243,26 @@ async def check_recording_health(
                         filename=row["filename"],
                         file_size=final_path.stat().st_size,
                     ))
+                elif probe_func is not None:
+                    probe = await _call_probe(probe_func, str(final_path))
+                    if (
+                        probe
+                        and probe.format_duration is not None
+                        and probe.max_stream_duration is not None
+                        and probe.max_stream_duration > 0
+                        and probe.format_duration - probe.max_stream_duration > 60
+                        and probe.format_duration / probe.max_stream_duration > 1.5
+                    ):
+                        issues.append(_issue(
+                            "recording_duration_mismatch",
+                            "ERROR",
+                            row["camera_id"],
+                            "MP4 컨테이너 duration과 실제 stream duration 차이가 큽니다: "
+                            f"format={probe.format_duration:.1f}s stream={probe.max_stream_duration:.1f}s path={final_path}",
+                            path=str(final_path),
+                            filename=row["filename"],
+                            file_size=final_path.stat().st_size,
+                        ))
 
     return RecordingHealthReport(
         ok=not any(i.severity == "ERROR" for i in issues),
