@@ -1,6 +1,6 @@
 {
   "name": "camviewer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CamStation 라이브 뷰어",
   "main": "dist-electron/main.js",
   "scripts": {

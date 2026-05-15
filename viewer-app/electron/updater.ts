@@ -4,6 +4,7 @@ import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
+import { buildWindowsPortableUpdateScript, normalizeVersion, shouldInstallUpdate } from './updaterCore';
 
 function get(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -32,38 +33,54 @@ function downloadFile(url: string, dest: string): Promise<void> {
 
 let pendingVersion: string | null = null;
 
+export function shouldInstallViewerUpdate(
+  currentVersion: string,
+  serverVersion: string | null | undefined,
+  existingPendingVersion: string | null,
+): boolean {
+  return shouldInstallUpdate(serverVersion, currentVersion, existingPendingVersion);
+}
+
+export function resolvePortableExePath(
+  env: NodeJS.ProcessEnv,
+  execPath: string,
+): string {
+  return env.PORTABLE_EXECUTABLE_FILE ?? execPath;
+}
+
+export function buildWindowsUpdateScript(newExePath: string, exePath: string): string {
+  return buildWindowsPortableUpdateScript({ newExePath, exePath });
+}
+
 export async function checkForUpdates(serverUrl: string): Promise<void> {
   try {
     const body = await get(`${serverUrl}/api/settings/viewer-version`);
-    const { version: serverVersion } = JSON.parse(body) as { version: string };
-    if (serverVersion === app.getVersion()) return;
-    if (serverVersion === pendingVersion) return;
+    const { version } = JSON.parse(body) as { version: string };
+    const serverVersion = normalizeVersion(version);
+    if (!shouldInstallUpdate(serverVersion, app.getVersion(), pendingVersion)) return;
     pendingVersion = serverVersion;
 
     const tempDir = app.getPath('temp');
     const newExePath = path.join(tempDir, 'CamViewer-new.exe');
     await downloadFile(`${serverUrl}/api/settings/viewer-app`, newExePath);
 
-    // Windows: use a batch script to replace the running EXE after quit
+    // Windows: use a batch script to replace the running EXE after quit.
     // PORTABLE_EXECUTABLE_FILE = 원본 포터블 EXE 경로 (process.execPath는 임시 압축 해제 경로)
-    const exePath = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
+    const exePath = resolvePortableExePath(process.env, process.execPath);
     const batPath = path.join(tempDir, 'camviewer-update.bat');
-    const bat = [
-      '@echo off',
-      'timeout /t 2 /nobreak > nul',
-      `move /y "${newExePath}" "${exePath}"`,
-      `start "" "${exePath}"`,
-      'del "%~f0"',
-    ].join('\r\n');
-    fs.writeFileSync(batPath, bat, 'latin1');
+    fs.writeFileSync(
+      batPath,
+      buildWindowsPortableUpdateScript({ newExePath, exePath }),
+      'latin1',
+    );
 
     new Notification({
-      title: 'CamViewer 업데이트 준비',
-      body: `v${serverVersion}으로 업데이트됩니다. 재시작하면 적용됩니다.`,
+      title: 'CamViewer 자동 업데이트',
+      body: `v${serverVersion} 설치를 위해 CamViewer를 자동 재시작합니다.`,
     }).show();
 
-    app.once('before-quit', () => {
-      exec(`start /b "" "${batPath}"`, { windowsHide: true });
+    exec(`start /b "" "${batPath}"`, { windowsHide: true }, () => {
+      app.exit(0);
     });
   } catch {
     // Silently ignore — update check is best-effort
