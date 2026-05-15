@@ -6,7 +6,7 @@ import http from 'http';
 import https from 'https';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import { checkForUpdates } from './updater';
 import { buildWindowsPortableRestartScript } from './updaterCore';
 import { buildViewerUrl, normalizeServerUrl, shouldRestrictViewerNavigation } from './viewerNavigation';
@@ -69,9 +69,12 @@ function restartViewerApp(): { ok: boolean; message?: string } {
     const exePath = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
     const batPath = path.join(app.getPath('temp'), 'camviewer-restart.bat');
     fs.writeFileSync(batPath, buildWindowsPortableRestartScript({ exePath }), 'latin1');
-    exec(`start /b "" "${batPath}"`, { windowsHide: true }, () => {
-      app.exit(0);
-    });
+    spawn('cmd.exe', ['/c', 'start', '', batPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    }).unref();
+    setTimeout(() => app.exit(0), 300);
     return { ok: true, message: 'restarting via portable launcher' };
   }
   app.relaunch();
