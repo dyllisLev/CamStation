@@ -128,9 +128,13 @@ async def check_viewer_health(
             payload = {}
         payload_cameras = payload.get("cameras") or []
         if enabled_set is not None:
+            def camera_base_id(camera: dict) -> str:
+                camera_id = str(camera.get("camera_id") or "")
+                return camera_id[:-4] if camera_id.endswith("_sub") else camera_id
+
             effective_cameras = [
                 camera for camera in payload_cameras
-                if str(camera.get("camera_id") or "") in enabled_set
+                if camera_base_id(camera) in enabled_set
             ]
             expected = len(enabled_set)
             healthy = sum(

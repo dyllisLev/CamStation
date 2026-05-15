@@ -115,8 +115,8 @@ async def test_viewer_health_ignores_disabled_camera_payload(test_db):
         state="degraded",
         payload={
             "cameras": [
-                {"camera_id": "cam1", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
-                {"camera_id": "cam2", "connected": False, "video_ready_state": 0, "stalled_ms": 120000, "error": "stalled"},
+                {"camera_id": "cam1_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+                {"camera_id": "cam2_sub", "connected": False, "video_ready_state": 0, "stalled_ms": 120000, "error": "stalled"},
             ]
         },
     )
