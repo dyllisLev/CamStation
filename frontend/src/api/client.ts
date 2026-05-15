@@ -51,8 +51,9 @@ export const getViewerVersion = (): Promise<{ version: string }> =>
 export const sendViewerHeartbeat = (payload: ViewerHeartbeatPayload): Promise<ViewerClientStatus> =>
   api.post('/viewers/heartbeat', payload).then(r => r.data);
 
-export const getPendingViewerCommands = (clientId: string): Promise<ViewerCommand[]> =>
-  api.get(`/viewers/${encodeURIComponent(clientId)}/commands/pending`).then(r => r.data);
+export const getPendingViewerCommand = (clientId: string): Promise<ViewerCommand | null> =>
+  api.get(`/viewers/${encodeURIComponent(clientId)}/commands/pending`, { validateStatus: status => status === 200 || status === 204 })
+    .then(r => r.status === 204 ? null : r.data);
 
 export const completeViewerCommand = (
   clientId: string,

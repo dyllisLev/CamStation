@@ -126,6 +126,7 @@ class ViewerClientStatus(BaseModel):
     expected_cameras: int
     healthy_cameras: int
     state: Literal["healthy", "degraded", "offline", "unknown"]
+    cameras: list[ViewerCameraState] = Field(default_factory=list)
     payload: dict[str, Any]
 
 

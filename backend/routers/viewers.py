@@ -2,7 +2,7 @@ import json
 import time
 
 import aiosqlite
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from config import get_db_path
 from models import (
@@ -22,7 +22,6 @@ def _camera_is_healthy(camera) -> bool:
         and camera.video_ready_state >= 2
         and camera.error is None
         and camera.stalled_ms < 30_000
-        and (camera.last_binary_at is not None or camera.last_video_time_at is not None)
     )
 
 
@@ -36,6 +35,7 @@ def _state(expected_cameras: int, healthy_cameras: int) -> str:
 
 def _client_from_row(row) -> ViewerClientStatus:
     payload = json.loads(row[12] or "{}")
+    cameras = payload.get("cameras") or []
     return ViewerClientStatus(
         client_id=row[0],
         name=row[1],
@@ -49,6 +49,7 @@ def _client_from_row(row) -> ViewerClientStatus:
         expected_cameras=row[9],
         healthy_cameras=row[10],
         state=row[11],
+        cameras=cameras,
         payload=payload,
     )
 
@@ -173,7 +174,7 @@ async def create_command(client_id: str, payload: CreateViewerCommand):
         return _command_from_row(await cur.fetchone())
 
 
-@router.get("/{client_id}/commands/pending", response_model=list[ViewerCommand])
+@router.get("/{client_id}/commands/pending", response_model=ViewerCommand | None)
 async def claim_pending_commands(client_id: str):
     now = time.time()
     async with aiosqlite.connect(get_db_path()) as db:
@@ -182,27 +183,29 @@ async def claim_pending_commands(client_id: str):
             SELECT id FROM viewer_commands
             WHERE client_id=? AND status='pending'
             ORDER BY created_at ASC
+            LIMIT 1
             """,
             (client_id,),
         )
-        ids = [row[0] for row in await cur.fetchall()]
-        if ids:
-            await db.executemany(
-                "UPDATE viewer_commands SET status='claimed', claimed_at=? WHERE id=?",
-                [(now, command_id) for command_id in ids],
-            )
-            await db.commit()
+        row = await cur.fetchone()
+        if row is None:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        command_id = row[0]
+        await db.execute(
+            "UPDATE viewer_commands SET status='claimed', claimed_at=? WHERE id=?",
+            (now, command_id),
+        )
+        await db.commit()
         cur = await db.execute(
             """
             SELECT id, client_id, command, status, reason, created_at, claimed_at, completed_at, result_json
             FROM viewer_commands
-            WHERE client_id=? AND id IN (%s)
-            ORDER BY created_at ASC
-            """ % ",".join("?" for _ in ids),
-            (client_id, *ids),
-        ) if ids else None
-        rows = await cur.fetchall() if cur else []
-        return [_command_from_row(row) for row in rows]
+            WHERE client_id=? AND id=?
+            """,
+            (client_id, command_id),
+        )
+        return _command_from_row(await cur.fetchone())
 
 
 @router.post("/{client_id}/commands/{command_id}/complete", response_model=ViewerCommand)

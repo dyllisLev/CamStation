@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { completeViewerCommand, getPendingViewerCommands, sendViewerHeartbeat } from './api/client'
+import { completeViewerCommand, getPendingViewerCommand, sendViewerHeartbeat } from './api/client'
 import type { Camera, ViewerCommand } from './types'
 import { buildViewerHeartbeat } from './viewerHealth'
 
@@ -102,11 +102,10 @@ export function useViewerHeartbeat(viewerMode: boolean, cameras: Camera[]): void
       try {
         identity ??= await getViewerIdentity()
         if (cancelled) return
-        const commands = await getPendingViewerCommands(identity.clientId)
-        for (const command of commands) {
-          const result = await runViewerCommand(command)
-          await completeViewerCommand(identity.clientId, command.id, result)
-        }
+        const command = await getPendingViewerCommand(identity.clientId)
+        if (!command) return
+        const result = await runViewerCommand(command)
+        await completeViewerCommand(identity.clientId, command.id, result)
       } catch (error) {
         console.warn('[viewer-command] failed', error)
       }
