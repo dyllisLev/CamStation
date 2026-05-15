@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import os
 import re
+import sqlite3
 import aiosqlite
 import shutil
 from datetime import datetime, timezone, timedelta
@@ -44,6 +45,7 @@ def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) ->
     return [
         "ffmpeg", "-y",
         "-nostats",
+        "-use_wallclock_as_timestamps", "1",
         "-rtsp_transport", "tcp",
         "-i", source_rtsp,
         "-c:v", "copy",
@@ -53,6 +55,7 @@ def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) ->
         "-segment_atclocktime", "1",
         "-reset_timestamps", "1",
         "-strftime", "1",
+        "-avoid_negative_ts", "make_zero",
         output_pattern,
     ]
 
@@ -87,6 +90,34 @@ def _safe_getsize(path: str) -> int | None:
         return None
 
 
+async def _execute_db_write_with_retry(
+    db_path: str,
+    statements: list[tuple[str, tuple]],
+    *,
+    retries: int = 5,
+    base_delay: float = 0.2,
+    busy_timeout_ms: int = 5000,
+) -> list[int]:
+    """Execute DB writes with retry for transient SQLite writer contention."""
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            async with aiosqlite.connect(db_path, timeout=busy_timeout_ms / 1000) as db:
+                await db.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+                rowcounts: list[int] = []
+                for sql, params in statements:
+                    result = await db.execute(sql, params)
+                    rowcounts.append(result.rowcount)
+                await db.commit()
+                return rowcounts
+        except sqlite3.OperationalError as e:
+            last_error = e
+            if "database is locked" not in str(e).lower() or attempt >= retries:
+                raise
+            await asyncio.sleep(base_delay * (2 ** attempt))
+    raise last_error or RuntimeError("DB write failed")
+
+
 def _date_from_segment_path(path: str) -> str:
     """세그먼트가 속한 날짜를 결정한다.
 
@@ -117,14 +148,18 @@ async def _terminate_process(proc: asyncio.subprocess.Process, timeout: float = 
 
 async def _move_to_recordings(temp_path: str, cam_id: str, recordings_dir: str) -> bool:
     """temp 경로의 파일을 최종 recordings 경로로 이동"""
+    # temp_path: /opt/camstation/temp/cam_id/2026-05-12/2026-05-13_07-30.mp4
+    # final:     /opt/camstation/recordings/cam_id/2026-05-13/2026-05-13_07-30.mp4
+    temp_p = Path(temp_path)
+    date_str = _date_from_segment_path(temp_path)
+    final_dir = Path(recordings_dir) / cam_id / date_str
+    final_path = final_dir / temp_p.name
+
     try:
-        # temp_path: /opt/camstation/temp/cam_id/2026-05-12/2026-05-13_07-30.mp4
-        # final:     /opt/camstation/recordings/cam_id/2026-05-13/2026-05-13_07-30.mp4
-        temp_p = Path(temp_path)
-        date_str = _date_from_segment_path(temp_path)
-        final_dir = Path(recordings_dir) / cam_id / date_str
         final_dir.mkdir(parents=True, exist_ok=True)
-        final_path = final_dir / temp_p.name
+        if not temp_p.exists() and final_path.exists():
+            logger.info("Segment already moved: %s", final_path)
+            return True
         shutil.move(str(temp_p), str(final_path))
         logger.info("Moved segment: %s -> %s", temp_path, final_path)
         return True
@@ -149,35 +184,42 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
         filename = os.path.basename(new_path)
 
         try:
-            async with aiosqlite.connect(db_path) as db:
-                if prev_path is not None:
-                    size = _safe_getsize(prev_path)
-                    prev_filename = os.path.basename(prev_path)
-                    # 이전 세그먼트가 완료됨 → 최종 경로로 이동 후 DB 업데이트
-                    moved = await _move_to_recordings(prev_path, cam_id, recordings_dir)
-                    if moved:
-                        result = await db.execute(
+            if prev_path is not None:
+                size = _safe_getsize(prev_path)
+                prev_filename = os.path.basename(prev_path)
+                # 이전 세그먼트가 완료됨 → 최종 경로로 이동 후 DB 업데이트
+                moved = await _move_to_recordings(prev_path, cam_id, recordings_dir)
+                if moved:
+                    rowcounts = await _execute_db_write_with_retry(
+                        db_path,
+                        [(
                             "UPDATE recordings SET ts_end=?, file_size=? "
                             "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
                             (new_ts, size, cam_id, prev_filename),
+                        )],
+                    )
+                    if rowcounts[0] == 0:
+                        # crash/재시작 후 prev segment가 이전 프로세스에서 INSERT된 경우
+                        # (ts_end가 이미 채워져 있거나 filename 불일치) → 대안 쿼리
+                        logger.warning(
+                            "_watch_stderr: UPDATE 0 rows for %s/%s, trying fallback",
+                            cam_id, prev_filename,
                         )
-                        if result.rowcount == 0:
-                            # crash/재시작 후 prev segment가 이전 프로세스에서 INSERT된 경우
-                            # (ts_end가 이미 채워져 있거나 filename 불일치) → 대안 쿼리
-                            logger.warning(
-                                "_watch_stderr: UPDATE 0 rows for %s/%s, trying fallback",
-                                cam_id, prev_filename,
-                            )
-                            await db.execute(
+                        await _execute_db_write_with_retry(
+                            db_path,
+                            [(
                                 "UPDATE recordings SET ts_end=?, file_size=? "
                                 "WHERE camera_id=? AND filename=?",
                                 (new_ts, size, cam_id, prev_filename),
-                            )
-                await db.execute(
+                            )],
+                        )
+            await _execute_db_write_with_retry(
+                db_path,
+                [(
                     "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
                     (cam_id, filename, new_ts),
-                )
-                await db.commit()
+                )],
+            )
         except Exception as e:
             logger.error("_watch_stderr DB error for %s: %s", cam_id, e)
 
@@ -244,20 +286,24 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
             last_size = _safe_getsize(last_path)
             await _move_to_recordings(last_path, cam_id, recordings_dir)
         try:
-            async with aiosqlite.connect(db_path) as db:
-                if last_filename:
-                    await db.execute(
+            if last_filename:
+                await _execute_db_write_with_retry(
+                    db_path,
+                    [(
                         "UPDATE recordings SET ts_end=?, file_size=? "
                         "WHERE camera_id=? AND filename=? AND ts_end IS NULL",
                         (ts_end, last_size, cam_id, last_filename),
-                    )
-                else:
-                    await db.execute(
+                    )],
+                )
+            else:
+                await _execute_db_write_with_retry(
+                    db_path,
+                    [(
                         "UPDATE recordings SET ts_end=?, file_size=? "
                         "WHERE camera_id=? AND ts_end IS NULL",
                         (ts_end, last_size, cam_id),
-                    )
-                await db.commit()
+                    )],
+                )
         except Exception as e:
             logger.error("_run_recording DB error for %s: %s", cam_id, e)
 

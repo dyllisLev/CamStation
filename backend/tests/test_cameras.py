@@ -8,7 +8,7 @@ async def test_get_cameras_returns_list():
     with respx.mock:
         respx.get("http://127.0.0.1:1984/api/streams").mock(
             return_value=httpx.Response(200, json={
-                "camera-yard":  {"producers": [{"url": "rtsp://x"}]},
+                "camera-yard":  {"producers": [{"id": 1, "url": "rtsp://x"}]},
                 "camera-storage-1": {},
             })
         )

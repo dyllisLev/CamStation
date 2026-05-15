@@ -74,5 +74,18 @@ async def backfill_recordings(recordings_dir: str, db_path: str, active_cam_ids:
                         "(camera_id, filename, ts_start, ts_end, file_size) VALUES(?,?,?,?,?)",
                         (cam_id, f.name, ts_start, ts_end, file_size),
                     )
+                    if ts_end is None:
+                        await db.execute(
+                            "UPDATE recordings SET file_size=? "
+                            "WHERE camera_id=? AND ts_start=? AND file_size IS NULL",
+                            (file_size, cam_id, ts_start),
+                        )
+                    else:
+                        await db.execute(
+                            "UPDATE recordings SET ts_end=?, file_size=? "
+                            "WHERE camera_id=? AND ts_start=? "
+                            "AND (ts_end IS NULL OR file_size IS NULL)",
+                            (ts_end, file_size, cam_id, ts_start),
+                        )
 
         await db.commit()

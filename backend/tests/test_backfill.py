@@ -76,6 +76,34 @@ async def test_backfill_last_file_null_if_active(tmp_path, test_db):
 
 
 @pytest.mark.anyio
+async def test_backfill_repairs_existing_open_segment(tmp_path, test_db):
+    from services.backfill import backfill_recordings
+
+    day_dir = tmp_path / "recordings" / "cam1" / "2026-04-28"
+    day_dir.mkdir(parents=True)
+    (day_dir / "14-30.mp4").write_bytes(b"x" * 1000)
+    (day_dir / "15-00.mp4").write_bytes(b"x" * 2000)
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute(
+            "INSERT INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
+            ("cam1", "14-30.mp4", 1777354200.0),
+        )
+        await db.commit()
+
+    await backfill_recordings(str(tmp_path / "recordings"), test_db, active_cam_ids=[])
+
+    async with aiosqlite.connect(test_db) as db:
+        cur = await db.execute(
+            "SELECT ts_end, file_size FROM recordings WHERE camera_id='cam1' AND filename='14-30.mp4'"
+        )
+        row = await cur.fetchone()
+
+    assert row[0] is not None
+    assert row[1] == 1000
+
+
+@pytest.mark.anyio
 async def test_backfill_idempotent(tmp_path, test_db):
     from services.backfill import backfill_recordings
 

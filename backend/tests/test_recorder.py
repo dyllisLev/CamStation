@@ -45,6 +45,21 @@ def test_ffmpeg_cmd_disables_progress_stats_on_stderr():
     assert cmd.index("-nostats") < cmd.index("-i")
 
 
+def test_ffmpeg_cmd_uses_wallclock_timestamps_for_segment_duration():
+    """RTSP 원본 PTS 누적으로 MP4 길이가 몇 시간으로 보이지 않도록 wallclock 기준으로 리타임한다."""
+    cmd = build_ffmpeg_cmd(
+        source_rtsp="rtsp://127.0.0.1:8554/camera-site-1",
+        output_dir="/tmp",
+        segment_minutes=30,
+    )
+
+    assert "-use_wallclock_as_timestamps" in cmd
+    assert cmd[cmd.index("-use_wallclock_as_timestamps") + 1] == "1"
+    assert cmd.index("-use_wallclock_as_timestamps") < cmd.index("-i")
+    assert "-avoid_negative_ts" in cmd
+    assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+
+
 def test_ffmpeg_cmd_filename_includes_date():
     """파일명이 YYYY-MM-DD_HH-MM.mp4 형식이어야 한다."""
     from services.recorder import build_ffmpeg_cmd
@@ -129,6 +144,61 @@ def test_date_from_segment_path_falls_back_to_parent_for_legacy_filename():
     assert _date_from_segment_path(
         "/opt/camstation/temp/camera-yard/2026-05-12/10-00.mp4"
     ) == "2026-05-12"
+
+
+@pytest.mark.asyncio
+async def test_move_to_recordings_is_idempotent_when_file_already_moved(tmp_path):
+    from services.recorder import _move_to_recordings
+
+    temp_path = tmp_path / "temp" / "cam1" / "2026-05-14" / "2026-05-15_00-00.mp4"
+    final_path = tmp_path / "recordings" / "cam1" / "2026-05-15" / "2026-05-15_00-00.mp4"
+    final_path.parent.mkdir(parents=True)
+    final_path.write_bytes(b"already moved")
+
+    assert await _move_to_recordings(str(temp_path), "cam1", str(tmp_path / "recordings")) is True
+    assert final_path.read_bytes() == b"already moved"
+
+
+@pytest.mark.asyncio
+async def test_db_execute_retries_when_database_is_locked(monkeypatch, tmp_path):
+    from services import recorder
+
+    attempts = 0
+
+    class FakeResult:
+        rowcount = 1
+
+    class FakeDb:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, sql, params=()):
+            nonlocal attempts
+            if sql.startswith("PRAGMA"):
+                return FakeResult()
+            attempts += 1
+            if attempts == 1:
+                import sqlite3
+                raise sqlite3.OperationalError("database is locked")
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(recorder.aiosqlite, "connect", lambda *args, **kwargs: FakeDb())
+
+    result = await recorder._execute_db_write_with_retry(
+        str(tmp_path / "test.db"),
+        [("UPDATE recordings SET ts_end=?", (1.0,))],
+        retries=2,
+        base_delay=0,
+    )
+
+    assert result == [1]
+    assert attempts == 2
 
 
 @pytest.mark.asyncio
