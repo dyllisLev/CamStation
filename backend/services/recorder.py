@@ -114,7 +114,16 @@ async def _execute_db_write_with_retry(
             last_error = e
             if "database is locked" not in str(e).lower() or attempt >= retries:
                 raise
-            await asyncio.sleep(base_delay * (2 ** attempt))
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "DB write locked; retrying attempt=%d/%d delay=%.2fs statements=%d error=%s",
+                attempt + 1,
+                retries,
+                delay,
+                len(statements),
+                e,
+            )
+            await asyncio.sleep(delay)
     raise last_error or RuntimeError("DB write failed")
 
 
@@ -158,13 +167,32 @@ async def _move_to_recordings(temp_path: str, cam_id: str, recordings_dir: str) 
     try:
         final_dir.mkdir(parents=True, exist_ok=True)
         if not temp_p.exists() and final_path.exists():
-            logger.info("Segment already moved: %s", final_path)
+            logger.info(
+                "Segment already moved: camera=%s final=%s size=%s",
+                cam_id,
+                final_path,
+                _safe_getsize(str(final_path)),
+            )
             return True
+        temp_size = _safe_getsize(str(temp_p))
         shutil.move(str(temp_p), str(final_path))
-        logger.info("Moved segment: %s -> %s", temp_path, final_path)
+        logger.info(
+            "Moved segment: camera=%s temp=%s final=%s size=%s date=%s",
+            cam_id,
+            temp_path,
+            final_path,
+            temp_size,
+            date_str,
+        )
         return True
     except Exception as e:
-        logger.error("Failed to move segment %s: %s", temp_path, e)
+        logger.exception(
+            "Failed to move segment: camera=%s temp=%s final=%s error=%s",
+            cam_id,
+            temp_path,
+            final_path,
+            e,
+        )
         return False
 
 
@@ -184,9 +212,25 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
         filename = os.path.basename(new_path)
 
         try:
+            logger.info(
+                "New recording segment detected: camera=%s pid=%s path=%s filename=%s ts_start=%.3f",
+                cam_id,
+                getattr(proc, "pid", None),
+                new_path,
+                filename,
+                new_ts,
+            )
             if prev_path is not None:
                 size = _safe_getsize(prev_path)
                 prev_filename = os.path.basename(prev_path)
+                logger.info(
+                    "Closing previous recording segment: camera=%s prev=%s next=%s size=%s ts_end=%.3f",
+                    cam_id,
+                    prev_path,
+                    new_path,
+                    size,
+                    new_ts,
+                )
                 # 이전 세그먼트가 완료됨 → 최종 경로로 이동 후 DB 업데이트
                 moved = await _move_to_recordings(prev_path, cam_id, recordings_dir)
                 if moved:
@@ -198,14 +242,22 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                             (new_ts, size, cam_id, prev_filename),
                         )],
                     )
+                    logger.info(
+                        "Closed recording DB row: camera=%s filename=%s rowcount=%s size=%s ts_end=%.3f",
+                        cam_id,
+                        prev_filename,
+                        rowcounts[0],
+                        size,
+                        new_ts,
+                    )
                     if rowcounts[0] == 0:
                         # crash/재시작 후 prev segment가 이전 프로세스에서 INSERT된 경우
                         # (ts_end가 이미 채워져 있거나 filename 불일치) → 대안 쿼리
                         logger.warning(
-                            "_watch_stderr: UPDATE 0 rows for %s/%s, trying fallback",
-                            cam_id, prev_filename,
+                            "Recording DB close updated 0 rows; trying fallback camera=%s filename=%s ts_end=%.3f size=%s",
+                            cam_id, prev_filename, new_ts, size,
                         )
-                        await _execute_db_write_with_retry(
+                        fallback_counts = await _execute_db_write_with_retry(
                             db_path,
                             [(
                                 "UPDATE recordings SET ts_end=?, file_size=? "
@@ -213,15 +265,42 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                                 (new_ts, size, cam_id, prev_filename),
                             )],
                         )
-            await _execute_db_write_with_retry(
+                        logger.warning(
+                            "Recording DB fallback close result: camera=%s filename=%s rowcount=%s",
+                            cam_id,
+                            prev_filename,
+                            fallback_counts[0],
+                        )
+                else:
+                    logger.error(
+                        "Previous recording segment move failed; DB close skipped camera=%s prev=%s next=%s",
+                        cam_id,
+                        prev_path,
+                        new_path,
+                    )
+            insert_counts = await _execute_db_write_with_retry(
                 db_path,
                 [(
                     "INSERT OR IGNORE INTO recordings(camera_id, filename, ts_start) VALUES(?,?,?)",
                     (cam_id, filename, new_ts),
                 )],
             )
+            logger.info(
+                "Opened recording DB row: camera=%s filename=%s rowcount=%s ts_start=%.3f",
+                cam_id,
+                filename,
+                insert_counts[0],
+                new_ts,
+            )
         except Exception as e:
-            logger.error("_watch_stderr DB error for %s: %s", cam_id, e)
+            logger.exception(
+                "Recording segment DB handling failed: camera=%s pid=%s new_path=%s prev_path=%s error=%s",
+                cam_id,
+                getattr(proc, "pid", None),
+                new_path,
+                prev_path,
+                e,
+            )
 
         prev_path = new_path
         _current_segment_paths[cam_id] = new_path
