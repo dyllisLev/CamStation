@@ -31,6 +31,7 @@ _temp_dir: str = ""
 _watchdog_task: asyncio.Task | None = None
 _current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 temp 파일 전체 경로
 _stderr_tasks: dict[str, asyncio.Task] = {}
+_maintenance_reason: str | None = None
 
 
 def _next_delay(current: int, ran: float, *, success_threshold: float = 30.0, max_delay: int = 60) -> int:
@@ -484,6 +485,7 @@ async def stop_sub_keepalive(cam_id: str):
 
 
 async def _midnight_watchdog():
+    global _maintenance_reason
     while True:
         now = datetime.now(KST)
         next_midnight = (now + timedelta(days=1)).replace(
@@ -496,15 +498,19 @@ async def _midnight_watchdog():
         cam_ids = list(_processes.keys())
         sub_cam_ids = list(_sub_processes.keys())
         logger.info("Midnight watchdog: restarting %d recordings for new KST day", len(cam_ids))
-        for cam_id in cam_ids:
-            await stop_recording(cam_id)
-        for cam_id in sub_cam_ids:
-            await stop_sub_keepalive(cam_id)
-        await asyncio.sleep(2)
-        for cam_id in cam_ids:
-            await start_recording(cam_id, _segment_minutes, _recordings_dir, _temp_dir)
-        for cam_id in sub_cam_ids:
-            await start_sub_keepalive(cam_id)
+        _maintenance_reason = "midnight_watchdog_restart"
+        try:
+            # Restart each recorder immediately after stopping it.  This avoids a
+            # long all-cameras-down window when closing/moving large 23:30 files
+            # takes minutes, and health checks can skip expected transient gaps.
+            for cam_id in cam_ids:
+                await stop_recording(cam_id)
+                await start_recording(cam_id, _segment_minutes, _recordings_dir, _temp_dir)
+            for cam_id in sub_cam_ids:
+                await stop_sub_keepalive(cam_id)
+                await start_sub_keepalive(cam_id)
+        finally:
+            _maintenance_reason = None
 
 
 async def start_all(cam_ids: list[str], segment_minutes: int, recordings_dir: str, temp_dir: str):
@@ -530,3 +536,7 @@ async def stop_all():
 
 def get_active() -> list[str]:
     return list(_processes.keys())
+
+
+def get_maintenance_reason() -> str | None:
+    return _maintenance_reason

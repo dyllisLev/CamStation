@@ -104,6 +104,29 @@ def _latest_mp4(path: Path) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+def _final_path_for_temp(temp_path: Path, base_temp: Path, base_recordings: Path, cam_id: str) -> Path | None:
+    """Return the expected recordings path for a temp segment.
+
+    Old ffmpeg processes may keep writing today's filename under yesterday's temp
+    directory across midnight. The final recordings date must therefore come
+    from the filename when it carries YYYY-MM-DD, matching recorder behavior.
+    """
+    try:
+        temp_path.relative_to(base_temp / cam_id)
+    except ValueError:
+        return None
+    stem = temp_path.stem
+    date_str = temp_path.parent.name
+    if "_" in stem:
+        candidate = stem.split("_", 1)[0]
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+            date_str = candidate
+        except ValueError:
+            pass
+    return base_recordings / cam_id / date_str / temp_path.name
+
+
 def _issue(
     code: str,
     severity: str,
@@ -168,16 +191,29 @@ async def check_recording_health(
         if latest_temp:
             age = now_ts - latest_temp.stat().st_mtime
             if age > stale_after:
-                issues.append(_issue(
-                    "segment_not_moved",
-                    "ERROR",
-                    cam_id,
-                    f"temp 세그먼트가 {age:.0f}초 동안 recordings로 이동되지 않았습니다: {latest_temp}",
-                    path=str(latest_temp),
-                    filename=latest_temp.name,
-                    age_sec=age,
-                    file_size=latest_temp.stat().st_size,
-                ))
+                temp_size = latest_temp.stat().st_size
+                final_path = _final_path_for_temp(latest_temp, base_temp, base_recordings, cam_id)
+                if final_path is not None and final_path.exists() and final_path.stat().st_size >= temp_size:
+                    logger.info(
+                        "Ignoring stale orphan temp with existing final recording: camera=%s temp=%s final=%s temp_size=%s final_size=%s age_sec=%.0f",
+                        cam_id,
+                        latest_temp,
+                        final_path,
+                        temp_size,
+                        final_path.stat().st_size,
+                        age,
+                    )
+                else:
+                    issues.append(_issue(
+                        "segment_not_moved",
+                        "ERROR",
+                        cam_id,
+                        f"temp 세그먼트가 {age:.0f}초 동안 recordings로 이동되지 않았습니다: {latest_temp}",
+                        path=str(latest_temp),
+                        filename=latest_temp.name,
+                        age_sec=age,
+                        file_size=temp_size,
+                    ))
         else:
             latest_done = _latest_mp4(base_recordings / cam_id) if (base_recordings / cam_id).exists() else None
             if latest_done is None or now_ts - latest_done.stat().st_mtime > stale_after:
@@ -319,11 +355,17 @@ async def run_recording_health_loop(
     get_active_cam_ids,
     get_segment_minutes,
     get_camera_ids=None,
+    get_skip_reason=None,
     interval_sec: int = 300,
     alert_sender=None,
 ) -> None:
     while True:
         try:
+            skip_reason = get_skip_reason() if get_skip_reason is not None else None
+            if skip_reason:
+                logger.info("recording_health_skipped reason=%s", skip_reason)
+                await asyncio.sleep(interval_sec)
+                continue
             segment_minutes = int(await get_segment_minutes())
             current_cam_ids = list(get_camera_ids()) if get_camera_ids is not None else cam_ids
             report = await check_recording_health(

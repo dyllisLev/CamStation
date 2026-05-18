@@ -118,6 +118,39 @@ async def test_recording_health_detects_stale_temp_file_not_moved(tmp_path):
     assert any(i.code == "segment_not_moved" and i.path == str(stale) for i in report.issues)
 
 
+async def test_recording_health_ignores_stale_temp_when_final_recording_exists(tmp_path):
+    from services.recording_health import check_recording_health
+
+    now = time.time()
+    db_path = tmp_path / "camstation.db"
+    await _init_recordings_db(db_path)
+
+    stale_dir = tmp_path / "temp" / "cam1" / "2026-05-17"
+    stale_dir.mkdir(parents=True)
+    stale = stale_dir / "2026-05-18_00-00.mp4"
+    stale.write_bytes(b"stale")
+    old = now - 7200
+    os.utime(stale, (old, old))
+
+    final_dir = tmp_path / "recordings" / "cam1" / "2026-05-18"
+    final_dir.mkdir(parents=True)
+    final = final_dir / stale.name
+    final.write_bytes(b"stale-final")
+
+    report = await check_recording_health(
+        ["cam1"],
+        str(tmp_path / "recordings"),
+        str(tmp_path / "temp"),
+        str(db_path),
+        segment_minutes=30,
+        active_cam_ids=["cam1"],
+        now_ts=now,
+    )
+
+    assert report.ok is True
+    assert not any(i.code == "segment_not_moved" for i in report.issues)
+
+
 async def test_recording_health_detects_stale_open_db_segment(tmp_path):
     from services.recording_health import check_recording_health
 
