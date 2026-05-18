@@ -528,6 +528,13 @@ async def stop_all():
     if _watchdog_task:
         _watchdog_task.cancel()
         _watchdog_task = None
+
+    # Mark every loop as intentionally stopping before awaiting the first one.
+    # Otherwise, while shutdown is busy closing a large segment for camera A,
+    # camera B can observe its ffmpeg exit and auto-retry, lengthening shutdown
+    # and briefly starting new recorders during service restart.
+    _stopping_rec.update(_processes.keys())
+    _stopping_sub.update(_sub_processes.keys())
     for cam_id in list(_processes.keys()):
         await stop_recording(cam_id)
     for cam_id in list(_sub_processes.keys()):
