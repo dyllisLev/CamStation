@@ -484,6 +484,71 @@ async def stop_sub_keepalive(cam_id: str):
     logger.info("Stopped sub-stream keepalive for %s", cam_id)
 
 
+async def _restart_recording_for_new_day(
+    cam_id: str,
+    *,
+    segment_minutes: int,
+    recordings_dir: str,
+    temp_dir: str,
+    stop_timeout: float = 45.0,
+):
+    """Restart one recorder for KST date rollover, guaranteeing a start attempt.
+
+    At midnight ffmpeg may be busy closing/writing the new segment.  A stuck
+    stop must not block the whole watchdog or leave the camera missing from
+    `_processes`; health checks then report `recorder_not_active` until a manual
+    backend restart.  This helper bounds the stop phase, cleans stale in-memory
+    state, and always attempts to start the recorder again.
+    """
+    try:
+        await asyncio.wait_for(stop_recording(cam_id), timeout=stop_timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Midnight watchdog: stop timed out for %s; forcing recorder restart",
+            cam_id,
+        )
+    except Exception:
+        logger.exception(
+            "Midnight watchdog: stop failed for %s; forcing recorder restart",
+            cam_id,
+        )
+    finally:
+        proc = _active_procs.pop(cam_id, None)
+        if proc and proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+        _processes.pop(cam_id, None)
+        _stderr_tasks.pop(cam_id, None)
+        _current_segment_paths.pop(cam_id, None)
+        _stopping_rec.discard(cam_id)
+
+    await start_recording(cam_id, segment_minutes, recordings_dir, temp_dir)
+
+
+async def _restart_sub_keepalive_for_new_day(cam_id: str, *, stop_timeout: float = 30.0):
+    try:
+        await asyncio.wait_for(stop_sub_keepalive(cam_id), timeout=stop_timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Midnight watchdog: sub keepalive stop timed out for %s; forcing restart",
+            cam_id,
+        )
+    except Exception:
+        logger.exception(
+            "Midnight watchdog: sub keepalive stop failed for %s; forcing restart",
+            cam_id,
+        )
+    finally:
+        proc = _active_sub_procs.pop(cam_id, None)
+        if proc and proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+        _sub_processes.pop(cam_id, None)
+        _stopping_sub.discard(cam_id)
+
+    await start_sub_keepalive(cam_id)
+
+
 async def _midnight_watchdog():
     global _maintenance_reason
     while True:
@@ -504,11 +569,14 @@ async def _midnight_watchdog():
             # long all-cameras-down window when closing/moving large 23:30 files
             # takes minutes, and health checks can skip expected transient gaps.
             for cam_id in cam_ids:
-                await stop_recording(cam_id)
-                await start_recording(cam_id, _segment_minutes, _recordings_dir, _temp_dir)
+                await _restart_recording_for_new_day(
+                    cam_id,
+                    segment_minutes=_segment_minutes,
+                    recordings_dir=_recordings_dir,
+                    temp_dir=_temp_dir,
+                )
             for cam_id in sub_cam_ids:
-                await stop_sub_keepalive(cam_id)
-                await start_sub_keepalive(cam_id)
+                await _restart_sub_keepalive_for_new_day(cam_id)
         finally:
             _maintenance_reason = None
 

@@ -229,3 +229,50 @@ async def test_terminate_process_kills_when_terminate_does_not_exit():
 
     assert proc.terminated is True
     assert proc.killed is True
+
+
+@pytest.mark.asyncio
+async def test_midnight_restart_starts_recorder_even_when_stop_hangs(monkeypatch):
+    from services import recorder
+
+    calls = []
+    original_processes = dict(recorder._processes)
+    original_active_procs = dict(recorder._active_procs)
+    original_stopping = set(recorder._stopping_rec)
+    try:
+        recorder._processes["camera-yard"] = object()
+        recorder._active_procs["camera-yard"] = None
+        recorder._stopping_rec.discard("camera-yard")
+
+        async def hanging_stop(cam_id):
+            calls.append(("stop", cam_id))
+            await recorder.asyncio.sleep(10)
+
+        async def fake_start(cam_id, segment_minutes, recordings_dir, temp_dir):
+            calls.append(("start", cam_id, segment_minutes, recordings_dir, temp_dir))
+            recorder._processes[cam_id] = "restarted"
+
+        monkeypatch.setattr(recorder, "stop_recording", hanging_stop)
+        monkeypatch.setattr(recorder, "start_recording", fake_start)
+
+        await recorder._restart_recording_for_new_day(
+            "camera-yard",
+            segment_minutes=30,
+            recordings_dir="/recordings",
+            temp_dir="/temp",
+            stop_timeout=0.01,
+        )
+
+        assert calls == [
+            ("stop", "camera-yard"),
+            ("start", "camera-yard", 30, "/recordings", "/temp"),
+        ]
+        assert recorder._processes["camera-yard"] == "restarted"
+        assert "camera-yard" not in recorder._stopping_rec
+    finally:
+        recorder._processes.clear()
+        recorder._processes.update(original_processes)
+        recorder._active_procs.clear()
+        recorder._active_procs.update(original_active_procs)
+        recorder._stopping_rec.clear()
+        recorder._stopping_rec.update(original_stopping)
