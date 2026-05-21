@@ -56,6 +56,7 @@ interface InternalCameraState extends ViewerCameraHeartbeat {
 }
 
 const cameraStates = new Map<string, InternalCameraState>()
+const activeCameraRefs = new Map<string, number>()
 
 function nowSeconds(): number {
   return Date.now() / 1000
@@ -73,6 +74,21 @@ function isCameraHealthy(camera: ViewerCameraHeartbeat): boolean {
 
 export function resetViewerHealthStore(): void {
   cameraStates.clear()
+  activeCameraRefs.clear()
+}
+
+export function registerViewerCamera(cameraId: string): void {
+  activeCameraRefs.set(cameraId, (activeCameraRefs.get(cameraId) ?? 0) + 1)
+}
+
+export function unregisterViewerCamera(cameraId: string): void {
+  const next = (activeCameraRefs.get(cameraId) ?? 0) - 1
+  if (next > 0) {
+    activeCameraRefs.set(cameraId, next)
+    return
+  }
+  activeCameraRefs.delete(cameraId)
+  cameraStates.delete(cameraId)
 }
 
 export function markViewerCameraEvent(cameraId: string, event: ViewerCameraEvent): ViewerCameraHeartbeat {
@@ -112,7 +128,7 @@ export function markViewerCameraEvent(cameraId: string, event: ViewerCameraEvent
 }
 
 export function summarizeViewerHealth(expectedCameras = cameraStates.size): ViewerHealthSummary {
-  const cameras = [...cameraStates.values()]
+  const cameras = [...cameraStates.values()].filter(camera => activeCameraRefs.has(camera.camera_id))
   const healthyCameras = cameras.filter(isCameraHealthy).length
   return {
     expectedCameras,
@@ -123,6 +139,7 @@ export function summarizeViewerHealth(expectedCameras = cameraStates.size): View
 
 export function buildViewerHeartbeat(identity: ViewerHeartbeatIdentity): ViewerHeartbeatPayload {
   const cameras = [...cameraStates.values()]
+    .filter(camera => activeCameraRefs.has(camera.camera_id))
     .sort((a, b) => a.camera_id.localeCompare(b.camera_id))
     .map(({ bytes_received: _bytesReceived, ...camera }) => ({ ...camera }))
 

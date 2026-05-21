@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { markViewerCameraEvent } from '../viewerHealth';
+import { markViewerCameraEvent, registerViewerCamera, unregisterViewerCamera } from '../viewerHealth';
 
 // Codecs go2rtc supports, in priority order
 const CODECS = [
@@ -33,12 +33,19 @@ export function useMSE(camId: string) {
 
   useEffect(() => {
     if (!camId) return;
+    registerViewerCamera(camId);
     const videoEl = videoRef.current;
-    if (!videoEl) return;
+    if (!videoEl) {
+      unregisterViewerCamera(camId);
+      return;
+    }
     const video: HTMLVideoElement = videoEl;
 
     const msClassOrNull = getMediaSourceClass();
-    if (!msClassOrNull) return;
+    if (!msClassOrNull) {
+      unregisterViewerCamera(camId);
+      return;
+    }
     const MSClass: typeof MediaSource = msClassOrNull;
 
     const useSrcObject = 'ManagedMediaSource' in window;
@@ -249,6 +256,7 @@ export function useMSE(camId: string) {
       if (videoProgressTimer) clearInterval(videoProgressTimer);
       video.removeEventListener('error', onVideoError);
       teardown();
+      unregisterViewerCamera(camId);
       setConnected(false);
     };
   }, [camId]);
