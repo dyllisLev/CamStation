@@ -14,12 +14,19 @@ import {
   getSettings,
   getStorageStats,
   getSystemVersion,
+  getCameraAdmin,
   getViewerVersion,
   listRecordings,
+  rebootCamera,
   triggerUpdate,
+  setCameraAdminEnabled,
+  archiveCameraAdmin,
+  applyCameraAdminConfig,
+  createCameraAdmin,
+  updateCameraAdmin,
   updateSettings,
 } from '../../api/client'
-import type { Camera, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
+import type { Camera, CameraAdminItem, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
 import {
   NEW_LIVE_TIMELINE_COLLAPSED_KEY,
   calculateLiveGridRowHeight,
@@ -755,6 +762,14 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
   const [statsLoading, setStatsLoading] = useState(true)
   const [version, setVersion] = useState<SystemVersion | null>(null)
   const [viewerVersion, setViewerVersion] = useState<string | null>(null)
+  const [cameraConfig, setCameraConfig] = useState<CameraAdminItem[]>([])
+  const [cameraConfigLoading, setCameraConfigLoading] = useState(true)
+  const [cameraToggling, setCameraToggling] = useState<string | null>(null)
+  const [cameraRebooting, setCameraRebooting] = useState<string | null>(null)
+  const [cameraArchiving, setCameraArchiving] = useState<string | null>(null)
+  const [cameraApplying, setCameraApplying] = useState(false)
+  const [cameraEditing, setCameraEditing] = useState(false)
+  const [cameraMessage, setCameraMessage] = useState<string | null>(null)
   const [updateLoading, setUpdateLoading] = useState(false)
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
 
@@ -762,17 +777,140 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
     getSystemVersion().then(setVersion).catch(console.error)
   }, [])
 
+  const loadCameraConfig = useCallback(() => {
+    setCameraConfigLoading(true)
+    getCameraAdmin()
+      .then(setCameraConfig)
+      .catch(error => {
+        console.error(error)
+        setCameraMessage('카메라 설정을 불러오지 못했습니다.')
+      })
+      .finally(() => setCameraConfigLoading(false))
+  }, [])
+
   useEffect(() => {
     getSettings().then(setForm).catch(console.error)
     getStorageStats().then(setStats).catch(console.error).finally(() => setStatsLoading(false))
     getViewerVersion().then(data => setViewerVersion(data.version)).catch(() => {})
     loadVersion()
-  }, [loadVersion])
+    loadCameraConfig()
+  }, [loadVersion, loadCameraConfig])
 
   const saveSettings = async () => {
     await updateSettings(form)
     setSaved(true)
     window.setTimeout(() => setSaved(false), 1600)
+  }
+
+  const handleToggleCamera = async (camera: CameraAdminItem) => {
+    const nextEnabled = !camera.enabled
+    setCameraToggling(camera.id)
+    setCameraMessage(null)
+    try {
+      const updated = await setCameraAdminEnabled(camera.id, nextEnabled)
+      setCameraConfig(previous => previous.map(item => item.id === updated.id ? updated : item))
+      setCameraMessage(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 완료. 설정 적용을 누르면 go2rtc.yaml에 반영됩니다.`)
+    } catch (error) {
+      console.error(error)
+      setCameraMessage(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 실패.`)
+    } finally {
+      setCameraToggling(null)
+    }
+  }
+
+  const handleRebootCamera = async (camera: CameraAdminItem) => {
+    if (!window.confirm(`${camera.display_name} 카메라를 ONVIF로 재부팅할까요?`)) return
+    setCameraRebooting(camera.id)
+    setCameraMessage(null)
+    try {
+      await rebootCamera(camera.id)
+      setCameraMessage(`${camera.id} 재부팅 요청 전송 완료. 카메라가 1~2분 정도 오프라인일 수 있습니다.`)
+    } catch (error) {
+      console.error(error)
+      setCameraMessage(`${camera.id} 재부팅 요청 실패.`)
+    } finally {
+      setCameraRebooting(null)
+    }
+  }
+
+  const handleArchiveCamera = async (camera: CameraAdminItem) => {
+    if (!window.confirm(`${camera.display_name} 카메라를 아카이브할까요? 과거 녹화/모션 데이터는 보존됩니다.`)) return
+    setCameraArchiving(camera.id)
+    setCameraMessage(null)
+    try {
+      const archived = await archiveCameraAdmin(camera.id)
+      setCameraConfig(previous => previous.filter(item => item.id !== archived.id))
+      setCameraMessage(`${camera.id} 아카이브 완료. 설정 적용을 누르면 go2rtc.yaml에서 제외됩니다.`)
+    } catch (error) {
+      console.error(error)
+      setCameraMessage(`${camera.id} 아카이브 실패.`)
+    } finally {
+      setCameraArchiving(null)
+    }
+  }
+
+  const handleApplyCameraConfig = async () => {
+    setCameraApplying(true)
+    setCameraMessage(null)
+    try {
+      const result = await applyCameraAdminConfig()
+      setCameraMessage(result.changed ? `카메라 설정 적용 완료: go2rtc 재시작, 녹화 조정, Viewer reload ${result.viewer_reload_commands}건 예약.` : '적용할 변경 사항이 없습니다.')
+      loadCameraConfig()
+    } catch (error) {
+      console.error(error)
+      setCameraMessage('카메라 설정 적용 실패.')
+    } finally {
+      setCameraApplying(false)
+    }
+  }
+
+  const handleCreateCamera = async () => {
+    const id = window.prompt('새 카메라 ID를 입력하세요. 생성 후 변경하지 않는 내부 식별자입니다.')?.trim()
+    if (!id) return
+    const displayName = window.prompt('표시명을 입력하세요.', id)?.trim()
+    if (!displayName) return
+    const mainStreamUrl = window.prompt('메인 RTSP URL을 입력하세요. 이 값은 화면에 다시 노출되지 않습니다.')?.trim()
+    if (!mainStreamUrl) return
+    const subStreamUrl = window.prompt('보조 RTSP URL을 입력하세요. 없으면 비워두세요.')?.trim() || null
+    const location = window.prompt('위치/그룹을 입력하세요. 없으면 비워두세요.')?.trim() || null
+    setCameraEditing(true)
+    setCameraMessage(null)
+    try {
+      const created = await createCameraAdmin({
+        id,
+        display_name: displayName,
+        location,
+        enabled: true,
+        main_stream_url: mainStreamUrl,
+        sub_stream_url: subStreamUrl,
+      })
+      setCameraConfig(previous => [...previous, created].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id)))
+      setCameraMessage(`${created.id} 추가 완료. 설정 적용을 누르면 go2rtc.yaml에 반영됩니다.`)
+    } catch (error) {
+      console.error(error)
+      setCameraMessage(`${id} 추가 실패.`)
+    } finally {
+      setCameraEditing(false)
+    }
+  }
+
+  const handleEditCamera = async (camera: CameraAdminItem) => {
+    const displayName = window.prompt('표시명을 수정하세요.', camera.display_name)?.trim()
+    if (!displayName) return
+    const location = window.prompt('위치/그룹을 수정하세요. 없으면 비워두세요.', camera.location ?? '')?.trim() || null
+    const notes = window.prompt('운영 메모를 수정하세요. 없으면 비워두세요.', camera.notes ?? '')?.trim() || null
+    setCameraEditing(true)
+    setCameraMessage(null)
+    try {
+      const updated = await updateCameraAdmin(camera.id, { display_name: displayName, location, notes })
+      setCameraConfig(previous => previous.map(item => item.id === updated.id ? updated : item))
+      setCameraMessage(`${camera.id} 수정 완료.`)
+    } catch (error) {
+      console.error(error)
+      setCameraMessage(`${camera.id} 수정 실패.`)
+    } finally {
+      setCameraEditing(false)
+    }
   }
 
   const runUpdate = async () => {
@@ -887,6 +1025,46 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
         </section>
 
         <aside className="new-settings-side">
+          <article className="new-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <h2>카메라 관리</h2>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="new-ghost" type="button" disabled={cameraConfigLoading || cameraToggling !== null || cameraRebooting !== null || cameraArchiving !== null || cameraApplying || cameraEditing} onClick={loadCameraConfig}>새로고침</button>
+                <button className="new-ghost" type="button" disabled={cameraConfigLoading || cameraApplying || cameraEditing} onClick={handleCreateCamera}>{cameraEditing ? '처리 중...' : '카메라 추가'}</button>
+                <button className="new-primary" type="button" disabled={cameraConfigLoading || cameraApplying || cameraEditing} onClick={handleApplyCameraConfig}>{cameraApplying ? '적용 중...' : '설정 적용'}</button>
+              </div>
+            </div>
+            <p className="new-muted">DB의 카메라 마스터를 관리합니다. 활성/비활성·아카이브 후 설정 적용을 누르면 go2rtc.yaml에 반영됩니다. 재부팅은 ONVIF SystemReboot 요청입니다.</p>
+            {cameraConfigLoading ? (
+              <div className="new-muted">카메라 설정을 불러오는 중입니다.</div>
+            ) : cameraConfig.length === 0 ? (
+              <div className="new-muted">카메라 설정이 없습니다.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {cameraConfig.map(camera => {
+                  const busy = cameraToggling === camera.id
+                  const rebooting = cameraRebooting === camera.id
+                  const archiving = cameraArchiving === camera.id
+                  const controlsDisabled = cameraToggling !== null || cameraRebooting !== null || cameraArchiving !== null || cameraApplying || cameraEditing
+                  return (
+                    <div key={camera.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 10 }}>
+                      <div>
+                        <strong>{camera.display_name}</strong>
+                        <div className="new-muted">{camera.id} · {camera.enabled ? (camera.online ? '온라인' : '오프라인') : '비활성화'} · 보조 스트림 {camera.has_sub ? '있음' : '없음'} · ONVIF {camera.onvif_configured ? '설정됨' : '미설정'}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <button className="new-ghost" type="button" disabled={controlsDisabled || !camera.onvif_configured} onClick={() => handleRebootCamera(camera)}>{rebooting ? '요청 중...' : '재부팅'}</button>
+                        <button className="new-ghost" type="button" disabled={controlsDisabled} onClick={() => handleEditCamera(camera)}>수정</button>
+                        <button className={camera.enabled ? 'new-ghost' : 'new-primary'} type="button" disabled={controlsDisabled} onClick={() => handleToggleCamera(camera)}>{busy ? '처리 중...' : camera.enabled ? '비활성화' : '활성화'}</button>
+                        <button className="new-ghost" type="button" disabled={controlsDisabled} onClick={() => handleArchiveCamera(camera)}>{archiving ? '보관 중...' : '아카이브'}</button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {cameraMessage && <p className={`new-muted ${cameraMessage.includes('실패') ? 'new-warn' : 'new-ok'}`}>{cameraMessage}</p>}
+          </article>
           <article className="new-card">
             <h2>감지 설정</h2>
             <label className="new-toggle">

@@ -8,9 +8,12 @@ from fastapi import APIRouter, HTTPException
 
 from config import GO2RTC_CONFIG, GO2RTC_URL, RECORDINGS_DIR, TEMP_DIR, get_db_path
 from database import get_setting
-from models import Camera, CameraConfigStatus, UpdateCameraEnabledRequest
+from models import Camera, CameraConfigStatus, CameraRebootResult, UpdateCameraEnabledRequest
 from services import recorder
-from services.camera_config import enabled_camera_ids, list_camera_configs, set_camera_enabled
+from services.camera_config import list_camera_configs, set_camera_enabled
+from services.camera_registry import get_enabled_camera_ids as registry_enabled_camera_ids
+from services.camera_registry import list_camera_admin_items, list_legacy_camera_config_status
+from services.onvif_reboot import reboot_camera_via_onvif
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cameras", tags=["cameras"])
@@ -38,6 +41,20 @@ def _camera_from_stream(cam_id: str, info: dict, streams: dict) -> Camera:
 @router.get("", response_model=list[Camera])
 async def list_cameras():
     streams = await _go2rtc_streams()
+    registry_cameras = await list_camera_admin_items(streams=streams)
+    if registry_cameras:
+        return [
+            Camera(
+                id=camera.id,
+                name=camera.display_name,
+                online=camera.online,
+                has_sub=camera.has_sub,
+                enabled=camera.enabled,
+            )
+            for camera in registry_cameras
+            if camera.enabled and not camera.archived
+        ]
+
     cameras = []
     for cam_id, info in streams.items():
         if cam_id.endswith('_sub'):
@@ -49,24 +66,11 @@ async def list_cameras():
 @router.get("/config", response_model=list[CameraConfigStatus])
 async def list_camera_config():
     streams = await _go2rtc_streams()
-    result: list[CameraConfigStatus] = []
     try:
-        configs = list_camera_configs(GO2RTC_CONFIG)
+        return await list_legacy_camera_config_status(streams=streams)
     except Exception as e:
         logger.exception("failed to read camera config: %s", e)
         raise HTTPException(status_code=500, detail="camera config read failed") from e
-
-    for cfg in configs:
-        info = streams.get(cfg.id) or {}
-        producers = info.get("producers") or []
-        result.append(CameraConfigStatus(
-            id=cfg.id,
-            name=cfg.name,
-            enabled=cfg.enabled,
-            online=cfg.enabled and any("id" in p for p in producers),
-            has_sub=cfg.has_sub,
-        ))
-    return result
 
 
 async def _restart_go2rtc() -> None:
@@ -127,9 +131,48 @@ async def update_camera_enabled(camera_id: str, payload: UpdateCameraEnabledRequ
     raise HTTPException(status_code=404, detail="camera not found")
 
 
+@router.post("/{camera_id}/reboot", response_model=CameraRebootResult)
+async def reboot_camera(camera_id: str):
+    try:
+        target = await reboot_camera_via_onvif(GO2RTC_CONFIG, camera_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="camera not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except httpx.HTTPStatusError as e:
+        logger.warning("ONVIF reboot failed for %s: HTTP %s", camera_id, e.response.status_code)
+        raise HTTPException(status_code=502, detail=f"ONVIF reboot failed: HTTP {e.response.status_code}") from e
+    except httpx.TimeoutException as e:
+        logger.warning("ONVIF reboot timed out for %s", camera_id)
+        raise HTTPException(status_code=504, detail="ONVIF reboot timed out") from e
+    except Exception as e:
+        logger.exception("ONVIF reboot failed for %s: %s", camera_id, e)
+        raise HTTPException(status_code=500, detail="ONVIF reboot failed") from e
+
+    return CameraRebootResult(
+        camera_id=camera_id,
+        endpoint=target.endpoint,
+        message="ONVIF SystemReboot requested",
+    )
+
+
 def get_enabled_camera_ids() -> list[str]:
     try:
-        return enabled_camera_ids(GO2RTC_CONFIG)
+        import asyncio
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(registry_enabled_camera_ids())
+        return enabled_camera_ids_fallback()
     except Exception:
         logger.exception("failed to read enabled camera ids")
+        return []
+
+
+def enabled_camera_ids_fallback() -> list[str]:
+    try:
+        from services.camera_config import enabled_camera_ids
+        return enabled_camera_ids(GO2RTC_CONFIG)
+    except Exception:
+        logger.exception("failed to read enabled camera ids from go2rtc config")
         return []

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate, getViewerVersion, getCameraConfig, updateCameraEnabled } from '../api/client';
+import { getSettings, updateSettings, getStorageStats, getSystemVersion, triggerUpdate, getViewerVersion, getCameraConfig, updateCameraEnabled, rebootCamera } from '../api/client';
 import type { Settings, StorageStats, SystemVersion, CameraConfigStatus } from '../types';
 
 export function SettingsPage() {
@@ -18,6 +18,7 @@ export function SettingsPage() {
   const [cameraConfig, setCameraConfig] = useState<CameraConfigStatus[]>([]);
   const [cameraConfigLoading, setCameraConfigLoading] = useState(true);
   const [cameraToggling, setCameraToggling] = useState<string | null>(null);
+  const [cameraRebooting, setCameraRebooting] = useState<string | null>(null);
   const [cameraMsg, setCameraMsg] = useState<string | null>(null);
 
   useEffect(() => { getSettings().then(setForm).catch(console.error); }, []);
@@ -65,6 +66,21 @@ export function SettingsPage() {
       setCameraMsg(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 실패.`);
     } finally {
       setCameraToggling(null);
+    }
+  };
+
+  const handleRebootCamera = async (camera: CameraConfigStatus) => {
+    if (!window.confirm(`${camera.name} 카메라를 ONVIF로 재부팅할까요?`)) return;
+    setCameraRebooting(camera.id);
+    setCameraMsg(null);
+    try {
+      await rebootCamera(camera.id);
+      setCameraMsg(`${camera.id} 재부팅 요청 전송 완료. 카메라가 1~2분 정도 오프라인일 수 있습니다.`);
+    } catch (err) {
+      console.error(err);
+      setCameraMsg(`${camera.id} 재부팅 요청 실패.`);
+    } finally {
+      setCameraRebooting(null);
     }
   };
 
@@ -210,14 +226,14 @@ export function SettingsPage() {
           <div style={{ fontSize: 13, fontWeight: 'bold', color: '#90caf9' }}>카메라 활성화</div>
           <button
             onClick={loadCameraConfig}
-            disabled={cameraConfigLoading || cameraToggling !== null}
+            disabled={cameraConfigLoading || cameraToggling !== null || cameraRebooting !== null}
             style={{ background: '#2a2a2a', border: '1px solid #444', color: '#bbb', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}
           >
             새로고침
           </button>
         </div>
         <div style={{ fontSize: 11, color: '#777', marginBottom: 10 }}>
-          비활성화된 카메라는 화면·녹화·상태 알림 대상에서 제외됩니다.
+          비활성화된 카메라는 화면·녹화·상태 알림 대상에서 제외됩니다. 재부팅은 ONVIF SystemReboot 요청을 보냅니다.
         </div>
         {cameraConfigLoading ? (
           <div style={{ fontSize: 12, color: '#666' }}>불러오는 중...</div>
@@ -227,6 +243,8 @@ export function SettingsPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {cameraConfig.map(camera => {
               const busy = cameraToggling === camera.id;
+              const rebooting = cameraRebooting === camera.id;
+              const controlsDisabled = cameraToggling !== null || cameraRebooting !== null;
               return (
                 <div key={camera.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: '1px solid #2a2a2a', paddingBottom: 8 }}>
                   <div>
@@ -235,23 +253,43 @@ export function SettingsPage() {
                       {camera.enabled ? (camera.online ? '온라인' : '오프라인') : '비활성화'} · 보조 스트림 {camera.has_sub ? '있음' : '없음'}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleToggleCamera(camera)}
-                    disabled={cameraToggling !== null}
-                    style={{
-                      minWidth: 82,
-                      background: camera.enabled ? '#4e342e' : '#1b5e20',
-                      border: `1px solid ${camera.enabled ? '#8d6e63' : '#388e3c'}`,
-                      color: '#fff',
-                      padding: '6px 12px',
-                      borderRadius: 4,
-                      cursor: cameraToggling === null ? 'pointer' : 'default',
-                      fontSize: 12,
-                      opacity: cameraToggling !== null && !busy ? 0.45 : 1,
-                    }}
-                  >
-                    {busy ? '처리 중...' : camera.enabled ? '비활성화' : '활성화'}
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      onClick={() => handleRebootCamera(camera)}
+                      disabled={controlsDisabled}
+                      title="ONVIF SystemReboot 요청"
+                      style={{
+                        minWidth: 76,
+                        background: '#3e2723',
+                        border: '1px solid #6d4c41',
+                        color: '#ffccbc',
+                        padding: '6px 12px',
+                        borderRadius: 4,
+                        cursor: controlsDisabled ? 'default' : 'pointer',
+                        fontSize: 12,
+                        opacity: controlsDisabled && !rebooting ? 0.45 : 1,
+                      }}
+                    >
+                      {rebooting ? '요청 중...' : '재부팅'}
+                    </button>
+                    <button
+                      onClick={() => handleToggleCamera(camera)}
+                      disabled={controlsDisabled}
+                      style={{
+                        minWidth: 82,
+                        background: camera.enabled ? '#4e342e' : '#1b5e20',
+                        border: `1px solid ${camera.enabled ? '#8d6e63' : '#388e3c'}`,
+                        color: '#fff',
+                        padding: '6px 12px',
+                        borderRadius: 4,
+                        cursor: controlsDisabled ? 'default' : 'pointer',
+                        fontSize: 12,
+                        opacity: controlsDisabled && !busy ? 0.45 : 1,
+                      }}
+                    >
+                      {busy ? '처리 중...' : camera.enabled ? '비활성화' : '활성화'}
+                    </button>
+                  </div>
                 </div>
               );
             })}

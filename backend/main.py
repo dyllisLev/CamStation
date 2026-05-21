@@ -10,8 +10,10 @@ from services.motion import monitor_motion, set_motion_enabled
 from services.recording_health import run_recording_health_loop
 from services.viewer_health import ViewerHealthEventNotifier, run_viewer_health_loop
 from services.webhook_alerts import WebhookAlertSender
+from services.camera_importer import import_cameras_from_go2rtc_config
 from config import (
     GO2RTC_URL,
+    GO2RTC_CONFIG,
     RECORDINGS_DIR,
     TEMP_DIR,
     RECORDING_HEALTH_CHECK_INTERVAL_SEC,
@@ -22,7 +24,7 @@ from config import (
     ALERT_COOLDOWN_SEC,
     get_db_path,
 )
-from routers import system, cameras, streams, timeline, recordings as recordings_router, settings, status, layouts, viewers
+from routers import system, cameras, camera_admin, streams, timeline, recordings as recordings_router, settings, status, layouts, viewers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,6 +57,16 @@ def _startup_camera_lists(all_stream_keys: list[str], enabled_ids: list[str]) ->
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    try:
+        import_result = await import_cameras_from_go2rtc_config(GO2RTC_CONFIG)
+        if import_result.created or import_result.skipped:
+            logger.info(
+                "Camera registry import from go2rtc config: created=%d skipped=%d",
+                import_result.created,
+                import_result.skipped,
+            )
+    except Exception as e:
+        logger.warning("Could not import cameras from go2rtc config: %s", e)
     enabled_ids = cameras.get_enabled_camera_ids()
     all_keys = []
     try:
@@ -135,6 +147,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-for r in [cameras.router, streams.router, timeline.router,
+for r in [cameras.router, camera_admin.router, streams.router, timeline.router,
           recordings_router.router, settings.router, status.router, layouts.router, viewers.router, system.router]:
     app.include_router(r)

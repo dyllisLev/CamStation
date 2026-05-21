@@ -17,8 +17,60 @@ class CameraConfigStatus(BaseModel):
     has_sub: bool = False
 
 
+class CameraAdminItem(BaseModel):
+    id: str
+    display_name: str
+    location: str | None = None
+    enabled: bool
+    archived: bool = False
+    online: bool = False
+    has_sub: bool = False
+    main_stream_configured: bool
+    sub_stream_configured: bool
+    onvif_configured: bool
+    sort_order: int = 0
+    notes: str | None = None
+
+
+class CameraCreateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=128)
+    location: str | None = None
+    enabled: bool = True
+    main_stream_url: str = Field(min_length=1)
+    sub_stream_url: str | None = None
+    onvif_host: str | None = None
+    onvif_port: int | None = None
+    onvif_username: str | None = None
+    onvif_password: str | None = None
+    sort_order: int = 0
+    notes: str | None = None
+
+
+class CameraUpdateRequest(BaseModel):
+    display_name: str | None = None
+    location: str | None = None
+    enabled: bool | None = None
+    main_stream_url: str | None = None
+    sub_stream_url: str | None = None
+    onvif_host: str | None = None
+    onvif_port: int | None = None
+    onvif_username: str | None = None
+    onvif_password: str | None = None
+    sort_order: int | None = None
+    notes: str | None = None
+
+
 class UpdateCameraEnabledRequest(BaseModel):
     enabled: bool
+
+
+class CameraRebootResult(BaseModel):
+    camera_id: str
+    endpoint: str
+    status: Literal["requested"] = "requested"
+    message: str
+
 
 class MotionEvent(BaseModel):
     camera_id: str

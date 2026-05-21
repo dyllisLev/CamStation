@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Camera, CameraConfigStatus, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion, ViewerClientStatus, ViewerCommand, ViewerHeartbeatPayload } from '../types';
+import type { Camera, CameraAdminApplyResult, CameraAdminCreateRequest, CameraAdminItem, CameraAdminUpdateRequest, CameraConfigStatus, CameraRebootResult, RecordingSegment, TimelineData, Settings, SystemStatus, LayoutItem, LayoutProfile, StorageStats, SystemVersion, ViewerClientStatus, ViewerCommand, ViewerHeartbeatPayload } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -11,6 +11,27 @@ export const getCameraConfig = (): Promise<CameraConfigStatus[]> =>
 
 export const updateCameraEnabled = (cameraId: string, enabled: boolean): Promise<CameraConfigStatus> =>
   api.patch(`/cameras/${encodeURIComponent(cameraId)}/enabled`, { enabled }).then(r => r.data);
+
+export const rebootCamera = (cameraId: string): Promise<CameraRebootResult> =>
+  api.post(`/cameras/${encodeURIComponent(cameraId)}/reboot`).then(r => r.data);
+
+export const getCameraAdmin = (): Promise<CameraAdminItem[]> =>
+  api.get('/camera-admin').then(r => r.data);
+
+export const createCameraAdmin = (payload: CameraAdminCreateRequest): Promise<CameraAdminItem> =>
+  api.post('/camera-admin', payload).then(r => r.data);
+
+export const updateCameraAdmin = (cameraId: string, payload: CameraAdminUpdateRequest): Promise<CameraAdminItem> =>
+  api.patch(`/camera-admin/${encodeURIComponent(cameraId)}`, payload).then(r => r.data);
+
+export const setCameraAdminEnabled = (cameraId: string, enabled: boolean): Promise<CameraAdminItem> =>
+  api.post(`/camera-admin/${encodeURIComponent(cameraId)}/enabled`, { enabled }).then(r => r.data);
+
+export const archiveCameraAdmin = (cameraId: string): Promise<CameraAdminItem> =>
+  api.delete(`/camera-admin/${encodeURIComponent(cameraId)}`).then(r => r.data);
+
+export const applyCameraAdminConfig = (): Promise<CameraAdminApplyResult> =>
+  api.post('/camera-admin/apply').then(r => r.data);
 
 export const getTimeline = (cam: string, date: string): Promise<TimelineData> =>
   api.get('/timeline', { params: { cam, date } }).then(r => r.data);

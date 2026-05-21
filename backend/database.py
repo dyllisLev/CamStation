@@ -39,6 +39,26 @@ async def init_db():
                 updated_at         INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS cameras (
+                id              TEXT PRIMARY KEY,
+                display_name    TEXT NOT NULL,
+                location        TEXT,
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                archived_at     REAL,
+                main_stream_url TEXT NOT NULL,
+                sub_stream_url  TEXT,
+                onvif_host      TEXT,
+                onvif_port      INTEGER,
+                onvif_username  TEXT,
+                onvif_password  TEXT,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                notes           TEXT,
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cameras_enabled_order
+                ON cameras(enabled, archived_at, sort_order);
+
             CREATE TABLE IF NOT EXISTS recordings (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 camera_id TEXT NOT NULL,

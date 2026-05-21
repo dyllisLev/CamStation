@@ -14,6 +14,53 @@ export interface CameraConfigStatus {
   has_sub: boolean;
 }
 
+export interface CameraAdminItem {
+  id: string;
+  display_name: string;
+  location: string | null;
+  enabled: boolean;
+  archived: boolean;
+  online: boolean;
+  has_sub: boolean;
+  main_stream_configured: boolean;
+  sub_stream_configured: boolean;
+  onvif_configured: boolean;
+  sort_order: number;
+  notes: string | null;
+}
+
+export interface CameraAdminCreateRequest {
+  id: string;
+  display_name: string;
+  location?: string | null;
+  enabled?: boolean;
+  main_stream_url: string;
+  sub_stream_url?: string | null;
+  onvif_host?: string | null;
+  onvif_port?: number | null;
+  onvif_username?: string | null;
+  onvif_password?: string | null;
+  sort_order?: number;
+  notes?: string | null;
+}
+
+export type CameraAdminUpdateRequest = Partial<Omit<CameraAdminCreateRequest, 'id'>>;
+
+export interface CameraAdminApplyResult {
+  changed: boolean;
+  backup_created: boolean;
+  go2rtc_restarted: boolean;
+  recorders_reconciled: boolean;
+  viewer_reload_commands: number;
+}
+
+export interface CameraRebootResult {
+  camera_id: string;
+  endpoint: string;
+  status: 'requested';
+  message: string;
+}
+
 export interface RecordingSegment {
   camera_id: string;
   filename: string;
