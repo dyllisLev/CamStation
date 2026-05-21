@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -243,3 +244,90 @@ async def run_viewer_health_loop(
         except Exception as e:
             logger.exception("viewer_health_loop_error error=%s", e)
         await asyncio.sleep(interval_sec)
+
+
+class ViewerHealthEventNotifier:
+    """Debounced event hook for viewer heartbeat/update driven health alerts.
+
+    The periodic loop remains the safety net. This notifier shortens the alert
+    path when a heartbeat itself already shows degraded reception, while avoiding
+    a webhook storm from frequent heartbeat posts.
+    """
+
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        alert_sender,
+        max_heartbeat_age_sec: int = 60,
+        get_enabled_camera_ids=None,
+        debounce_sec: float = 10.0,
+    ):
+        self.db_path = db_path
+        self.alert_sender = alert_sender
+        self.max_heartbeat_age_sec = max_heartbeat_age_sec
+        self.get_enabled_camera_ids = get_enabled_camera_ids
+        self.debounce_sec = debounce_sec
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    def notify_heartbeat(
+        self,
+        *,
+        client_id: str,
+        state: str,
+        previous_state: str | None,
+        healthy_cameras: int,
+        previous_healthy_cameras: int | None,
+    ) -> None:
+        should_check = state == "degraded" or previous_state == "degraded"
+        if not should_check:
+            return
+
+        state_changed = previous_state is not None and previous_state != state
+        worsened = (
+            previous_healthy_cameras is not None
+            and healthy_cameras < previous_healthy_cameras
+        )
+        delay = 0.0 if state_changed or worsened else self.debounce_sec
+        self._schedule(client_id, delay=delay)
+
+    def _schedule(self, client_id: str, *, delay: float) -> None:
+        existing = self._tasks.pop(client_id, None)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._tasks[client_id] = asyncio.create_task(self._run(client_id, delay))
+
+    async def _run(self, client_id: str, delay: float) -> None:
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            enabled_ids = (
+                list(self.get_enabled_camera_ids())
+                if self.get_enabled_camera_ids is not None
+                else None
+            )
+            report = await check_viewer_health(
+                self.db_path,
+                max_heartbeat_age_sec=self.max_heartbeat_age_sec,
+                enabled_camera_ids=enabled_ids,
+            )
+            log_viewer_health_report(report)
+            if not report.ok:
+                await self.alert_sender.send_viewer_health_report(report)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception("viewer_event_health_check_error client=%s error=%s", client_id, e)
+        finally:
+            current = asyncio.current_task()
+            if self._tasks.get(client_id) is current:
+                self._tasks.pop(client_id, None)
+
+    async def close(self) -> None:
+        tasks = [task for task in self._tasks.values() if not task.done()]
+        self._tasks.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task

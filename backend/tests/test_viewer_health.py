@@ -130,3 +130,58 @@ async def test_viewer_health_ignores_disabled_camera_payload(test_db):
 
     assert report.ok is True
     assert report.issues == []
+
+
+async def test_viewer_event_notifier_debounces_repeated_degraded_heartbeats(test_db):
+    import asyncio
+    import time
+    from services.viewer_health import ViewerHealthEventNotifier
+
+    await _insert_viewer(
+        test_db,
+        last_seen=time.time(),
+        healthy_cameras=1,
+        state="degraded",
+        payload={
+            "cameras": [
+                {"camera_id": "cam1_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+                {"camera_id": "cam2_sub", "connected": False, "video_ready_state": 0, "stalled_ms": 120000, "error": "stalled"},
+            ]
+        },
+    )
+
+    sent = []
+
+    class FakeSender:
+        async def send_viewer_health_report(self, report):
+            sent.append(report)
+            return True
+
+    notifier = ViewerHealthEventNotifier(
+        test_db,
+        alert_sender=FakeSender(),
+        max_heartbeat_age_sec=60,
+        debounce_sec=0.02,
+    )
+    try:
+        notifier.notify_heartbeat(
+            client_id="viewer-1",
+            state="degraded",
+            previous_state="degraded",
+            healthy_cameras=1,
+            previous_healthy_cameras=1,
+        )
+        notifier.notify_heartbeat(
+            client_id="viewer-1",
+            state="degraded",
+            previous_state="degraded",
+            healthy_cameras=1,
+            previous_healthy_cameras=1,
+        )
+        await asyncio.sleep(0.08)
+    finally:
+        await notifier.close()
+
+    assert len(sent) == 1
+    assert sent[0].ok is False
+    assert any(i.code == "viewer_camera_not_receiving" for i in sent[0].issues)

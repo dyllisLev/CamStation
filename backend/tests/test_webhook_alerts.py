@@ -157,3 +157,35 @@ async def test_webhook_alert_sender_noops_without_url_or_error():
     sender = WebhookAlertSender(url="http://x", secret="secret")
     ok_report = RecordingHealthReport(ok=True, checked_at=1, camera_count=0, active_count=0, issues=[])
     assert await sender.send_recording_health_report(ok_report) is False
+
+
+async def test_webhook_alert_sender_uses_recording_event_override():
+    from services.recording_health import RecordingHealthIssue, RecordingHealthReport
+    from services.webhook_alerts import WebhookAlertSender
+
+    calls = []
+
+    async def fake_post(url, *, content, headers, timeout):
+        calls.append(content)
+        class Resp:
+            def raise_for_status(self):
+                return None
+        return Resp()
+
+    sender = WebhookAlertSender(
+        url="http://hermes:8644/webhooks/camstation-alert",
+        secret="secret",
+        post_func=fake_post,
+    )
+    report = RecordingHealthReport(
+        ok=False,
+        checked_at=1778800000,
+        camera_count=1,
+        active_count=1,
+        issues=[RecordingHealthIssue("recording_process_failed", "ERROR", "cam1", "ffmpeg exited")],
+    )
+
+    assert await sender.send_recording_health_report(report, event="recording_process_failed") is True
+    payload = json.loads(calls[0].decode())
+    assert payload["event"] == "recording_process_failed"
+    assert payload["issues"][0]["code"] == "recording_process_failed"

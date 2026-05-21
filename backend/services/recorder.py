@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import logging
 from database import get_setting
+from services.recording_health import RecordingHealthIssue, RecordingHealthReport
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,46 @@ _watchdog_task: asyncio.Task | None = None
 _current_segment_paths: dict[str, str] = {}  # cam_id → 현재 세그먼트 temp 파일 전체 경로
 _stderr_tasks: dict[str, asyncio.Task] = {}
 _maintenance_reason: str | None = None
+_event_alert_sender = None
+
+
+def set_event_alert_sender(sender) -> None:
+    global _event_alert_sender
+    _event_alert_sender = sender
+
+
+async def _send_recording_event_alert(
+    event: str,
+    *,
+    camera_id: str,
+    message: str,
+    path: str | None = None,
+    filename: str | None = None,
+    file_size: int | None = None,
+    severity: str = "ERROR",
+) -> None:
+    if _event_alert_sender is None:
+        return
+    issue = RecordingHealthIssue(
+        code=event,
+        severity=severity,
+        camera_id=camera_id,
+        message=message,
+        path=path,
+        filename=filename,
+        file_size=file_size,
+    )
+    report = RecordingHealthReport(
+        ok=False,
+        checked_at=datetime.now(KST).timestamp(),
+        camera_count=len(_processes) or 1,
+        active_count=len(get_active()),
+        issues=[issue],
+    )
+    try:
+        await _event_alert_sender.send_recording_health_report(report, event=event)
+    except Exception as e:
+        logger.warning("Recording event alert failed event=%s camera=%s error=%s", event, camera_id, e)
 
 
 def _next_delay(current: int, ran: float, *, success_threshold: float = 30.0, max_delay: int = 60) -> int:
@@ -279,6 +320,14 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                         prev_path,
                         new_path,
                     )
+                    await _send_recording_event_alert(
+                        "recording_segment_move_failed",
+                        camera_id=cam_id,
+                        message=f"이전 녹화 segment 이동 실패로 DB close를 건너뛰었습니다: {prev_path}",
+                        path=prev_path,
+                        filename=prev_filename,
+                        file_size=size,
+                    )
             insert_counts = await _execute_db_write_with_retry(
                 db_path,
                 [(
@@ -301,6 +350,13 @@ async def _watch_stderr(cam_id: str, proc: asyncio.subprocess.Process, db_path: 
                 new_path,
                 prev_path,
                 e,
+            )
+            await _send_recording_event_alert(
+                "recording_db_write_failed",
+                camera_id=cam_id,
+                message=f"녹화 segment DB 처리 실패: {e}",
+                path=new_path,
+                filename=filename,
             )
 
         prev_path = new_path
@@ -364,7 +420,16 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
         last_size = None
         if last_path:
             last_size = _safe_getsize(last_path)
-            await _move_to_recordings(last_path, cam_id, recordings_dir)
+            moved = await _move_to_recordings(last_path, cam_id, recordings_dir)
+            if not moved:
+                await _send_recording_event_alert(
+                    "recording_segment_move_failed",
+                    camera_id=cam_id,
+                    message=f"마지막 녹화 segment 이동 실패: {last_path}",
+                    path=last_path,
+                    filename=last_filename,
+                    file_size=last_size,
+                )
         try:
             if last_filename:
                 await _execute_db_write_with_retry(
@@ -386,12 +451,25 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
                 )
         except Exception as e:
             logger.error("_run_recording DB error for %s: %s", cam_id, e)
+            await _send_recording_event_alert(
+                "recording_db_write_failed",
+                camera_id=cam_id,
+                message=f"녹화 종료 segment DB close 실패: {e}",
+                path=last_path,
+                filename=last_filename,
+                file_size=last_size,
+            )
 
         _active_procs.pop(cam_id, None)
         if cam_id in _stopping_rec:
             break
 
         delay = _next_delay(delay, ran)
+        await _send_recording_event_alert(
+            "recording_process_failed",
+            camera_id=cam_id,
+            message=f"ffmpeg 녹화 프로세스가 예기치 않게 종료되었습니다: returncode={proc.returncode} ran={ran:.0f}s retry_in={delay}s",
+        )
         logger.info("Recording for %s exited (ran %.0fs), retrying in %ds", cam_id, ran, delay)
         await asyncio.sleep(delay)
 
@@ -507,10 +585,20 @@ async def _restart_recording_for_new_day(
             "Midnight watchdog: stop timed out for %s; forcing recorder restart",
             cam_id,
         )
-    except Exception:
+        await _send_recording_event_alert(
+            "recording_rollover_failed",
+            camera_id=cam_id,
+            message="자정 rollover 중 recorder stop timeout; 강제 재시작을 진행합니다.",
+        )
+    except Exception as e:
         logger.exception(
             "Midnight watchdog: stop failed for %s; forcing recorder restart",
             cam_id,
+        )
+        await _send_recording_event_alert(
+            "recording_rollover_failed",
+            camera_id=cam_id,
+            message=f"자정 rollover 중 recorder stop 실패; 강제 재시작을 진행합니다: {e}",
         )
     finally:
         proc = _active_procs.pop(cam_id, None)

@@ -42,7 +42,9 @@ class WebhookAlertSender:
             filename = getattr(i, "filename", None) or ""
             path = getattr(i, "path", None) or ""
             client = getattr(i, "client_id", None) or ""
-            parts.append(f"{i.severity}:{i.code}:{client}:{camera}:{filename}:{path}")
+            healthy = getattr(i, "healthy_cameras", None)
+            expected = getattr(i, "expected_cameras", None)
+            parts.append(f"{i.severity}:{i.code}:{client}:{camera}:{filename}:{path}:{healthy}:{expected}")
         return "|".join(sorted(parts))
 
     def _headers(self, body: bytes) -> dict[str, str]:
@@ -53,14 +55,14 @@ class WebhookAlertSender:
             ).hexdigest()
         return headers
 
-    def _payload(self, report: RecordingHealthReport) -> dict:
+    def _payload(self, report: RecordingHealthReport, *, event: str = "recording_health_failed") -> dict:
         severities = {i.severity for i in report.issues}
         severity = "ERROR" if "ERROR" in severities else "WARNING"
         return {
             "service": "camstation-backend",
-            "event": "recording_health_failed",
+            "event": event,
             "severity": severity,
-            "message": f"CamStation recording health check failed: {len(report.issues)} issue(s)",
+            "message": f"CamStation recording event failed: {len(report.issues)} issue(s)" if event != "recording_health_failed" else f"CamStation recording health check failed: {len(report.issues)} issue(s)",
             "checked_at": report.checked_at,
             "camera_count": report.camera_count,
             "active_count": report.active_count,
@@ -80,7 +82,12 @@ class WebhookAlertSender:
             "issues": [asdict(i) for i in report.issues],
         }
 
-    async def send_recording_health_report(self, report: RecordingHealthReport) -> bool:
+    async def send_recording_health_report(
+        self,
+        report: RecordingHealthReport,
+        *,
+        event: str = "recording_health_failed",
+    ) -> bool:
         if not self.url or report.ok or not report.issues:
             return False
 
@@ -91,7 +98,7 @@ class WebhookAlertSender:
             logger.info("Webhook alert suppressed by cooldown key=%s", key)
             return False
 
-        payload = self._payload(report)
+        payload = self._payload(report, event=event)
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         try:
             response = await self.post_func(

@@ -239,6 +239,7 @@ async def test_midnight_restart_starts_recorder_even_when_stop_hangs(monkeypatch
     original_processes = dict(recorder._processes)
     original_active_procs = dict(recorder._active_procs)
     original_stopping = set(recorder._stopping_rec)
+    original_sender = recorder._event_alert_sender
     try:
         recorder._processes["camera-yard"] = object()
         recorder._active_procs["camera-yard"] = None
@@ -254,6 +255,7 @@ async def test_midnight_restart_starts_recorder_even_when_stop_hangs(monkeypatch
 
         monkeypatch.setattr(recorder, "stop_recording", hanging_stop)
         monkeypatch.setattr(recorder, "start_recording", fake_start)
+        recorder.set_event_alert_sender(None)
 
         await recorder._restart_recording_for_new_day(
             "camera-yard",
@@ -276,3 +278,38 @@ async def test_midnight_restart_starts_recorder_even_when_stop_hangs(monkeypatch
         recorder._active_procs.update(original_active_procs)
         recorder._stopping_rec.clear()
         recorder._stopping_rec.update(original_stopping)
+        recorder.set_event_alert_sender(original_sender)
+
+
+@pytest.mark.asyncio
+async def test_recording_event_alert_sender_emits_named_event():
+    from services import recorder
+
+    sent = []
+    original_processes = dict(recorder._processes)
+    original_sender = recorder._event_alert_sender
+
+    class FakeSender:
+        async def send_recording_health_report(self, report, *, event="recording_health_failed"):
+            sent.append((event, report))
+            return True
+
+    try:
+        recorder._processes.clear()
+        recorder._processes["cam1"] = object()
+        recorder.set_event_alert_sender(FakeSender())
+        await recorder._send_recording_event_alert(
+            "recording_process_failed",
+            camera_id="cam1",
+            message="ffmpeg exited",
+        )
+    finally:
+        recorder._processes.clear()
+        recorder._processes.update(original_processes)
+        recorder.set_event_alert_sender(original_sender)
+
+    assert len(sent) == 1
+    event, report = sent[0]
+    assert event == "recording_process_failed"
+    assert report.issues[0].code == "recording_process_failed"
+    assert report.issues[0].camera_id == "cam1"

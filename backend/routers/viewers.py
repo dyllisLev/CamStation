@@ -14,6 +14,12 @@ from models import (
 )
 
 router = APIRouter(prefix="/api/viewers", tags=["viewers"])
+_event_notifier = None
+
+
+def configure_event_notifier(notifier) -> None:
+    global _event_notifier
+    _event_notifier = notifier
 
 
 def _camera_is_healthy(camera) -> bool:
@@ -76,8 +82,18 @@ async def heartbeat(payload: ViewerHeartbeat):
     healthy = sum(1 for camera in payload.cameras if _camera_is_healthy(camera))
     state = _state(expected, healthy)
     payload_json = payload.model_dump_json()
+    previous_state = None
+    previous_healthy = None
 
     async with aiosqlite.connect(get_db_path()) as db:
+        cur = await db.execute(
+            "SELECT state, healthy_cameras FROM viewer_clients WHERE client_id=?",
+            (payload.client_id,),
+        )
+        previous = await cur.fetchone()
+        if previous is not None:
+            previous_state = previous[0]
+            previous_healthy = int(previous[1] or 0)
         await db.execute(
             """
             INSERT INTO viewer_clients(
@@ -115,6 +131,15 @@ async def heartbeat(payload: ViewerHeartbeat):
             ),
         )
         await db.commit()
+
+    if _event_notifier is not None:
+        _event_notifier.notify_heartbeat(
+            client_id=payload.client_id,
+            state=state,
+            previous_state=previous_state,
+            healthy_cameras=healthy,
+            previous_healthy_cameras=previous_healthy,
+        )
 
     return await get_viewer(payload.client_id)
 
