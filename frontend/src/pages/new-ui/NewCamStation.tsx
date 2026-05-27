@@ -790,24 +790,42 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
     getSystemVersion().then(setVersion).catch(console.error)
   }, [])
 
-  const loadCameraConfig = useCallback(() => {
-    setCameraConfigLoading(true)
-    getCameraAdmin()
-      .then(setCameraConfig)
+  const loadStorageStats = useCallback((retry = 1) => {
+    setStatsLoading(true)
+    getStorageStats()
+      .then(setStats)
       .catch(error => {
         console.error(error)
-        setCameraMessage('카메라 설정을 불러오지 못했습니다.')
+        if (retry > 0) window.setTimeout(() => loadStorageStats(retry - 1), 1200)
+      })
+      .finally(() => setStatsLoading(false))
+  }, [])
+
+  const loadCameraConfig = useCallback((retry = 1) => {
+    setCameraConfigLoading(true)
+    getCameraAdmin()
+      .then(data => {
+        setCameraConfig(data)
+        setCameraMessage(null)
+      })
+      .catch(error => {
+        console.error(error)
+        if (retry > 0) {
+          window.setTimeout(() => loadCameraConfig(retry - 1), 1200)
+        } else {
+          setCameraMessage('카메라 설정을 불러오지 못했습니다. 새로고침을 눌러 다시 시도하세요.')
+        }
       })
       .finally(() => setCameraConfigLoading(false))
   }, [])
 
   useEffect(() => {
     getSettings().then(setForm).catch(console.error)
-    getStorageStats().then(setStats).catch(console.error).finally(() => setStatsLoading(false))
+    loadStorageStats()
     getViewerVersion().then(data => setViewerVersion(data.version)).catch(() => {})
     loadVersion()
     loadCameraConfig()
-  }, [loadVersion, loadCameraConfig])
+  }, [loadVersion, loadCameraConfig, loadStorageStats])
 
   const saveSettings = async () => {
     await updateSettings(form)
@@ -1100,7 +1118,7 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <h2>카메라 관리</h2>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="new-ghost" type="button" disabled={cameraConfigLoading || cameraToggling !== null || cameraRebooting !== null || cameraArchiving !== null || cameraApplying || cameraEditing} onClick={loadCameraConfig}>새로고침</button>
+                <button className="new-ghost" type="button" disabled={cameraConfigLoading || cameraToggling !== null || cameraRebooting !== null || cameraArchiving !== null || cameraApplying || cameraEditing} onClick={() => loadCameraConfig()}>새로고침</button>
                 <button className="new-ghost" type="button" disabled={cameraConfigLoading || cameraApplying || cameraEditing} onClick={handleCreateCamera}>{cameraEditing ? '처리 중...' : '카메라 추가'}</button>
                 <button className="new-primary" type="button" disabled={cameraConfigLoading || cameraApplying || cameraEditing} onClick={handleApplyCameraConfig}>{cameraApplying ? '적용 중...' : '설정 적용'}</button>
               </div>
