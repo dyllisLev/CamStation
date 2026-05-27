@@ -26,7 +26,7 @@ import {
   updateCameraAdmin,
   updateSettings,
 } from '../../api/client'
-import type { Camera, CameraAdminItem, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
+import type { Camera, CameraAdminItem, CameraAdminUpdateRequest, RecordingSegment, Settings, StorageStats, SystemVersion, TimelineData } from '../../types'
 import {
   NEW_LIVE_TIMELINE_COLLAPSED_KEY,
   calculateLiveGridRowHeight,
@@ -51,6 +51,17 @@ type NewPage = NewUiPage
 type Navigate = (page: NewPage) => void
 
 type TimelineMotion = { ts_start: number; ts_end: number | null }
+type CameraEditForm = {
+  display_name: string
+  location: string
+  notes: string
+  main_stream_url: string
+  sub_stream_url: string
+  onvif_host: string
+  onvif_port: string
+  onvif_username: string
+  onvif_password: string
+}
 
 const GRID_COLS = 48
 const LIVE_GRID_MAX_ROWS = 48
@@ -769,6 +780,8 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
   const [cameraArchiving, setCameraArchiving] = useState<string | null>(null)
   const [cameraApplying, setCameraApplying] = useState(false)
   const [cameraEditing, setCameraEditing] = useState(false)
+  const [editingCameraId, setEditingCameraId] = useState<string | null>(null)
+  const [cameraEditForm, setCameraEditForm] = useState<CameraEditForm | null>(null)
   const [cameraMessage, setCameraMessage] = useState<string | null>(null)
   const [updateLoading, setUpdateLoading] = useState(false)
   const [updateMessage, setUpdateMessage] = useState<string | null>(null)
@@ -894,47 +907,75 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
     }
   }
 
-  const promptOptionalCameraValue = (message: string) => {
-    const value = window.prompt(`${message}\n비워두면 기존 값을 유지합니다. 지우려면 __CLEAR__ 를 입력하세요.`)
-    if (value === null) return undefined
+  const startEditCamera = (camera: CameraAdminItem) => {
+    setEditingCameraId(camera.id)
+    setCameraEditForm({
+      display_name: camera.display_name,
+      location: camera.location ?? '',
+      notes: camera.notes ?? '',
+      main_stream_url: '',
+      sub_stream_url: '',
+      onvif_host: '',
+      onvif_port: '',
+      onvif_username: '',
+      onvif_password: '',
+    })
+    setCameraMessage(null)
+  }
+
+  const cancelEditCamera = () => {
+    setEditingCameraId(null)
+    setCameraEditForm(null)
+  }
+
+  const updateEditField = (key: keyof CameraEditForm, value: string) => {
+    setCameraEditForm(previous => previous ? { ...previous, [key]: value } : previous)
+  }
+
+  const optionalSecretField = (value: string) => {
     const trimmed = value.trim()
     if (!trimmed) return undefined
     if (trimmed === '__CLEAR__') return null
     return trimmed
   }
 
-  const handleEditCamera = async (camera: CameraAdminItem) => {
-    const displayName = window.prompt('표시명을 수정하세요.', camera.display_name)?.trim()
-    if (!displayName) return
-    const location = window.prompt('위치/그룹을 수정하세요. 없으면 비워두세요.', camera.location ?? '')?.trim() || null
-    const notes = window.prompt('운영 메모를 수정하세요. 없으면 비워두세요.', camera.notes ?? '')?.trim() || null
-    const mainStreamUrl = promptOptionalCameraValue('메인 RTSP URL을 새 값으로 변경할 경우에만 입력하세요. 기존 URL은 보안상 다시 표시하지 않습니다.')
-    const subStreamUrl = promptOptionalCameraValue('보조 RTSP URL을 새 값으로 변경할 경우에만 입력하세요.')
-    const onvifHost = promptOptionalCameraValue('ONVIF 호스트/IP를 새 값으로 변경할 경우에만 입력하세요.')
-    const onvifPortValue = promptOptionalCameraValue('ONVIF 포트를 새 값으로 변경할 경우에만 입력하세요.')
-    const onvifUsername = promptOptionalCameraValue('ONVIF 사용자명을 새 값으로 변경할 경우에만 입력하세요.')
-    const onvifPassword = promptOptionalCameraValue('ONVIF 비밀번호를 새 값으로 변경할 경우에만 입력하세요.')
-    const onvifPort = onvifPortValue === undefined || onvifPortValue === null ? onvifPortValue : Number(onvifPortValue)
+  const saveEditCamera = async (camera: CameraAdminItem) => {
+    if (!cameraEditForm) return
+    const displayName = cameraEditForm.display_name.trim()
+    if (!displayName) {
+      setCameraMessage('표시명은 비워둘 수 없습니다.')
+      return
+    }
+    const onvifPortField = optionalSecretField(cameraEditForm.onvif_port)
+    const onvifPort = onvifPortField === undefined || onvifPortField === null ? onvifPortField : Number(onvifPortField)
     if (typeof onvifPort === 'number' && (!Number.isInteger(onvifPort) || onvifPort <= 0 || onvifPort > 65535)) {
       setCameraMessage('ONVIF 포트는 1~65535 사이 숫자여야 합니다.')
       return
     }
+    const payload: CameraAdminUpdateRequest = {
+      display_name: displayName,
+      location: cameraEditForm.location.trim() || null,
+      notes: cameraEditForm.notes.trim() || null,
+    }
+    const mainStreamUrl = optionalSecretField(cameraEditForm.main_stream_url)
+    const subStreamUrl = optionalSecretField(cameraEditForm.sub_stream_url)
+    const onvifHost = optionalSecretField(cameraEditForm.onvif_host)
+    const onvifUsername = optionalSecretField(cameraEditForm.onvif_username)
+    const onvifPassword = optionalSecretField(cameraEditForm.onvif_password)
+    if (mainStreamUrl !== undefined) payload.main_stream_url = mainStreamUrl
+    if (subStreamUrl !== undefined) payload.sub_stream_url = subStreamUrl
+    if (onvifHost !== undefined) payload.onvif_host = onvifHost
+    if (onvifPort !== undefined) payload.onvif_port = onvifPort
+    if (onvifUsername !== undefined) payload.onvif_username = onvifUsername
+    if (onvifPassword !== undefined) payload.onvif_password = onvifPassword
+
     setCameraEditing(true)
     setCameraMessage(null)
     try {
-      const updated = await updateCameraAdmin(camera.id, {
-        display_name: displayName,
-        location,
-        notes,
-        ...(mainStreamUrl !== undefined ? { main_stream_url: mainStreamUrl } : {}),
-        ...(subStreamUrl !== undefined ? { sub_stream_url: subStreamUrl } : {}),
-        ...(onvifHost !== undefined ? { onvif_host: onvifHost } : {}),
-        ...(onvifPort !== undefined ? { onvif_port: onvifPort } : {}),
-        ...(onvifUsername !== undefined ? { onvif_username: onvifUsername } : {}),
-        ...(onvifPassword !== undefined ? { onvif_password: onvifPassword } : {}),
-      })
+      const updated = await updateCameraAdmin(camera.id, payload)
       setCameraConfig(previous => previous.map(item => item.id === updated.id ? updated : item))
       setCameraMessage(`${camera.id} 수정 완료. 연결정보를 변경했다면 설정 적용을 눌러 go2rtc.yaml에 반영하세요.`)
+      cancelEditCamera()
     } catch (error) {
       console.error(error)
       setCameraMessage(`${camera.id} 수정 실패.`)
@@ -1084,10 +1125,48 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
                       </div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <button className="new-ghost" type="button" disabled={controlsDisabled || !camera.onvif_configured} onClick={() => handleRebootCamera(camera)}>{rebooting ? '요청 중...' : '재부팅'}</button>
-                        <button className="new-ghost" type="button" disabled={controlsDisabled} onClick={() => handleEditCamera(camera)}>수정</button>
+                        <button className="new-ghost" type="button" disabled={controlsDisabled && editingCameraId !== camera.id} onClick={() => startEditCamera(camera)}>수정</button>
                         <button className={camera.enabled ? 'new-ghost' : 'new-primary'} type="button" disabled={controlsDisabled} onClick={() => handleToggleCamera(camera)}>{busy ? '처리 중...' : camera.enabled ? '비활성화' : '활성화'}</button>
                         <button className="new-ghost" type="button" disabled={controlsDisabled} onClick={() => handleArchiveCamera(camera)}>{archiving ? '보관 중...' : '아카이브'}</button>
                       </div>
+                      {editingCameraId === camera.id && cameraEditForm && (
+                        <div style={{ gridColumn: '1 / -1', border: '1px solid rgba(0,191,174,0.35)', borderRadius: 16, padding: 12, background: 'rgba(0,191,174,0.06)' }}>
+                          <div className="new-muted" style={{ marginBottom: 10 }}>연결정보는 보안상 기존 값을 표시하지 않습니다. 빈칸은 기존 값 유지, 지우려면 __CLEAR__ 입력.</div>
+                          <div className="new-form-grid">
+                            <label className="new-label">표시명
+                              <input value={cameraEditForm.display_name} onChange={(event) => updateEditField('display_name', event.target.value)} />
+                            </label>
+                            <label className="new-label">위치/그룹
+                              <input value={cameraEditForm.location} onChange={(event) => updateEditField('location', event.target.value)} />
+                            </label>
+                            <label className="new-label">메인 RTSP URL
+                              <input value={cameraEditForm.main_stream_url} placeholder={camera.main_stream_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('main_stream_url', event.target.value)} />
+                            </label>
+                            <label className="new-label">보조 RTSP URL
+                              <input value={cameraEditForm.sub_stream_url} placeholder={camera.sub_stream_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('sub_stream_url', event.target.value)} />
+                            </label>
+                            <label className="new-label">ONVIF 호스트/IP
+                              <input value={cameraEditForm.onvif_host} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_host', event.target.value)} />
+                            </label>
+                            <label className="new-label">ONVIF 포트
+                              <input value={cameraEditForm.onvif_port} placeholder={camera.onvif_configured ? '기존 값 유지' : '예: 80'} onChange={(event) => updateEditField('onvif_port', event.target.value)} />
+                            </label>
+                            <label className="new-label">ONVIF 사용자명
+                              <input value={cameraEditForm.onvif_username} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_username', event.target.value)} />
+                            </label>
+                            <label className="new-label">ONVIF 비밀번호
+                              <input type="password" value={cameraEditForm.onvif_password} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_password', event.target.value)} />
+                            </label>
+                            <label className="new-label" style={{ gridColumn: '1 / -1' }}>운영 메모
+                              <input value={cameraEditForm.notes} onChange={(event) => updateEditField('notes', event.target.value)} />
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+                            <button className="new-ghost" type="button" disabled={cameraEditing} onClick={cancelEditCamera}>취소</button>
+                            <button className="new-primary" type="button" disabled={cameraEditing} onClick={() => saveEditCamera(camera)}>{cameraEditing ? '저장 중...' : '수정 저장'}</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
