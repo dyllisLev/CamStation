@@ -894,17 +894,47 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
     }
   }
 
+  const promptOptionalCameraValue = (message: string) => {
+    const value = window.prompt(`${message}\n비워두면 기존 값을 유지합니다. 지우려면 __CLEAR__ 를 입력하세요.`)
+    if (value === null) return undefined
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    if (trimmed === '__CLEAR__') return null
+    return trimmed
+  }
+
   const handleEditCamera = async (camera: CameraAdminItem) => {
     const displayName = window.prompt('표시명을 수정하세요.', camera.display_name)?.trim()
     if (!displayName) return
     const location = window.prompt('위치/그룹을 수정하세요. 없으면 비워두세요.', camera.location ?? '')?.trim() || null
     const notes = window.prompt('운영 메모를 수정하세요. 없으면 비워두세요.', camera.notes ?? '')?.trim() || null
+    const mainStreamUrl = promptOptionalCameraValue('메인 RTSP URL을 새 값으로 변경할 경우에만 입력하세요. 기존 URL은 보안상 다시 표시하지 않습니다.')
+    const subStreamUrl = promptOptionalCameraValue('보조 RTSP URL을 새 값으로 변경할 경우에만 입력하세요.')
+    const onvifHost = promptOptionalCameraValue('ONVIF 호스트/IP를 새 값으로 변경할 경우에만 입력하세요.')
+    const onvifPortValue = promptOptionalCameraValue('ONVIF 포트를 새 값으로 변경할 경우에만 입력하세요.')
+    const onvifUsername = promptOptionalCameraValue('ONVIF 사용자명을 새 값으로 변경할 경우에만 입력하세요.')
+    const onvifPassword = promptOptionalCameraValue('ONVIF 비밀번호를 새 값으로 변경할 경우에만 입력하세요.')
+    const onvifPort = onvifPortValue === undefined || onvifPortValue === null ? onvifPortValue : Number(onvifPortValue)
+    if (typeof onvifPort === 'number' && (!Number.isInteger(onvifPort) || onvifPort <= 0 || onvifPort > 65535)) {
+      setCameraMessage('ONVIF 포트는 1~65535 사이 숫자여야 합니다.')
+      return
+    }
     setCameraEditing(true)
     setCameraMessage(null)
     try {
-      const updated = await updateCameraAdmin(camera.id, { display_name: displayName, location, notes })
+      const updated = await updateCameraAdmin(camera.id, {
+        display_name: displayName,
+        location,
+        notes,
+        ...(mainStreamUrl !== undefined ? { main_stream_url: mainStreamUrl } : {}),
+        ...(subStreamUrl !== undefined ? { sub_stream_url: subStreamUrl } : {}),
+        ...(onvifHost !== undefined ? { onvif_host: onvifHost } : {}),
+        ...(onvifPort !== undefined ? { onvif_port: onvifPort } : {}),
+        ...(onvifUsername !== undefined ? { onvif_username: onvifUsername } : {}),
+        ...(onvifPassword !== undefined ? { onvif_password: onvifPassword } : {}),
+      })
       setCameraConfig(previous => previous.map(item => item.id === updated.id ? updated : item))
-      setCameraMessage(`${camera.id} 수정 완료.`)
+      setCameraMessage(`${camera.id} 수정 완료. 연결정보를 변경했다면 설정 적용을 눌러 go2rtc.yaml에 반영하세요.`)
     } catch (error) {
       console.error(error)
       setCameraMessage(`${camera.id} 수정 실패.`)

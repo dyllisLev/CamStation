@@ -44,7 +44,9 @@ export interface CameraAdminCreateRequest {
   notes?: string | null;
 }
 
-export type CameraAdminUpdateRequest = Partial<Omit<CameraAdminCreateRequest, 'id'>>;
+export interface CameraAdminUpdateRequest extends Partial<Omit<CameraAdminCreateRequest, 'id' | 'main_stream_url'>> {
+  main_stream_url?: string | null;
+}
 
 export interface CameraAdminApplyResult {
   changed: boolean;
