@@ -66,7 +66,15 @@ async def update_camera_admin(camera_id: str, payload: CameraUpdateRequest):
 @router.post("/{camera_id}/enabled", response_model=CameraAdminItem)
 async def set_camera_admin_enabled(camera_id: str, payload: UpdateCameraEnabledRequest):
     try:
-        return await set_camera_enabled(camera_id, payload.enabled)
+        item = await set_camera_enabled(camera_id, payload.enabled)
+        result = await write_go2rtc_config_from_db(GO2RTC_CONFIG)
+        if result.changed:
+            await camera_runtime_apply.restart_go2rtc()
+            camera_ids = await get_enabled_camera_ids()
+            sub_camera_ids = await get_enabled_sub_camera_ids()
+            await camera_runtime_apply.reconcile_recorders(camera_ids, sub_camera_ids)
+            await camera_runtime_apply.enqueue_viewer_reload_commands()
+        return item
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="camera not found") from exc
     except Exception as exc:

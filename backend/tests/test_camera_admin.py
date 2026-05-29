@@ -193,7 +193,29 @@ async def test_camera_admin_updates_camera_without_overwriting_omitted_connectio
     assert rows == [("rtsp://old-secret/main", "rtsp://new-secret/sub", "old-pw")]
 
 
-async def test_camera_admin_sets_enabled_and_archives_camera(client, test_db):
+async def test_camera_admin_sets_enabled_applies_runtime_and_archives_camera(client, test_db, tmp_path, monkeypatch):
+    import routers.camera_admin as camera_admin_router
+    import services.camera_runtime_apply as runtime_apply
+
+    calls = {"restart": 0, "reconcile": [], "reload": 0}
+
+    async def noop_restart_go2rtc():
+        calls["restart"] += 1
+
+    async def noop_reconcile_recorders(camera_ids, sub_camera_ids):
+        calls["reconcile"].append((camera_ids, sub_camera_ids))
+
+    async def noop_enqueue_viewer_reload_commands(reason="camera registry applied"):
+        calls["reload"] += 1
+        return 0
+
+    config = tmp_path / "go2rtc.yaml"
+    config.write_text("streams:\n  cam1: rtsp://secret/main\napi:\n  listen: old\n", encoding="utf-8")
+    monkeypatch.setattr(camera_admin_router, "GO2RTC_CONFIG", str(config))
+    monkeypatch.setattr(runtime_apply, "restart_go2rtc", noop_restart_go2rtc)
+    monkeypatch.setattr(runtime_apply, "reconcile_recorders", noop_reconcile_recorders)
+    monkeypatch.setattr(runtime_apply, "enqueue_viewer_reload_commands", noop_enqueue_viewer_reload_commands)
+
     async with aiosqlite.connect(test_db) as db:
         now = 123.0
         await db.execute(
@@ -210,6 +232,10 @@ async def test_camera_admin_sets_enabled_and_archives_camera(client, test_db):
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False
     assert disable.json()["main_stream_url"] == "rtsp://secret/main"
+    assert calls["restart"] == 1
+    assert calls["reconcile"] == [([], [])]
+    assert calls["reload"] == 1
+    assert "  cam1:" not in config.read_text(encoding="utf-8")
 
     archive = await client.delete("/api/camera-admin/cam1")
     assert archive.status_code == 200

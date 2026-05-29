@@ -840,7 +840,7 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
     try {
       const updated = await setCameraAdminEnabled(camera.id, nextEnabled)
       setCameraConfig(previous => previous.map(item => item.id === updated.id ? updated : item))
-      setCameraMessage(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 완료. 설정 적용을 누르면 go2rtc.yaml에 반영됩니다.`)
+      setCameraMessage(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 완료. go2rtc/녹화/Viewer에 바로 반영했습니다.`)
     } catch (error) {
       console.error(error)
       setCameraMessage(`${camera.id} ${nextEnabled ? '활성화' : '비활성화'} 실패.`)
