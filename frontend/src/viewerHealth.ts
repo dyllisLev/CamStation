@@ -63,13 +63,11 @@ function nowSeconds(): number {
 }
 
 function isCameraHealthy(camera: ViewerCameraHeartbeat): boolean {
-  return (
-    camera.connected &&
-    camera.video_ready_state >= 2 &&
-    !camera.error &&
-    camera.stalled_ms < 30_000 &&
-    (camera.last_binary_at !== null || camera.last_video_time_at !== null)
-  )
+  if (!camera.connected || camera.error || camera.stalled_ms >= 30_000) return false
+  const hasActivity = camera.last_binary_at !== null || camera.last_video_time_at !== null
+  // MSE may continue receiving fMP4 data while readyState temporarily falls to 1.
+  // For heartbeat purposes, recent received bytes/video progress are the signal.
+  return camera.video_ready_state >= 2 || hasActivity
 }
 
 export function resetViewerHealthStore(): void {

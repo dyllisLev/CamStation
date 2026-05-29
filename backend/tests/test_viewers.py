@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 pytestmark = pytest.mark.anyio
@@ -71,6 +73,27 @@ async def test_viewer_heartbeat_marks_healthy_when_all_cameras_are_receiving(cli
     assert r.status_code == 200
     assert r.json()["state"] == "healthy"
     assert r.json()["healthy_cameras"] == 2
+
+
+async def test_viewer_heartbeat_treats_recent_stream_activity_as_healthy_even_when_ready_state_is_low(client):
+    now = time.time()
+    r = await client.post("/api/viewers/heartbeat", json={
+        "client_id": "viewer-ready-low",
+        "name": "수신중 뷰어",
+        "expected_cameras": 1,
+        "cameras": [{
+            "camera_id": "cam1_sub",
+            "connected": True,
+            "video_ready_state": 1,
+            "last_binary_at": now,
+            "last_video_time_at": now,
+            "stalled_ms": 0,
+        }],
+    })
+
+    assert r.status_code == 200
+    assert r.json()["state"] == "healthy"
+    assert r.json()["healthy_cameras"] == 1
 
 
 async def test_viewer_remote_command_lifecycle(client):

@@ -86,6 +86,62 @@ async def test_viewer_health_reports_degraded_stream_reception(test_db):
     assert any(i.camera_id == "cam2_sub" for i in report.issues)
 
 
+async def test_viewer_health_ok_when_ready_state_low_but_stream_activity_is_recent(test_db):
+    from services.viewer_health import check_viewer_health
+
+    await _insert_viewer(
+        test_db,
+        healthy_cameras=2,
+        state="healthy",
+        payload={
+            "cameras": [
+                {
+                    "camera_id": "cam1_sub",
+                    "connected": True,
+                    "video_ready_state": 1,
+                    "last_binary_at": 1995.0,
+                    "last_video_time_at": 1994.0,
+                    "stalled_ms": 0,
+                },
+                {"camera_id": "cam2_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+            ]
+        },
+    )
+
+    report = await check_viewer_health(test_db, now_ts=2000, max_heartbeat_age_sec=60)
+
+    assert report.ok is True
+    assert report.issues == []
+
+
+async def test_viewer_health_reports_low_ready_state_without_recent_activity(test_db):
+    from services.viewer_health import check_viewer_health
+
+    await _insert_viewer(
+        test_db,
+        healthy_cameras=1,
+        state="degraded",
+        payload={
+            "cameras": [
+                {
+                    "camera_id": "cam1_sub",
+                    "connected": True,
+                    "video_ready_state": 1,
+                    "last_binary_at": 1900.0,
+                    "last_video_time_at": 1900.0,
+                    "stalled_ms": 0,
+                },
+                {"camera_id": "cam2_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+            ]
+        },
+    )
+
+    report = await check_viewer_health(test_db, now_ts=2000, max_heartbeat_age_sec=60)
+
+    assert report.ok is False
+    assert any(i.camera_id == "cam1_sub" for i in report.issues)
+
+
 async def test_viewer_health_ok_when_heartbeat_recent_and_all_streams_healthy(test_db):
     from services.viewer_health import check_viewer_health
 

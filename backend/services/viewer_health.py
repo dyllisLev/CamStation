@@ -9,6 +9,32 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
+VIEWER_CAMERA_ACTIVITY_MAX_AGE_SEC = 30
+
+
+def _viewer_camera_activity_recent(camera: dict, now_ts: float) -> bool:
+    for key in ("last_binary_at", "last_video_time_at"):
+        value = camera.get(key)
+        if value is None:
+            continue
+        with contextlib.suppress(TypeError, ValueError):
+            if now_ts - float(value) <= VIEWER_CAMERA_ACTIVITY_MAX_AGE_SEC:
+                return True
+    return False
+
+
+def _viewer_camera_is_receiving(camera: dict, now_ts: float) -> bool:
+    connected = bool(camera.get("connected"))
+    ready = int(camera.get("video_ready_state") or 0)
+    stalled_ms = int(camera.get("stalled_ms") or 0)
+    error = camera.get("error")
+    if not connected or stalled_ms >= 30_000 or error is not None:
+        return False
+    # MSE streams can keep receiving fMP4 data while HTMLVideoElement.readyState
+    # briefly drops to HAVE_METADATA(1), especially around live-edge/buffer trim.
+    # Treat recent binary/video progress as receiving to avoid noisy false alerts.
+    return ready >= 2 or _viewer_camera_activity_recent(camera, now_ts)
+
 
 @dataclass(slots=True)
 class ViewerHealthIssue:
@@ -140,10 +166,7 @@ async def check_viewer_health(
             expected = len(enabled_set)
             healthy = sum(
                 1 for camera in effective_cameras
-                if bool(camera.get("connected"))
-                and int(camera.get("video_ready_state") or 0) >= 2
-                and int(camera.get("stalled_ms") or 0) < 30_000
-                and camera.get("error") is None
+                if _viewer_camera_is_receiving(camera, now_ts)
             )
         else:
             effective_cameras = payload_cameras
@@ -167,7 +190,7 @@ async def check_viewer_health(
             ready = int(camera.get("video_ready_state") or 0)
             stalled_ms = int(camera.get("stalled_ms") or 0)
             error = camera.get("error")
-            if connected and ready >= 2 and stalled_ms < 30_000 and error is None:
+            if _viewer_camera_is_receiving(camera, now_ts):
                 continue
             camera_id = str(camera.get("camera_id") or "unknown")
             issues.append(_issue(

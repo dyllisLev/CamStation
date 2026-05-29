@@ -50,6 +50,16 @@ describe('viewerHealth', () => {
     expect(summary.state).toBe('degraded')
   })
 
+  it('readyState가 낮아도 바이너리 수신이 있으면 정상 수신으로 계산한다', () => {
+    registerViewerCamera('cam1_sub')
+    markViewerCameraEvent('cam1_sub', { connected: true, videoReadyState: 1, binaryBytes: 1024, videoTime: 10, stalledMs: 0 })
+
+    const summary = summarizeViewerHealth(1)
+
+    expect(summary.healthyCameras).toBe(1)
+    expect(summary.state).toBe('healthy')
+  })
+
   it('unmount된 스트림 상태는 heartbeat payload에서 제거한다', () => {
     registerViewerCamera('cam1_sub')
     registerViewerCamera('cam1')

@@ -22,13 +22,20 @@ def configure_event_notifier(notifier) -> None:
     _event_notifier = notifier
 
 
-def _camera_is_healthy(camera) -> bool:
-    return (
-        camera.connected
-        and camera.video_ready_state >= 2
-        and camera.error is None
-        and camera.stalled_ms < 30_000
-    )
+VIEWER_CAMERA_ACTIVITY_MAX_AGE_SEC = 30
+
+
+def _camera_activity_recent(camera, now_ts: float) -> bool:
+    for value in (camera.last_binary_at, camera.last_video_time_at):
+        if value is not None and now_ts - float(value) <= VIEWER_CAMERA_ACTIVITY_MAX_AGE_SEC:
+            return True
+    return False
+
+
+def _camera_is_healthy(camera, now_ts: float) -> bool:
+    if not camera.connected or camera.error is not None or camera.stalled_ms >= 30_000:
+        return False
+    return camera.video_ready_state >= 2 or _camera_activity_recent(camera, now_ts)
 
 
 def _state(expected_cameras: int, healthy_cameras: int) -> str:
@@ -79,7 +86,7 @@ def _command_from_row(row) -> ViewerCommand:
 async def heartbeat(payload: ViewerHeartbeat):
     now = time.time()
     expected = payload.expected_cameras or len(payload.cameras)
-    healthy = sum(1 for camera in payload.cameras if _camera_is_healthy(camera))
+    healthy = sum(1 for camera in payload.cameras if _camera_is_healthy(camera, now))
     state = _state(expected, healthy)
     payload_json = payload.model_dump_json()
     previous_state = None
