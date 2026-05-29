@@ -13,6 +13,30 @@ from services.viewer_health import ViewerHealthReport
 
 logger = logging.getLogger(__name__)
 
+_health_alert_suppressed_until = 0.0
+_health_alert_suppression_reason = ""
+
+
+def suppress_health_alerts_for_camera_apply(*, seconds: int, reason: str = "camera registry apply") -> None:
+    """Temporarily suppress health webhooks during camera config runtime transitions.
+
+    go2rtc restarts, recorder reconciliation, and Viewer reloads can briefly make the
+    health checker observe 0/N or partial Viewer/recorder state. Suppress webhook
+    delivery for that known transition window; the health checks still run and log.
+    """
+    global _health_alert_suppressed_until, _health_alert_suppression_reason
+    if seconds <= 0:
+        return
+    now = time.time()
+    _health_alert_suppressed_until = max(_health_alert_suppressed_until, now + seconds)
+    _health_alert_suppression_reason = reason
+    logger.info(
+        "Webhook health alerts suppressed for camera apply reason=%s until=%.0f seconds=%d",
+        reason,
+        _health_alert_suppressed_until,
+        seconds,
+    )
+
 
 class WebhookAlertSender:
     def __init__(
@@ -92,6 +116,15 @@ class WebhookAlertSender:
             return False
 
         now = self.time_func()
+        if now < _health_alert_suppressed_until:
+            logger.info(
+                "Webhook alert suppressed during camera apply grace event=%s issue_count=%d reason=%s remaining_sec=%.1f",
+                event,
+                len(report.issues),
+                _health_alert_suppression_reason,
+                _health_alert_suppressed_until - now,
+            )
+            return False
         key = self._dedup_key(report)
         last_sent = self._last_sent_at.get(key)
         if last_sent is not None and now - last_sent < self.cooldown_sec:
@@ -121,6 +154,14 @@ class WebhookAlertSender:
             return False
 
         now = self.time_func()
+        if now < _health_alert_suppressed_until:
+            logger.info(
+                "Webhook alert suppressed during camera apply grace event=viewer_health_failed issue_count=%d reason=%s remaining_sec=%.1f",
+                len(report.issues),
+                _health_alert_suppression_reason,
+                _health_alert_suppressed_until - now,
+            )
+            return False
         key = self._dedup_key(report)
         last_sent = self._last_sent_at.get(key)
         if last_sent is not None and now - last_sent < self.cooldown_sec:

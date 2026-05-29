@@ -7,6 +7,16 @@ import pytest
 pytestmark = pytest.mark.anyio
 
 
+@pytest.fixture(autouse=True)
+def reset_webhook_alert_grace():
+    import services.webhook_alerts as webhook_alerts
+    webhook_alerts._health_alert_suppressed_until = 0.0
+    webhook_alerts._health_alert_suppression_reason = ""
+    yield
+    webhook_alerts._health_alert_suppressed_until = 0.0
+    webhook_alerts._health_alert_suppression_reason = ""
+
+
 async def test_webhook_alert_sender_posts_hmac_signed_payload():
     from services.recording_health import RecordingHealthIssue, RecordingHealthReport
     from services.webhook_alerts import WebhookAlertSender
@@ -189,3 +199,63 @@ async def test_webhook_alert_sender_uses_recording_event_override():
     payload = json.loads(calls[0].decode())
     assert payload["event"] == "recording_process_failed"
     assert payload["issues"][0]["code"] == "recording_process_failed"
+
+
+async def test_webhook_alert_sender_suppresses_health_alerts_during_camera_apply_grace():
+    import services.webhook_alerts as webhook_alerts
+    from services.recording_health import RecordingHealthIssue, RecordingHealthReport
+    from services.viewer_health import ViewerHealthIssue, ViewerHealthReport
+
+    calls = []
+
+    async def fake_post(url, *, content, headers, timeout):
+        calls.append(content)
+        class Resp:
+            def raise_for_status(self):
+                return None
+        return Resp()
+
+    now = [1000.0]
+    webhook_alerts._health_alert_suppressed_until = 1060.0
+    webhook_alerts._health_alert_suppression_reason = "camera cam1 enabled=True"
+    sender = webhook_alerts.WebhookAlertSender(
+        url="http://hermes:8644/webhooks/camstation-alert",
+        secret="secret",
+        post_func=fake_post,
+        time_func=lambda: now[0],
+    )
+    recording_report = RecordingHealthReport(
+        ok=False,
+        checked_at=1000,
+        camera_count=8,
+        active_count=7,
+        issues=[RecordingHealthIssue("recording_process_failed", "ERROR", "cam1", "ffmpeg exited")],
+    )
+    viewer_report = ViewerHealthReport(
+        ok=False,
+        checked_at=1000,
+        client_count=1,
+        issues=[ViewerHealthIssue(
+            code="viewer_stream_degraded",
+            severity="ERROR",
+            client_id="viewer-1",
+            message="partial",
+            name="NUC",
+            age_sec=1,
+            expected_cameras=8,
+            healthy_cameras=0,
+            app_version="1.0.4",
+            pid=1234,
+        )],
+    )
+
+    assert await sender.send_recording_health_report(recording_report, event="recording_process_failed") is False
+    assert await sender.send_viewer_health_report(viewer_report) is False
+    assert calls == []
+
+    now[0] = 1061.0
+    assert await sender.send_viewer_health_report(viewer_report) is True
+    assert len(calls) == 1
+
+    webhook_alerts._health_alert_suppressed_until = 0.0
+    webhook_alerts._health_alert_suppression_reason = ""

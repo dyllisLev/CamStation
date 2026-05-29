@@ -3,7 +3,7 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException, status
 
-from config import GO2RTC_CONFIG, GO2RTC_URL
+from config import CAMERA_APPLY_ALERT_GRACE_SEC, GO2RTC_CONFIG, GO2RTC_URL
 from models import CameraAdminItem, CameraCreateRequest, CameraUpdateRequest, UpdateCameraEnabledRequest
 from services.camera_registry import (
     archive_camera,
@@ -15,6 +15,7 @@ from services.camera_registry import (
     update_camera,
 )
 from services.go2rtc_config_writer import write_go2rtc_config_from_db
+from services.webhook_alerts import suppress_health_alerts_for_camera_apply
 from services import camera_runtime_apply
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,10 @@ async def set_camera_admin_enabled(camera_id: str, payload: UpdateCameraEnabledR
         item = await set_camera_enabled(camera_id, payload.enabled)
         result = await write_go2rtc_config_from_db(GO2RTC_CONFIG)
         if result.changed:
+            suppress_health_alerts_for_camera_apply(
+                seconds=CAMERA_APPLY_ALERT_GRACE_SEC,
+                reason=f"camera {camera_id} enabled={payload.enabled}",
+            )
             await camera_runtime_apply.restart_go2rtc()
             camera_ids = await get_enabled_camera_ids()
             sub_camera_ids = await get_enabled_sub_camera_ids()
@@ -101,6 +106,10 @@ async def apply_camera_registry_to_go2rtc_config():
         recorders_reconciled = False
         viewer_reload_commands = 0
         if result.changed:
+            suppress_health_alerts_for_camera_apply(
+                seconds=CAMERA_APPLY_ALERT_GRACE_SEC,
+                reason="camera registry manual apply",
+            )
             await camera_runtime_apply.restart_go2rtc()
             go2rtc_restarted = True
             camera_ids = await get_enabled_camera_ids()

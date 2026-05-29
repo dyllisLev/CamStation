@@ -35,8 +35,12 @@ async def test_camera_admin_apply_restarts_go2rtc_reconciles_recorders_and_reloa
     async def fake_reconcile_recorders(camera_ids, sub_camera_ids):
         calls.append(("reconcile_recorders", list(camera_ids), list(sub_camera_ids)))
 
+    def fake_suppress_health_alerts_for_camera_apply(*, seconds, reason):
+        calls.append(("suppress", seconds, reason))
+
     monkeypatch.setattr(runtime_apply, "restart_go2rtc", fake_restart_go2rtc)
     monkeypatch.setattr(runtime_apply, "reconcile_recorders", fake_reconcile_recorders)
+    monkeypatch.setattr(camera_admin, "suppress_health_alerts_for_camera_apply", fake_suppress_health_alerts_for_camera_apply)
 
     response = await client.post("/api/camera-admin/apply")
 
@@ -47,6 +51,7 @@ async def test_camera_admin_apply_restarts_go2rtc_reconciles_recorders_and_reloa
     assert response.json()["viewer_reload_commands"] == 1
     assert ("restart_go2rtc",) in calls
     assert ("reconcile_recorders", ["cam1"], ["cam1"]) in calls
+    assert ("suppress", 120, "camera registry manual apply") in calls
 
     async with aiosqlite.connect(test_db) as db:
         rows = await db.execute_fetchall(

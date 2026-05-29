@@ -77,9 +77,13 @@ async def test_camera_admin_apply_writes_go2rtc_config_from_registry(client, tes
     async def noop_enqueue_viewer_reload_commands(reason="camera registry applied"):
         return 0
 
+    def noop_suppress_health_alerts_for_camera_apply(*, seconds, reason):
+        return None
+
     monkeypatch.setattr(runtime_apply, "restart_go2rtc", noop_restart_go2rtc)
     monkeypatch.setattr(runtime_apply, "reconcile_recorders", noop_reconcile_recorders)
     monkeypatch.setattr(runtime_apply, "enqueue_viewer_reload_commands", noop_enqueue_viewer_reload_commands)
+    monkeypatch.setattr(camera_admin_router, "suppress_health_alerts_for_camera_apply", noop_suppress_health_alerts_for_camera_apply)
 
     config = tmp_path / "go2rtc.yaml"
     config.write_text("streams:\n  old: rtsp://old\napi:\n  listen: old\n", encoding="utf-8")
@@ -197,7 +201,7 @@ async def test_camera_admin_sets_enabled_applies_runtime_and_archives_camera(cli
     import routers.camera_admin as camera_admin_router
     import services.camera_runtime_apply as runtime_apply
 
-    calls = {"restart": 0, "reconcile": [], "reload": 0}
+    calls = {"restart": 0, "reconcile": [], "reload": 0, "suppress": []}
 
     async def noop_restart_go2rtc():
         calls["restart"] += 1
@@ -209,12 +213,16 @@ async def test_camera_admin_sets_enabled_applies_runtime_and_archives_camera(cli
         calls["reload"] += 1
         return 0
 
+    def fake_suppress_health_alerts_for_camera_apply(*, seconds, reason):
+        calls["suppress"].append((seconds, reason))
+
     config = tmp_path / "go2rtc.yaml"
     config.write_text("streams:\n  cam1: rtsp://secret/main\napi:\n  listen: old\n", encoding="utf-8")
     monkeypatch.setattr(camera_admin_router, "GO2RTC_CONFIG", str(config))
     monkeypatch.setattr(runtime_apply, "restart_go2rtc", noop_restart_go2rtc)
     monkeypatch.setattr(runtime_apply, "reconcile_recorders", noop_reconcile_recorders)
     monkeypatch.setattr(runtime_apply, "enqueue_viewer_reload_commands", noop_enqueue_viewer_reload_commands)
+    monkeypatch.setattr(camera_admin_router, "suppress_health_alerts_for_camera_apply", fake_suppress_health_alerts_for_camera_apply)
 
     async with aiosqlite.connect(test_db) as db:
         now = 123.0
@@ -235,6 +243,7 @@ async def test_camera_admin_sets_enabled_applies_runtime_and_archives_camera(cli
     assert calls["restart"] == 1
     assert calls["reconcile"] == [([], [])]
     assert calls["reload"] == 1
+    assert calls["suppress"] == [(120, "camera cam1 enabled=False")]
     assert "  cam1:" not in config.read_text(encoding="utf-8")
 
     archive = await client.delete("/api/camera-admin/cam1")
