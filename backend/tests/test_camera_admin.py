@@ -6,7 +6,7 @@ import respx
 pytestmark = pytest.mark.anyio
 
 
-async def test_camera_admin_lists_registry_cameras_without_secret_urls(client, test_db):
+async def test_camera_admin_lists_registry_cameras_with_connection_values(client, test_db):
     async with aiosqlite.connect(test_db) as db:
         now = 123.0
         await db.execute(
@@ -53,10 +53,15 @@ async def test_camera_admin_lists_registry_cameras_without_secret_urls(client, t
         "main_stream_configured": True,
         "sub_stream_configured": True,
         "onvif_configured": False,
+        "main_stream_url": "rtsp://user:secret@example/cam1",
+        "sub_stream_url": "rtsp://user:secret@example/cam1-sub",
+        "onvif_host": None,
+        "onvif_port": None,
+        "onvif_username": None,
+        "onvif_password": None,
         "sort_order": 10,
         "notes": "테스트",
     }]
-    assert "secret" not in response.text
 
 
 async def test_camera_admin_apply_writes_go2rtc_config_from_registry(client, test_db, tmp_path, monkeypatch):
@@ -114,7 +119,7 @@ async def test_camera_admin_apply_writes_go2rtc_config_from_registry(client, tes
     assert "secret" not in response.text
 
 
-async def test_camera_admin_creates_camera_and_redacts_response(client, test_db):
+async def test_camera_admin_creates_camera_and_returns_editable_connection_values(client, test_db):
     response = await client.post(
         "/api/camera-admin",
         json={
@@ -138,8 +143,9 @@ async def test_camera_admin_creates_camera_and_redacts_response(client, test_db)
     assert response.json()["display_name"] == "새 카메라"
     assert response.json()["sub_stream_configured"] is True
     assert response.json()["onvif_configured"] is True
-    assert "secret" not in response.text
-    assert "pw-secret" not in response.text
+    assert response.json()["main_stream_url"] == "rtsp://user:secret@example/new-main"
+    assert response.json()["sub_stream_url"] == "rtsp://user:secret@example/new-sub"
+    assert response.json()["onvif_password"] == "pw-secret"
 
     async with aiosqlite.connect(test_db) as db:
         rows = await db.execute_fetchall(
@@ -148,7 +154,7 @@ async def test_camera_admin_creates_camera_and_redacts_response(client, test_db)
     assert rows == [("rtsp://user:secret@example/new-main", "pw-secret")]
 
 
-async def test_camera_admin_updates_camera_without_overwriting_omitted_secret_fields(client, test_db):
+async def test_camera_admin_updates_camera_without_overwriting_omitted_connection_fields(client, test_db):
     async with aiosqlite.connect(test_db) as db:
         now = 123.0
         await db.execute(
@@ -176,9 +182,9 @@ async def test_camera_admin_updates_camera_without_overwriting_omitted_secret_fi
     assert response.json()["display_name"] == "수정됨"
     assert response.json()["location"] == "camera-site"
     assert response.json()["sub_stream_configured"] is True
-    assert "old-secret" not in response.text
-    assert "new-secret" not in response.text
-    assert "old-pw" not in response.text
+    assert response.json()["main_stream_url"] == "rtsp://old-secret/main"
+    assert response.json()["sub_stream_url"] == "rtsp://new-secret/sub"
+    assert response.json()["onvif_password"] == "old-pw"
 
     async with aiosqlite.connect(test_db) as db:
         rows = await db.execute_fetchall(
@@ -203,7 +209,7 @@ async def test_camera_admin_sets_enabled_and_archives_camera(client, test_db):
     disable = await client.post("/api/camera-admin/cam1/enabled", json={"enabled": False})
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False
-    assert "secret" not in disable.text
+    assert disable.json()["main_stream_url"] == "rtsp://secret/main"
 
     archive = await client.delete("/api/camera-admin/cam1")
     assert archive.status_code == 200

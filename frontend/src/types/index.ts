@@ -25,6 +25,12 @@ export interface CameraAdminItem {
   main_stream_configured: boolean;
   sub_stream_configured: boolean;
   onvif_configured: boolean;
+  main_stream_url: string | null;
+  sub_stream_url: string | null;
+  onvif_host: string | null;
+  onvif_port: number | null;
+  onvif_username: string | null;
+  onvif_password: string | null;
   sort_order: number;
   notes: string | null;
 }

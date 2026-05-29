@@ -47,7 +47,7 @@ async def test_import_cameras_from_go2rtc_config_creates_camera_rows(test_db, tm
     assert rows[1]["enabled"] == 0
 
 
-async def test_camera_registry_lists_admin_items_without_leaking_stream_urls(test_db, tmp_path):
+async def test_camera_registry_lists_admin_items_with_editable_connection_values(test_db, tmp_path):
     from services.camera_importer import import_cameras_from_go2rtc_config
     from services.camera_registry import list_camera_admin_items
 
@@ -64,7 +64,8 @@ async def test_camera_registry_lists_admin_items_without_leaking_stream_urls(tes
     assert cameras[0].main_stream_configured is True
     assert cameras[0].sub_stream_configured is True
     assert cameras[0].onvif_configured is False
-    assert not hasattr(cameras[0], "main_stream_url")
+    assert cameras[0].main_stream_url == "rtsp://user:secret@example/cam1"
+    assert cameras[0].sub_stream_url == "rtsp://user:secret@example/cam1-sub"
 
 
 async def test_camera_registry_enabled_camera_ids_excludes_disabled_and_archived(test_db, tmp_path):

@@ -931,12 +931,12 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
       display_name: camera.display_name,
       location: camera.location ?? '',
       notes: camera.notes ?? '',
-      main_stream_url: '',
-      sub_stream_url: '',
-      onvif_host: '',
-      onvif_port: '',
-      onvif_username: '',
-      onvif_password: '',
+      main_stream_url: camera.main_stream_url ?? '',
+      sub_stream_url: camera.sub_stream_url ?? '',
+      onvif_host: camera.onvif_host ?? '',
+      onvif_port: camera.onvif_port == null ? '' : String(camera.onvif_port),
+      onvif_username: camera.onvif_username ?? '',
+      onvif_password: camera.onvif_password ?? '',
     })
     setCameraMessage(null)
   }
@@ -1149,7 +1149,7 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
                       </div>
                       {editingCameraId === camera.id && cameraEditForm && (
                         <div style={{ gridColumn: '1 / -1', border: '1px solid rgba(0,191,174,0.35)', borderRadius: 16, padding: 12, background: 'rgba(0,191,174,0.06)' }}>
-                          <div className="new-muted" style={{ marginBottom: 10 }}>연결정보는 보안상 기존 값을 표시하지 않습니다. 빈칸은 기존 값 유지, 지우려면 __CLEAR__ 입력.</div>
+                          <div className="new-muted" style={{ marginBottom: 10 }}>기존 연결정보를 그대로 표시합니다. 지우려면 __CLEAR__ 입력.</div>
                           <div className="new-form-grid">
                             <label className="new-label">표시명
                               <input value={cameraEditForm.display_name} onChange={(event) => updateEditField('display_name', event.target.value)} />
@@ -1158,22 +1158,22 @@ function NewSettingsPage({ page, onNavigate }: { page: NewPage; onNavigate: Navi
                               <input value={cameraEditForm.location} onChange={(event) => updateEditField('location', event.target.value)} />
                             </label>
                             <label className="new-label">메인 RTSP URL
-                              <input value={cameraEditForm.main_stream_url} placeholder={camera.main_stream_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('main_stream_url', event.target.value)} />
+                              <input value={cameraEditForm.main_stream_url} placeholder="메인 RTSP URL" onChange={(event) => updateEditField('main_stream_url', event.target.value)} />
                             </label>
                             <label className="new-label">보조 RTSP URL
-                              <input value={cameraEditForm.sub_stream_url} placeholder={camera.sub_stream_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('sub_stream_url', event.target.value)} />
+                              <input value={cameraEditForm.sub_stream_url} placeholder="보조 RTSP URL" onChange={(event) => updateEditField('sub_stream_url', event.target.value)} />
                             </label>
                             <label className="new-label">ONVIF 호스트/IP
-                              <input value={cameraEditForm.onvif_host} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_host', event.target.value)} />
+                              <input value={cameraEditForm.onvif_host} placeholder="ONVIF 호스트/IP" onChange={(event) => updateEditField('onvif_host', event.target.value)} />
                             </label>
                             <label className="new-label">ONVIF 포트
-                              <input value={cameraEditForm.onvif_port} placeholder={camera.onvif_configured ? '기존 값 유지' : '예: 80'} onChange={(event) => updateEditField('onvif_port', event.target.value)} />
+                              <input value={cameraEditForm.onvif_port} placeholder="예: 80" onChange={(event) => updateEditField('onvif_port', event.target.value)} />
                             </label>
                             <label className="new-label">ONVIF 사용자명
-                              <input value={cameraEditForm.onvif_username} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_username', event.target.value)} />
+                              <input value={cameraEditForm.onvif_username} placeholder="ONVIF 사용자명" onChange={(event) => updateEditField('onvif_username', event.target.value)} />
                             </label>
                             <label className="new-label">ONVIF 비밀번호
-                              <input type="password" value={cameraEditForm.onvif_password} placeholder={camera.onvif_configured ? '기존 값 유지' : '미설정'} onChange={(event) => updateEditField('onvif_password', event.target.value)} />
+                              <input value={cameraEditForm.onvif_password} placeholder="ONVIF 비밀번호" onChange={(event) => updateEditField('onvif_password', event.target.value)} />
                             </label>
                             <label className="new-label" style={{ gridColumn: '1 / -1' }}>운영 메모
                               <input value={cameraEditForm.notes} onChange={(event) => updateEditField('notes', event.target.value)} />

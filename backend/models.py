@@ -28,6 +28,12 @@ class CameraAdminItem(BaseModel):
     main_stream_configured: bool
     sub_stream_configured: bool
     onvif_configured: bool
+    main_stream_url: str | None = None
+    sub_stream_url: str | None = None
+    onvif_host: str | None = None
+    onvif_port: int | None = None
+    onvif_username: str | None = None
+    onvif_password: str | None = None
     sort_order: int = 0
     notes: str | None = None
 

@@ -39,6 +39,12 @@ def _row_to_admin_item(row: aiosqlite.Row, stream_map: dict[str, Any] | None = N
         main_stream_configured=bool(row["main_stream_url"]),
         sub_stream_configured=bool(row["sub_stream_url"]),
         onvif_configured=bool(row["onvif_host"] and row["onvif_port"]),
+        main_stream_url=row["main_stream_url"],
+        sub_stream_url=row["sub_stream_url"],
+        onvif_host=row["onvif_host"],
+        onvif_port=row["onvif_port"],
+        onvif_username=row["onvif_username"],
+        onvif_password=row["onvif_password"],
         sort_order=int(row["sort_order"] or 0),
         notes=row["notes"],
     )
