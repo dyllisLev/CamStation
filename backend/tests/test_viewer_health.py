@@ -188,7 +188,7 @@ async def test_viewer_health_ignores_disabled_camera_payload(test_db):
     assert report.issues == []
 
 
-async def test_viewer_event_notifier_debounces_repeated_degraded_heartbeats(test_db):
+async def test_viewer_event_notifier_confirms_repeated_degraded_heartbeats_once(test_db):
     import asyncio
     import time
     from services.viewer_health import ViewerHealthEventNotifier
@@ -217,23 +217,26 @@ async def test_viewer_event_notifier_debounces_repeated_degraded_heartbeats(test
         test_db,
         alert_sender=FakeSender(),
         max_heartbeat_age_sec=60,
-        debounce_sec=0.02,
+        debounce_sec=0.04,
     )
     try:
         notifier.notify_heartbeat(
             client_id="viewer-1",
             state="degraded",
-            previous_state="degraded",
+            previous_state="healthy",
             healthy_cameras=1,
-            previous_healthy_cameras=1,
+            previous_healthy_cameras=2,
         )
+        # A worsening heartbeat must not bypass confirmation and alert immediately.
         notifier.notify_heartbeat(
             client_id="viewer-1",
             state="degraded",
             previous_state="degraded",
-            healthy_cameras=1,
+            healthy_cameras=0,
             previous_healthy_cameras=1,
         )
+        await asyncio.sleep(0.01)
+        assert sent == []
         await asyncio.sleep(0.08)
     finally:
         await notifier.close()
@@ -241,3 +244,56 @@ async def test_viewer_event_notifier_debounces_repeated_degraded_heartbeats(test
     assert len(sent) == 1
     assert sent[0].ok is False
     assert any(i.code == "viewer_camera_not_receiving" for i in sent[0].issues)
+
+
+async def test_viewer_event_notifier_cancels_transient_degraded_recovery(test_db):
+    import asyncio
+    import time
+    from services.viewer_health import ViewerHealthEventNotifier
+
+    await _insert_viewer(
+        test_db,
+        last_seen=time.time(),
+        healthy_cameras=2,
+        state="healthy",
+        payload={
+            "cameras": [
+                {"camera_id": "cam1_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+                {"camera_id": "cam2_sub", "connected": True, "video_ready_state": 4, "stalled_ms": 0},
+            ]
+        },
+    )
+
+    sent = []
+
+    class FakeSender:
+        async def send_viewer_health_report(self, report):
+            sent.append(report)
+            return True
+
+    notifier = ViewerHealthEventNotifier(
+        test_db,
+        alert_sender=FakeSender(),
+        max_heartbeat_age_sec=60,
+        debounce_sec=0.04,
+    )
+    try:
+        notifier.notify_heartbeat(
+            client_id="viewer-1",
+            state="degraded",
+            previous_state="healthy",
+            healthy_cameras=0,
+            previous_healthy_cameras=2,
+        )
+        notifier.notify_heartbeat(
+            client_id="viewer-1",
+            state="healthy",
+            previous_state="degraded",
+            healthy_cameras=2,
+            previous_healthy_cameras=0,
+        )
+        await asyncio.sleep(0.08)
+    finally:
+        await notifier.close()
+
+    assert sent == []

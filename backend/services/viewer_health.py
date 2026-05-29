@@ -284,7 +284,7 @@ class ViewerHealthEventNotifier:
         alert_sender,
         max_heartbeat_age_sec: int = 60,
         get_enabled_camera_ids=None,
-        debounce_sec: float = 10.0,
+        debounce_sec: float = 30.0,
     ):
         self.db_path = db_path
         self.alert_sender = alert_sender
@@ -302,22 +302,27 @@ class ViewerHealthEventNotifier:
         healthy_cameras: int,
         previous_healthy_cameras: int | None,
     ) -> None:
-        should_check = state == "degraded" or previous_state == "degraded"
-        if not should_check:
+        # Viewer playback can briefly report 0/N or low readyState during MSE
+        # buffer/source transitions and app startup. Do not alert immediately on
+        # a single degraded heartbeat; schedule one confirmation check and let
+        # later healthy heartbeats cancel it. This keeps event-triggered alerts
+        # fast for persistent failures while suppressing transient false alarms.
+        if state != "degraded":
+            if previous_state == "degraded":
+                self._cancel(client_id)
             return
 
-        state_changed = previous_state is not None and previous_state != state
-        worsened = (
-            previous_healthy_cameras is not None
-            and healthy_cameras < previous_healthy_cameras
-        )
-        delay = 0.0 if state_changed or worsened else self.debounce_sec
-        self._schedule(client_id, delay=delay)
+        self._schedule(client_id, delay=self.debounce_sec)
 
-    def _schedule(self, client_id: str, *, delay: float) -> None:
+    def _cancel(self, client_id: str) -> None:
         existing = self._tasks.pop(client_id, None)
         if existing is not None and not existing.done():
             existing.cancel()
+
+    def _schedule(self, client_id: str, *, delay: float) -> None:
+        existing = self._tasks.get(client_id)
+        if existing is not None and not existing.done():
+            return
         self._tasks[client_id] = asyncio.create_task(self._run(client_id, delay))
 
     async def _run(self, client_id: str, delay: float) -> None:
