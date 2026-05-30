@@ -282,6 +282,73 @@ async def test_midnight_restart_starts_recorder_even_when_stop_hangs(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_recording_loop_exits_without_retry_when_process_is_superseded(monkeypatch):
+    from services import recorder
+
+    events = []
+    original_active_procs = dict(recorder._active_procs)
+    original_processes = dict(recorder._processes)
+    original_stderr_tasks = dict(recorder._stderr_tasks)
+    original_segments = dict(recorder._current_segment_paths)
+    original_sender = recorder._event_alert_sender
+
+    class FakeProc:
+        pid = 111
+        returncode = 255
+
+        async def wait(self):
+            newer_proc = FakeProc()
+            newer_task = recorder.asyncio.create_task(recorder.asyncio.sleep(60))
+            recorder._active_procs["cam1"] = newer_proc  # type: ignore[assignment]
+            recorder._stderr_tasks["cam1"] = newer_task
+            recorder._current_segment_paths["cam1"] = "/tmp/newer.mp4"
+            return self.returncode
+
+    async def fake_subprocess_exec(*args, **kwargs):
+        return FakeProc()
+
+    async def fake_watch_stderr(*args, **kwargs):
+        await recorder.asyncio.sleep(60)
+
+    async def fake_get_setting(name):
+        return "30"
+
+    async def fake_send_event(*args, **kwargs):
+        events.append((args, kwargs))
+
+    try:
+        recorder._active_procs.clear()
+        recorder._processes.clear()
+        recorder._stderr_tasks.clear()
+        recorder._current_segment_paths.clear()
+        recorder.set_event_alert_sender(None)
+        monkeypatch.setattr(recorder.asyncio, "create_subprocess_exec", fake_subprocess_exec)
+        monkeypatch.setattr(recorder, "_watch_stderr", fake_watch_stderr)
+        monkeypatch.setattr(recorder, "get_setting", fake_get_setting)
+        monkeypatch.setattr(recorder, "_send_recording_event_alert", fake_send_event)
+
+        await recorder.asyncio.wait_for(
+            recorder._run_recording("cam1", 30, "/recordings", "/tmp", "/tmp/test.db"),
+            timeout=1,
+        )
+
+        assert events == []
+        assert recorder._current_segment_paths["cam1"] == "/tmp/newer.mp4"
+        assert recorder._active_procs["cam1"] is not None
+        assert "cam1" in recorder._stderr_tasks
+    finally:
+        recorder._active_procs.clear()
+        recorder._active_procs.update(original_active_procs)
+        recorder._processes.clear()
+        recorder._processes.update(original_processes)
+        recorder._stderr_tasks.clear()
+        recorder._stderr_tasks.update(original_stderr_tasks)
+        recorder._current_segment_paths.clear()
+        recorder._current_segment_paths.update(original_segments)
+        recorder.set_event_alert_sender(original_sender)
+
+
+@pytest.mark.asyncio
 async def test_recording_event_alert_sender_emits_named_event():
     from services import recorder
 

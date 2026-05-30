@@ -404,14 +404,25 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
         await proc.wait()
         ran = asyncio.get_running_loop().time() - t_start
 
-        # stderr task 정리
+        superseded = _active_procs.get(cam_id) is not proc and cam_id not in _stopping_rec
+
+        # stderr task 정리. 다른 recorder loop가 이미 같은 camera_id를 인수한 경우
+        # 새 loop의 stderr task/state를 지우면 안 된다.
         if not stderr_task.done():
             stderr_task.cancel()
             try:
                 await stderr_task
             except asyncio.CancelledError:
                 pass
-        _stderr_tasks.pop(cam_id, None)
+        if _stderr_tasks.get(cam_id) is stderr_task:
+            _stderr_tasks.pop(cam_id, None)
+
+        if superseded:
+            logger.warning(
+                "Recording loop for %s exited after being superseded by another process; not retrying",
+                cam_id,
+            )
+            break
 
         # 마지막 세그먼트: temp → 최종 경로 이동 후 DB 업데이트
         ts_end = datetime.now(KST).timestamp()
