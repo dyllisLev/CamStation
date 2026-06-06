@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
     await recorder.start_all(cam_ids, segment_min, RECORDINGS_DIR, TEMP_DIR)
     sub_task = asyncio.create_task(_start_sub_keepalives(sub_cam_ids))
 
-    cleanup_task = asyncio.create_task(run_cleanup_loop(RECORDINGS_DIR, get_setting))
+    cleanup_task = asyncio.create_task(run_cleanup_loop(RECORDINGS_DIR, get_setting, TEMP_DIR))
     alert_sender = WebhookAlertSender(
         url=HERMES_WEBHOOK_URL,
         secret=HERMES_WEBHOOK_SECRET,

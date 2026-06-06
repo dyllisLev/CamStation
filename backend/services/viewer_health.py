@@ -248,6 +248,7 @@ async def run_viewer_health_loop(
     *,
     interval_sec: int = 300,
     max_heartbeat_age_sec: int = 60,
+    confirm_sec: float = 30.0,
     alert_sender=None,
     get_enabled_camera_ids=None,
 ) -> None:
@@ -261,7 +262,25 @@ async def run_viewer_health_loop(
             )
             log_viewer_health_report(report)
             if alert_sender is not None and not report.ok:
-                await alert_sender.send_viewer_health_report(report)
+                if confirm_sec > 0:
+                    await asyncio.sleep(confirm_sec)
+                    enabled_ids = list(get_enabled_camera_ids()) if get_enabled_camera_ids is not None else None
+                    confirmed = await check_viewer_health(
+                        db_path,
+                        max_heartbeat_age_sec=max_heartbeat_age_sec,
+                        enabled_camera_ids=enabled_ids,
+                    )
+                    if confirmed.ok:
+                        logger.info(
+                            "viewer_health_transient_recovered initial_issue_count=%d confirm_sec=%.1f",
+                            len(report.issues),
+                            confirm_sec,
+                        )
+                    else:
+                        log_viewer_health_report(confirmed)
+                        await alert_sender.send_viewer_health_report(confirmed)
+                else:
+                    await alert_sender.send_viewer_health_report(report)
         except asyncio.CancelledError:
             raise
         except Exception as e:

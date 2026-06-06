@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 import time
 
 import aiosqlite
@@ -15,6 +17,7 @@ from models import (
 
 router = APIRouter(prefix="/api/viewers", tags=["viewers"])
 _event_notifier = None
+logger = logging.getLogger(__name__)
 
 
 def configure_event_notifier(notifier) -> None:
@@ -23,6 +26,25 @@ def configure_event_notifier(notifier) -> None:
 
 
 VIEWER_CAMERA_ACTIVITY_MAX_AGE_SEC = 30
+VIEWER_DB_RETRY_ATTEMPTS = 3
+VIEWER_DB_RETRY_BASE_DELAY_SEC = 0.05
+
+
+async def _with_db_retry(operation, *, label: str):
+    last_error: aiosqlite.OperationalError | None = None
+    for attempt in range(1, VIEWER_DB_RETRY_ATTEMPTS + 1):
+        try:
+            return await operation()
+        except aiosqlite.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt >= VIEWER_DB_RETRY_ATTEMPTS:
+                raise
+            last_error = e
+            delay = VIEWER_DB_RETRY_BASE_DELAY_SEC * attempt
+            logger.warning("Viewer DB operation locked label=%s attempt=%d retry_in=%.2fs", label, attempt, delay)
+            await asyncio.sleep(delay)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Viewer DB operation failed without exception label={label}")
 
 
 def _camera_activity_recent(camera, now_ts: float) -> bool:
@@ -92,52 +114,55 @@ async def heartbeat(payload: ViewerHeartbeat):
     previous_state = None
     previous_healthy = None
 
-    async with aiosqlite.connect(get_db_path()) as db:
-        cur = await db.execute(
-            "SELECT state, healthy_cameras FROM viewer_clients WHERE client_id=?",
-            (payload.client_id,),
-        )
-        previous = await cur.fetchone()
-        if previous is not None:
-            previous_state = previous[0]
-            previous_healthy = int(previous[1] or 0)
-        await db.execute(
-            """
-            INSERT INTO viewer_clients(
-                client_id, name, app_version, server_url, platform, hostname, pid,
-                started_at, last_seen, expected_cameras, healthy_cameras, state, payload_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(client_id) DO UPDATE SET
-                name=excluded.name,
-                app_version=excluded.app_version,
-                server_url=excluded.server_url,
-                platform=excluded.platform,
-                hostname=excluded.hostname,
-                pid=excluded.pid,
-                started_at=COALESCE(excluded.started_at, viewer_clients.started_at),
-                last_seen=excluded.last_seen,
-                expected_cameras=excluded.expected_cameras,
-                healthy_cameras=excluded.healthy_cameras,
-                state=excluded.state,
-                payload_json=excluded.payload_json
-            """,
-            (
-                payload.client_id,
-                payload.name,
-                payload.app_version,
-                payload.server_url,
-                payload.platform,
-                payload.hostname,
-                payload.pid,
-                payload.started_at,
-                now,
-                expected,
-                healthy,
-                state,
-                payload_json,
-            ),
-        )
-        await db.commit()
+    async def upsert_heartbeat():
+        async with aiosqlite.connect(get_db_path()) as db:
+            cur = await db.execute(
+                "SELECT state, healthy_cameras FROM viewer_clients WHERE client_id=?",
+                (payload.client_id,),
+            )
+            previous = await cur.fetchone()
+            prev_state = previous[0] if previous is not None else None
+            prev_healthy = int(previous[1] or 0) if previous is not None else None
+            await db.execute(
+                """
+                INSERT INTO viewer_clients(
+                    client_id, name, app_version, server_url, platform, hostname, pid,
+                    started_at, last_seen, expected_cameras, healthy_cameras, state, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    name=excluded.name,
+                    app_version=excluded.app_version,
+                    server_url=excluded.server_url,
+                    platform=excluded.platform,
+                    hostname=excluded.hostname,
+                    pid=excluded.pid,
+                    started_at=COALESCE(excluded.started_at, viewer_clients.started_at),
+                    last_seen=excluded.last_seen,
+                    expected_cameras=excluded.expected_cameras,
+                    healthy_cameras=excluded.healthy_cameras,
+                    state=excluded.state,
+                    payload_json=excluded.payload_json
+                """,
+                (
+                    payload.client_id,
+                    payload.name,
+                    payload.app_version,
+                    payload.server_url,
+                    payload.platform,
+                    payload.hostname,
+                    payload.pid,
+                    payload.started_at,
+                    now,
+                    expected,
+                    healthy,
+                    state,
+                    payload_json,
+                ),
+            )
+            await db.commit()
+            return prev_state, prev_healthy
+
+    previous_state, previous_healthy = await _with_db_retry(upsert_heartbeat, label="viewer_heartbeat")
 
     if _event_notifier is not None:
         _event_notifier.notify_heartbeat(

@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -84,17 +85,78 @@ async def delete_oldest_to_fit(recordings_dir: str, max_storage_gb: int):
         total_bytes -= dir_size
         logger.info("Storage cleanup freed ~%.1f MB from %s", dir_size / 1024 ** 2, day_dir)
 
-async def _run_cleanup(recordings_dir: str, get_retention_fn):
+def _final_path_for_temp(temp_path: Path, temp_dir: Path, recordings_dir: Path) -> Path | None:
+    try:
+        rel = temp_path.relative_to(temp_dir)
+    except ValueError:
+        return None
+    if len(rel.parts) < 3:
+        return None
+    cam_id = rel.parts[0]
+    date_str = temp_path.parent.name
+    stem = temp_path.stem
+    if "_" in stem:
+        candidate = stem.split("_", 1)[0]
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+            date_str = candidate
+        except ValueError:
+            pass
+    return recordings_dir / cam_id / date_str / temp_path.name
+
+async def quarantine_stale_temp_segments(
+    temp_dir: str,
+    recordings_dir: str,
+    *,
+    stale_days: int = 7,
+    quarantine_root: str | None = None,
+):
+    """Move old orphan temp MP4s to quarantine so health checks don't page later.
+
+    Only files older than ``stale_days`` are considered, which keeps current or
+    recently failed segments available for normal recording-health recovery.
+    """
+    temp_base = Path(temp_dir)
+    recordings_base = Path(recordings_dir)
+    if not temp_base.exists():
+        return 0
+    cutoff = datetime.now(KST).timestamp() - stale_days * 86400
+    quarantine_base = Path(quarantine_root or str(temp_base.parent / "quarantine" / "stale-temp"))
+    stamp = datetime.now(KST).strftime("%Y%m%d%H%M%S")
+    moved = 0
+    for path in sorted(temp_base.glob("**/*.mp4")):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        if stat.st_mtime >= cutoff:
+            continue
+        final_path = _final_path_for_temp(path, temp_base, recordings_base)
+        if final_path is not None and final_path.exists() and final_path.stat().st_size < stat.st_size:
+            # Keep potentially useful recovery material if the final file is smaller.
+            continue
+        dest = quarantine_base / stamp / path.relative_to(temp_base)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(dest))
+        moved += 1
+        logger.info("Quarantined stale temp segment: %s -> %s", path, dest)
+    return moved
+
+async def _run_cleanup(recordings_dir: str, get_retention_fn, temp_dir: str | None = None):
     retention = int(await get_retention_fn("retention_days") or "30")
     await delete_expired_segments(recordings_dir, retention)
     max_gb = int(await get_retention_fn("max_storage_gb") or "0")
     await delete_oldest_to_fit(recordings_dir, max_gb)
+    if temp_dir:
+        await quarantine_stale_temp_segments(temp_dir, recordings_dir)
 
-async def run_cleanup_loop(recordings_dir: str, get_retention_fn):
+async def run_cleanup_loop(recordings_dir: str, get_retention_fn, temp_dir: str | None = None):
     global _cleanup_event
     _cleanup_event = asyncio.Event()
 
-    await _run_cleanup(recordings_dir, get_retention_fn)
+    await _run_cleanup(recordings_dir, get_retention_fn, temp_dir)
 
     while True:
         wait_sec = _seconds_until_next_hour()
@@ -107,4 +169,4 @@ async def run_cleanup_loop(recordings_dir: str, get_retention_fn):
         except asyncio.TimeoutError:
             logger.info("Running scheduled hourly cleanup (KST %s)", datetime.now(KST).strftime("%H:%M"))
 
-        await _run_cleanup(recordings_dir, get_retention_fn)
+        await _run_cleanup(recordings_dir, get_retention_fn, temp_dir)

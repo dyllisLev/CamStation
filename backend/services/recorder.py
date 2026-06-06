@@ -81,6 +81,18 @@ def _next_delay(current: int, ran: float, *, success_threshold: float = 30.0, ma
     return min(max(current * 2, 5), max_delay)
 
 
+def _should_alert_recording_process_exit(ran: float, retry_delay: int) -> bool:
+    """Return True only for likely persistent recorder failures.
+
+    ffmpeg segment recorders can exit cleanly around rollovers or transient camera
+    reconnects and then immediately recover.  Alerting on the first long-running
+    process exit creates noise while the retry loop is already handling it.  Fast
+    repeated exits increase the retry delay; use that as the signal that operator
+    attention is likely needed.
+    """
+    return ran < 30.0 and retry_delay >= 30
+
+
 def build_ffmpeg_cmd(source_rtsp: str, output_dir: str, segment_minutes: int) -> list[str]:
     segment_sec = segment_minutes * 60
     output_pattern = os.path.join(output_dir, "%Y-%m-%d_%H-%M.mp4")
@@ -476,11 +488,20 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
             break
 
         delay = _next_delay(delay, ran)
-        await _send_recording_event_alert(
-            "recording_process_failed",
-            camera_id=cam_id,
-            message=f"ffmpeg 녹화 프로세스가 예기치 않게 종료되었습니다: returncode={proc.returncode} ran={ran:.0f}s retry_in={delay}s",
-        )
+        if _should_alert_recording_process_exit(ran, delay):
+            await _send_recording_event_alert(
+                "recording_process_failed",
+                camera_id=cam_id,
+                message=f"ffmpeg 녹화 프로세스가 반복적으로 종료되고 있습니다: returncode={proc.returncode} ran={ran:.0f}s retry_in={delay}s",
+            )
+        else:
+            logger.info(
+                "Recording process exit alert suppressed as transient: camera=%s returncode=%s ran=%.0fs retry_in=%ds",
+                cam_id,
+                proc.returncode,
+                ran,
+                delay,
+            )
         logger.info("Recording for %s exited (ran %.0fs), retrying in %ds", cam_id, ran, delay)
         await asyncio.sleep(delay)
 

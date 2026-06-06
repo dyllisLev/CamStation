@@ -1,5 +1,6 @@
 import time
 
+import aiosqlite
 import pytest
 
 pytestmark = pytest.mark.anyio
@@ -141,3 +142,25 @@ async def test_rejects_unknown_viewer_command(client):
 
     r = await client.post("/api/viewers/viewer-cmd2/commands", json={"command": "format_disk"})
     assert r.status_code == 422
+
+
+async def test_viewer_db_retry_retries_locked_operation(monkeypatch):
+    from routers import viewers
+
+    sleeps = []
+    attempts = {"count": 0}
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    async def flaky_operation():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise aiosqlite.OperationalError("database is locked")
+        return "ok"
+
+    monkeypatch.setattr(viewers.asyncio, "sleep", fake_sleep)
+
+    assert await viewers._with_db_retry(flaky_operation, label="test") == "ok"
+    assert attempts["count"] == 2
+    assert sleeps == [viewers.VIEWER_DB_RETRY_BASE_DELAY_SEC]
