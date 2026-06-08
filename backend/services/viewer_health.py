@@ -216,6 +216,30 @@ async def check_viewer_health(
     )
 
 
+def _persistent_issue_keys(report: ViewerHealthReport) -> set[tuple[str, str, str | None]]:
+    keys: set[tuple[str, str, str | None]] = set()
+    for issue in report.issues:
+        if issue.severity != "ERROR":
+            continue
+        # viewer_stream_degraded is an aggregate derived from per-camera state. If
+        # the specific failing camera changes between confirmation checks, treat
+        # it as transient MSE readyState noise instead of alerting on the aggregate.
+        if issue.code == "viewer_stream_degraded":
+            continue
+        keys.add((issue.code, issue.client_id, issue.camera_id))
+    return keys
+
+
+def _has_persistent_viewer_issue(initial: ViewerHealthReport, confirmed: ViewerHealthReport) -> bool:
+    if confirmed.ok:
+        return False
+    initial_keys = _persistent_issue_keys(initial)
+    confirmed_keys = _persistent_issue_keys(confirmed)
+    if initial_keys and confirmed_keys:
+        return bool(initial_keys & confirmed_keys)
+    return bool(confirmed_keys)
+
+
 def log_viewer_health_report(report: ViewerHealthReport) -> None:
     if report.ok:
         logger.info("viewer_health_ok clients=%d checked_at=%.0f", report.client_count, report.checked_at)
@@ -276,9 +300,16 @@ async def run_viewer_health_loop(
                             len(report.issues),
                             confirm_sec,
                         )
-                    else:
+                    elif _has_persistent_viewer_issue(report, confirmed):
                         log_viewer_health_report(confirmed)
                         await alert_sender.send_viewer_health_report(confirmed)
+                    else:
+                        logger.info(
+                            "viewer_health_transient_shifted initial_issue_count=%d confirmed_issue_count=%d confirm_sec=%.1f",
+                            len(report.issues),
+                            len(confirmed.issues),
+                            confirm_sec,
+                        )
                 else:
                     await alert_sender.send_viewer_health_report(report)
         except asyncio.CancelledError:

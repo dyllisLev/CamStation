@@ -142,6 +142,76 @@ async def test_viewer_health_reports_low_ready_state_without_recent_activity(tes
     assert any(i.camera_id == "cam1_sub" for i in report.issues)
 
 
+async def test_viewer_health_confirmation_requires_same_specific_issue():
+    from services.viewer_health import (
+        ViewerHealthIssue,
+        ViewerHealthReport,
+        _has_persistent_viewer_issue,
+    )
+
+    initial = ViewerHealthReport(
+        ok=False,
+        checked_at=1000,
+        client_count=1,
+        issues=[
+            ViewerHealthIssue(
+                "viewer_stream_degraded",
+                "ERROR",
+                "viewer-1",
+                "healthy=7/8",
+                healthy_cameras=7,
+                expected_cameras=8,
+            ),
+            ViewerHealthIssue(
+                "viewer_camera_not_receiving",
+                "ERROR",
+                "viewer-1",
+                "cam1 low ready",
+                camera_id="cam1_sub",
+            ),
+        ],
+    )
+    confirmed_shifted = ViewerHealthReport(
+        ok=False,
+        checked_at=1030,
+        client_count=1,
+        issues=[
+            ViewerHealthIssue(
+                "viewer_stream_degraded",
+                "ERROR",
+                "viewer-1",
+                "healthy=7/8",
+                healthy_cameras=7,
+                expected_cameras=8,
+            ),
+            ViewerHealthIssue(
+                "viewer_camera_not_receiving",
+                "ERROR",
+                "viewer-1",
+                "cam2 low ready",
+                camera_id="cam2_sub",
+            ),
+        ],
+    )
+    confirmed_same = ViewerHealthReport(
+        ok=False,
+        checked_at=1030,
+        client_count=1,
+        issues=[
+            ViewerHealthIssue(
+                "viewer_camera_not_receiving",
+                "ERROR",
+                "viewer-1",
+                "cam1 still bad",
+                camera_id="cam1_sub",
+            )
+        ],
+    )
+
+    assert _has_persistent_viewer_issue(initial, confirmed_shifted) is False
+    assert _has_persistent_viewer_issue(initial, confirmed_same) is True
+
+
 async def test_viewer_health_ok_when_heartbeat_recent_and_all_streams_healthy(test_db):
     from services.viewer_health import check_viewer_health
 
