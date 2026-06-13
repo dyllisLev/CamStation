@@ -95,6 +95,7 @@ async def lifespan(app: FastAPI):
         url=HERMES_WEBHOOK_URL,
         secret=HERMES_WEBHOOK_SECRET,
         cooldown_sec=ALERT_COOLDOWN_SEC,
+        get_enabled_camera_ids=cameras.get_enabled_camera_ids,
     )
     health_task = asyncio.create_task(
         run_recording_health_loop(

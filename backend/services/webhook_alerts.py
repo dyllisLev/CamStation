@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+import inspect
 from dataclasses import asdict
 from typing import Awaitable, Callable
 
@@ -64,6 +65,7 @@ class WebhookAlertSender:
         post_func: Callable[..., Awaitable[object]] | None = None,
         time_func: Callable[[], float] | None = None,
         camera_incident_summary_sec: int | None = None,
+        get_enabled_camera_ids: Callable[[], Awaitable[list[str]] | list[str]] | None = None,
     ):
         self.url = url
         self.secret = secret
@@ -73,6 +75,7 @@ class WebhookAlertSender:
         self.camera_incident_summary_sec = camera_incident_summary_sec or int(
             os.environ.get("CAMSTATION_CAMERA_INCIDENT_SUMMARY_SEC", "3600")
         )
+        self.get_enabled_camera_ids = get_enabled_camera_ids
         self._last_sent_at: dict[str, float] = {}
         self._camera_incidents: dict[str, dict] = {}
 
@@ -244,12 +247,28 @@ class WebhookAlertSender:
     async def _maybe_send_camera_recovery(self, *, domain: str, now: float) -> bool:
         if not self.url:
             return False
+        enabled_camera_ids: set[str] | None = None
+        if self.get_enabled_camera_ids is not None:
+            try:
+                camera_ids = self.get_enabled_camera_ids()
+                if inspect.isawaitable(camera_ids):
+                    camera_ids = await camera_ids
+                enabled_camera_ids = set(camera_ids)
+            except Exception as exc:
+                logger.warning("failed to load enabled cameras for camera recovery check: %s", exc)
         delivered = False
         for camera_id, incident in list(self._camera_incidents.items()):
             if domain not in incident["domains"]:
                 continue
             incident["recovered_domains"].add(domain)
             if not incident["domains"].issubset(incident["recovered_domains"]):
+                continue
+            if enabled_camera_ids is not None and camera_id not in enabled_camera_ids:
+                logger.info(
+                    "Camera source incident closed without recovery alert because camera is disabled camera=%s",
+                    camera_id,
+                )
+                self._camera_incidents.pop(camera_id, None)
                 continue
             payload = {
                 "service": "camstation-backend",
