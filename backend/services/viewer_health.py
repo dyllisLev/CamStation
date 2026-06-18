@@ -346,12 +346,14 @@ class ViewerHealthEventNotifier:
         max_heartbeat_age_sec: int = 60,
         get_enabled_camera_ids=None,
         debounce_sec: float = 30.0,
+        confirm_sec: float = 30.0,
     ):
         self.db_path = db_path
         self.alert_sender = alert_sender
         self.max_heartbeat_age_sec = max_heartbeat_age_sec
         self.get_enabled_camera_ids = get_enabled_camera_ids
         self.debounce_sec = debounce_sec
+        self.confirm_sec = confirm_sec
         self._tasks: dict[str, asyncio.Task] = {}
 
     def notify_heartbeat(
@@ -401,7 +403,39 @@ class ViewerHealthEventNotifier:
                 enabled_camera_ids=enabled_ids,
             )
             log_viewer_health_report(report)
-            if not report.ok:
+            if report.ok:
+                return
+            # Confirmation: wait and recheck before alerting.
+            # Transient camera hiccups (20-30s RTSP drops) self-recover within
+            # this window, avoiding noisy Discord alerts.
+            confirm_sec = getattr(self, 'confirm_sec', 30.0)
+            if confirm_sec > 0:
+                await asyncio.sleep(confirm_sec)
+                enabled_ids = (
+                    list(self.get_enabled_camera_ids())
+                    if self.get_enabled_camera_ids is not None
+                    else None
+                )
+                confirmed = await check_viewer_health(
+                    self.db_path,
+                    max_heartbeat_age_sec=self.max_heartbeat_age_sec,
+                    enabled_camera_ids=enabled_ids,
+                )
+                if confirmed.ok:
+                    logger.info(
+                        "viewer_event_transient_recovered client=%s initial_issue_count=%d confirm_sec=%.1f",
+                        client_id, len(report.issues), confirm_sec,
+                    )
+                    return
+                if _has_persistent_viewer_issue(report, confirmed):
+                    log_viewer_health_report(confirmed)
+                    await self.alert_sender.send_viewer_health_report(confirmed)
+                else:
+                    logger.info(
+                        "viewer_event_transient_shifted client=%s initial_issue_count=%d confirmed_issue_count=%d confirm_sec=%.1f",
+                        client_id, len(report.issues), len(confirmed.issues), confirm_sec,
+                    )
+            else:
                 await self.alert_sender.send_viewer_health_report(report)
         except asyncio.CancelledError:
             raise

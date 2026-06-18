@@ -186,3 +186,30 @@ api:
     async with aiosqlite.connect(test_db) as db:
         rows = await db.execute_fetchall("SELECT id FROM cameras ORDER BY id")
     assert [r[0] for r in rows] == ["real-cam"]
+
+
+def test_extract_stream_urls_list_format_on_demand_before_url(tmp_path):
+    """URL extraction must work even when on_demand appears before the URL."""
+    from services.camera_importer import _extract_stream_urls
+
+    config = tmp_path / "go2rtc.yaml"
+    config.write_text(
+        "streams:\n"
+        "  cam1:\n"
+        "    - on_demand: false\n"
+        "    - rtsp://user:pass@host/stream1\n"
+        "  cam2:\n"
+        "    - rtsp://user:pass@host/stream2\n"
+        "    - on_demand: false\n"
+        "  cam2_sub:\n"
+        "    - ffmpeg:rtsp://127.0.0.1:8554/cam2#video=h264\n"
+        "    - on_demand: false\n"
+        "api:\n"
+        "  listen: 127.0.0.1:1984\n",
+        encoding="utf-8",
+    )
+
+    urls = _extract_stream_urls(str(config))
+    assert urls["cam1"] == "rtsp://user:pass@host/stream1"
+    assert urls["cam2"] == "rtsp://user:pass@host/stream2"
+    assert urls["cam2_sub"] == "ffmpeg:rtsp://127.0.0.1:8554/cam2#video=h264"
