@@ -11,6 +11,7 @@ from services.recording_health import run_recording_health_loop
 from services.viewer_health import ViewerHealthEventNotifier, run_viewer_health_loop
 from services.webhook_alerts import WebhookAlertSender
 from services.camera_importer import import_cameras_from_go2rtc_config
+from services.camera_registry import get_enabled_camera_ids as registry_get_enabled_camera_ids
 from config import (
     GO2RTC_URL,
     GO2RTC_CONFIG,
@@ -106,7 +107,7 @@ async def lifespan(app: FastAPI):
             get_db_path(),
             get_active_cam_ids=recorder.get_active,
             get_segment_minutes=lambda: get_setting("segment_minutes"),
-            get_camera_ids=cameras.get_enabled_camera_ids,
+            get_camera_ids=registry_get_enabled_camera_ids,
             get_skip_reason=recorder.get_maintenance_reason,
             interval_sec=RECORDING_HEALTH_CHECK_INTERVAL_SEC,
             alert_sender=alert_sender,

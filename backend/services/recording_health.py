@@ -367,7 +367,11 @@ async def run_recording_health_loop(
                 await asyncio.sleep(interval_sec)
                 continue
             segment_minutes = int(await get_segment_minutes())
-            current_cam_ids = list(get_camera_ids()) if get_camera_ids is not None else cam_ids
+            current_cam_ids_raw = get_camera_ids() if get_camera_ids is not None else cam_ids
+            if asyncio.iscoroutine(current_cam_ids_raw):
+                current_cam_ids = list(await current_cam_ids_raw)
+            else:
+                current_cam_ids = list(current_cam_ids_raw)
             report = await check_recording_health(
                 current_cam_ids,
                 recordings_dir,
