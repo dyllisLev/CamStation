@@ -42,14 +42,15 @@ def _extract_stream_urls(config_path: str) -> dict[str, str]:
                 continue
             urls[name] = value.strip().strip('"').strip("'")
         else:
-            # Check for YAML list item with a stream URL (list format).
-            # The raw line looks like "    - rtsp://..." or "    - ffmpeg:rtsp://..."
-            if current_name and line.lstrip().startswith("- "):
-                item_value = line.lstrip()[2:].strip()
+            stripped = line.lstrip()
+            # YAML list items (e.g. "    - rtsp://..." or "    - on_demand: false")
+            # are children of the current stream and should not reset context.
+            if current_name and stripped.startswith("- "):
+                item_value = stripped[2:].strip()
                 if item_value.startswith(("rtsp://", "ffmpeg:")):
                     urls.setdefault(current_name, item_value)
-                    continue
-            stripped = line.lstrip()
+                continue
+            # Non-list, non-comment line at shallower indent resets context.
             if stripped and not stripped.startswith("#"):
                 current_name = None
     return urls
