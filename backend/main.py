@@ -18,6 +18,7 @@ from config import (
     TEMP_DIR,
     RECORDING_HEALTH_CHECK_INTERVAL_SEC,
     VIEWER_HEALTH_CHECK_INTERVAL_SEC,
+    VIEWER_HEALTH_CONFIRM_SEC,
     VIEWER_HEALTH_MAX_AGE_SEC,
     HERMES_WEBHOOK_URL,
     HERMES_WEBHOOK_SECRET,
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI):
         alert_sender=alert_sender,
         max_heartbeat_age_sec=VIEWER_HEALTH_MAX_AGE_SEC,
         get_enabled_camera_ids=cameras.get_enabled_camera_ids,
+        confirm_sec=VIEWER_HEALTH_CONFIRM_SEC,
     )
     viewers.configure_event_notifier(viewer_event_notifier)
     recorder.set_event_alert_sender(alert_sender)
@@ -124,6 +126,7 @@ async def lifespan(app: FastAPI):
             get_db_path(),
             interval_sec=VIEWER_HEALTH_CHECK_INTERVAL_SEC,
             max_heartbeat_age_sec=VIEWER_HEALTH_MAX_AGE_SEC,
+            confirm_sec=VIEWER_HEALTH_CONFIRM_SEC,
             alert_sender=alert_sender,
             get_enabled_camera_ids=cameras.get_enabled_camera_ids,
         )

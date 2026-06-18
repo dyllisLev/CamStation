@@ -288,6 +288,7 @@ async def test_viewer_event_notifier_confirms_repeated_degraded_heartbeats_once(
         alert_sender=FakeSender(),
         max_heartbeat_age_sec=60,
         debounce_sec=0.04,
+        confirm_sec=0,
     )
     try:
         notifier.notify_heartbeat(
@@ -346,6 +347,7 @@ async def test_viewer_event_notifier_cancels_transient_degraded_recovery(test_db
         alert_sender=FakeSender(),
         max_heartbeat_age_sec=60,
         debounce_sec=0.04,
+        confirm_sec=0,
     )
     try:
         notifier.notify_heartbeat(
