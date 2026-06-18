@@ -382,10 +382,4 @@ async def test_recording_event_alert_sender_emits_named_event():
     assert report.issues[0].camera_id == "cam1"
 
 
-def test_recording_process_exit_alert_only_for_repeated_fast_failures():
-    from services import recorder
 
-    assert recorder._should_alert_recording_process_exit(ran=1800, retry_delay=5) is False
-    assert recorder._should_alert_recording_process_exit(ran=10, retry_delay=10) is False
-    assert recorder._should_alert_recording_process_exit(ran=10, retry_delay=20) is False
-    assert recorder._should_alert_recording_process_exit(ran=10, retry_delay=30) is True

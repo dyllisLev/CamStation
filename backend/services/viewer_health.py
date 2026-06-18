@@ -30,9 +30,6 @@ def _viewer_camera_is_receiving(camera: dict, now_ts: float) -> bool:
     error = camera.get("error")
     if not connected or stalled_ms >= 30_000 or error is not None:
         return False
-    # MSE streams can keep receiving fMP4 data while HTMLVideoElement.readyState
-    # briefly drops to HAVE_METADATA(1), especially around live-edge/buffer trim.
-    # Treat recent binary/video progress as receiving to avoid noisy false alerts.
     return ready >= 2 or _viewer_camera_activity_recent(camera, now_ts)
 
 
@@ -95,12 +92,7 @@ async def check_viewer_health(
     max_heartbeat_age_sec: int = 60,
     enabled_camera_ids: list[str] | None = None,
 ) -> ViewerHealthReport:
-    """Check whether Windows viewer EXEs are alive and actually receiving streams.
-
-    The server cannot inspect Windows processes directly. It treats a recent viewer
-    heartbeat as EXE liveness, and per-camera heartbeat fields as real stream
-    reception status.
-    """
+    """Check whether Windows viewer EXEs are alive and actually receiving streams."""
     now_ts = now_ts or time.time()
     issues: list[ViewerHealthIssue] = []
     enabled_set = set(enabled_camera_ids) if enabled_camera_ids is not None else None
@@ -216,30 +208,6 @@ async def check_viewer_health(
     )
 
 
-def _persistent_issue_keys(report: ViewerHealthReport) -> set[tuple[str, str, str | None]]:
-    keys: set[tuple[str, str, str | None]] = set()
-    for issue in report.issues:
-        if issue.severity != "ERROR":
-            continue
-        # viewer_stream_degraded is an aggregate derived from per-camera state. If
-        # the specific failing camera changes between confirmation checks, treat
-        # it as transient MSE readyState noise instead of alerting on the aggregate.
-        if issue.code == "viewer_stream_degraded":
-            continue
-        keys.add((issue.code, issue.client_id, issue.camera_id))
-    return keys
-
-
-def _has_persistent_viewer_issue(initial: ViewerHealthReport, confirmed: ViewerHealthReport) -> bool:
-    if confirmed.ok:
-        return False
-    initial_keys = _persistent_issue_keys(initial)
-    confirmed_keys = _persistent_issue_keys(confirmed)
-    if initial_keys and confirmed_keys:
-        return bool(initial_keys & confirmed_keys)
-    return bool(confirmed_keys)
-
-
 def log_viewer_health_report(report: ViewerHealthReport) -> None:
     if report.ok:
         logger.info("viewer_health_ok clients=%d checked_at=%.0f", report.client_count, report.checked_at)
@@ -272,10 +240,11 @@ async def run_viewer_health_loop(
     *,
     interval_sec: int = 300,
     max_heartbeat_age_sec: int = 60,
-    confirm_sec: float = 30.0,
+    confirm_sec: float = 0,
     alert_sender=None,
     get_enabled_camera_ids=None,
 ) -> None:
+    """Periodic viewer health check. Issues are sent immediately — AI judges severity."""
     while True:
         try:
             enabled_ids = list(get_enabled_camera_ids()) if get_enabled_camera_ids is not None else None
@@ -285,44 +254,10 @@ async def run_viewer_health_loop(
                 enabled_camera_ids=enabled_ids,
             )
             log_viewer_health_report(report)
-            if alert_sender is not None:
-                if hasattr(alert_sender, "observe_viewer_health_report"):
-                    if report.ok:
-                        await alert_sender.observe_viewer_health_report(report)
-                        await asyncio.sleep(interval_sec)
-                        continue
-                elif report.ok:
-                    await asyncio.sleep(interval_sec)
-                    continue
-                if not report.ok:
-                    if confirm_sec > 0:
-                        await asyncio.sleep(confirm_sec)
-                        enabled_ids = list(get_enabled_camera_ids()) if get_enabled_camera_ids is not None else None
-                        confirmed = await check_viewer_health(
-                            db_path,
-                            max_heartbeat_age_sec=max_heartbeat_age_sec,
-                            enabled_camera_ids=enabled_ids,
-                        )
-                        if confirmed.ok:
-                            logger.info(
-                                "viewer_health_transient_recovered initial_issue_count=%d confirm_sec=%.1f",
-                                len(report.issues),
-                                confirm_sec,
-                            )
-                            if hasattr(alert_sender, "observe_viewer_health_report"):
-                                await alert_sender.observe_viewer_health_report(confirmed)
-                        elif _has_persistent_viewer_issue(report, confirmed):
-                            log_viewer_health_report(confirmed)
-                            await alert_sender.send_viewer_health_report(confirmed)
-                        else:
-                            logger.info(
-                                "viewer_health_transient_shifted initial_issue_count=%d confirmed_issue_count=%d confirm_sec=%.1f",
-                                len(report.issues),
-                                len(confirmed.issues),
-                                confirm_sec,
-                            )
-                    else:
-                        await alert_sender.send_viewer_health_report(report)
+            if alert_sender is not None and not report.ok:
+                await alert_sender.send_viewer_health_report(report)
+            elif alert_sender is not None and report.ok and hasattr(alert_sender, "observe_viewer_health_report"):
+                await alert_sender.observe_viewer_health_report(report)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -331,11 +266,9 @@ async def run_viewer_health_loop(
 
 
 class ViewerHealthEventNotifier:
-    """Debounced event hook for viewer heartbeat/update driven health alerts.
-
-    The periodic loop remains the safety net. This notifier shortens the alert
-    path when a heartbeat itself already shows degraded reception, while avoiding
-    a webhook storm from frequent heartbeat posts.
+    """Event hook for viewer heartbeat/update driven health alerts.
+    
+    Issues are sent immediately — AI judges whether they're real.
     """
 
     def __init__(
@@ -345,15 +278,14 @@ class ViewerHealthEventNotifier:
         alert_sender,
         max_heartbeat_age_sec: int = 60,
         get_enabled_camera_ids=None,
-        debounce_sec: float = 30.0,
-        confirm_sec: float = 30.0,
+        debounce_sec: float = 5.0,
+        confirm_sec: float = 0,
     ):
         self.db_path = db_path
         self.alert_sender = alert_sender
         self.max_heartbeat_age_sec = max_heartbeat_age_sec
         self.get_enabled_camera_ids = get_enabled_camera_ids
         self.debounce_sec = debounce_sec
-        self.confirm_sec = confirm_sec
         self._tasks: dict[str, asyncio.Task] = {}
 
     def notify_heartbeat(
@@ -365,16 +297,10 @@ class ViewerHealthEventNotifier:
         healthy_cameras: int,
         previous_healthy_cameras: int | None,
     ) -> None:
-        # Viewer playback can briefly report 0/N or low readyState during MSE
-        # buffer/source transitions and app startup. Do not alert immediately on
-        # a single degraded heartbeat; schedule one confirmation check and let
-        # later healthy heartbeats cancel it. This keeps event-triggered alerts
-        # fast for persistent failures while suppressing transient false alarms.
         if state != "degraded":
             if previous_state == "degraded":
                 self._cancel(client_id)
             return
-
         self._schedule(client_id, delay=self.debounce_sec)
 
     def _cancel(self, client_id: str) -> None:
@@ -403,39 +329,7 @@ class ViewerHealthEventNotifier:
                 enabled_camera_ids=enabled_ids,
             )
             log_viewer_health_report(report)
-            if report.ok:
-                return
-            # Confirmation: wait and recheck before alerting.
-            # Transient camera hiccups (20-30s RTSP drops) self-recover within
-            # this window, avoiding noisy Discord alerts.
-            confirm_sec = getattr(self, 'confirm_sec', 30.0)
-            if confirm_sec > 0:
-                await asyncio.sleep(confirm_sec)
-                enabled_ids = (
-                    list(self.get_enabled_camera_ids())
-                    if self.get_enabled_camera_ids is not None
-                    else None
-                )
-                confirmed = await check_viewer_health(
-                    self.db_path,
-                    max_heartbeat_age_sec=self.max_heartbeat_age_sec,
-                    enabled_camera_ids=enabled_ids,
-                )
-                if confirmed.ok:
-                    logger.info(
-                        "viewer_event_transient_recovered client=%s initial_issue_count=%d confirm_sec=%.1f",
-                        client_id, len(report.issues), confirm_sec,
-                    )
-                    return
-                if _has_persistent_viewer_issue(report, confirmed):
-                    log_viewer_health_report(confirmed)
-                    await self.alert_sender.send_viewer_health_report(confirmed)
-                else:
-                    logger.info(
-                        "viewer_event_transient_shifted client=%s initial_issue_count=%d confirmed_issue_count=%d confirm_sec=%.1f",
-                        client_id, len(report.issues), len(confirmed.issues), confirm_sec,
-                    )
-            else:
+            if not report.ok:
                 await self.alert_sender.send_viewer_health_report(report)
         except asyncio.CancelledError:
             raise

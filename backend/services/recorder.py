@@ -488,20 +488,11 @@ async def _run_recording(cam_id: str, segment_minutes: int, recordings_dir: str,
             break
 
         delay = _next_delay(delay, ran)
-        if _should_alert_recording_process_exit(ran, delay):
-            await _send_recording_event_alert(
-                "recording_process_failed",
-                camera_id=cam_id,
-                message=f"ffmpeg 녹화 프로세스가 반복적으로 종료되고 있습니다: returncode={proc.returncode} ran={ran:.0f}s retry_in={delay}s",
-            )
-        else:
-            logger.info(
-                "Recording process exit alert suppressed as transient: camera=%s returncode=%s ran=%.0fs retry_in=%ds",
-                cam_id,
-                proc.returncode,
-                ran,
-                delay,
-            )
+        await _send_recording_event_alert(
+            "recording_process_failed",
+            camera_id=cam_id,
+            message=f"ffmpeg 녹화 프로세스 종료: returncode={proc.returncode} ran={ran:.0f}s retry_in={delay}s",
+        )
         logger.info("Recording for %s exited (ran %.0fs), retrying in %ds", cam_id, ran, delay)
         await asyncio.sleep(delay)
 
