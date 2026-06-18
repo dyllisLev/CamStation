@@ -38,9 +38,15 @@ def _stream_bounds(lines: list[str]) -> tuple[int, int]:
 def _match_stream_line(line: str):
     match = _ENABLED_STREAM_RE.match(line)
     if match:
+        # Skip YAML list items (e.g. "    - rtsp://..." or "    - on_demand: false")
+        # which are go2rtc source entries, not stream definitions.
+        if match.group("name").strip().startswith("-"):
+            return None, False
         return match, True
     match = _DISABLED_STREAM_RE.match(line)
     if match:
+        if match.group("name").strip().startswith("-"):
+            return None, False
         return match, False
     return None, False
 
@@ -61,6 +67,10 @@ def list_camera_configs(config_path: str) -> list[CameraConfig]:
         if not match:
             continue
         name = match.group("name").strip()
+        # Skip YAML list items (e.g. "- rtsp://...", "- on_demand: false",
+        # "- ffmpeg:...") that the regex can misparse as stream names.
+        if name.startswith("-"):
+            continue
         base = _base_name(name)
         if base not in states:
             order.append(base)

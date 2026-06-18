@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,22 +17,41 @@ class CameraImportResult:
     skipped: int = 0
 
 
+_RTSP_IN_LINE_RE = re.compile(r"rtsp://\S+")
+
+
 def _extract_stream_urls(config_path: str) -> dict[str, str]:
+    """Extract stream URLs keyed by camera id from go2rtc config.
+
+    Handles both single-line format (``cam: rtsp://...``) and YAML list
+    format (``cam:\\n  - rtsp://...``).
+    """
     text = Path(config_path).read_text(encoding="utf-8")
     lines = text.splitlines()
     start, end = _stream_bounds(lines)
     urls: dict[str, str] = {}
+    current_name: str | None = None
+
     for line in lines[start:end]:
         match, _enabled = _match_stream_line(line)
-        if not match:
-            continue
-        name = match.group("name").strip()
-        value = match.group("value").strip()
-        if value.startswith("|") or value == "":
-            continue
-        if value.startswith("["):
-            continue
-        urls[name] = value.strip().strip('"').strip("'")
+        if match:
+            name = match.group("name").strip()
+            value = match.group("value").strip()
+            current_name = name
+            if value.startswith("|") or value == "" or value.startswith("["):
+                continue
+            urls[name] = value.strip().strip('"').strip("'")
+        else:
+            # Check for YAML list item with a stream URL (list format).
+            # The raw line looks like "    - rtsp://..." or "    - ffmpeg:rtsp://..."
+            if current_name and line.lstrip().startswith("- "):
+                item_value = line.lstrip()[2:].strip()
+                if item_value.startswith(("rtsp://", "ffmpeg:")):
+                    urls.setdefault(current_name, item_value)
+                    continue
+            stripped = line.lstrip()
+            if stripped and not stripped.startswith("#"):
+                current_name = None
     return urls
 
 
