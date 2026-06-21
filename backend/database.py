@@ -110,6 +110,10 @@ async def init_db():
             await db.execute("ALTER TABLE layouts ADD COLUMN grid_cols INTEGER NOT NULL DEFAULT 12")
         if "grid_rows" not in columns:
             await db.execute("ALTER TABLE layouts ADD COLUMN grid_rows INTEGER")
+        cursor = await db.execute("PRAGMA table_info(recordings)")
+        rec_columns = {row[1] for row in await cursor.fetchall()}
+        if "backed_up" not in rec_columns:
+            await db.execute("ALTER TABLE recordings ADD COLUMN backed_up INTEGER DEFAULT 0")
         await db.commit()
 
 async def get_setting(key: str) -> Optional[str]:

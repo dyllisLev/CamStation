@@ -19,6 +19,7 @@ async def _init_recordings_db(path):
                 ts_end REAL,
                 file_size INTEGER,
                 created REAL DEFAULT (unixepoch()),
+                backed_up INTEGER DEFAULT 0,
                 UNIQUE(camera_id, ts_start)
             )
             """

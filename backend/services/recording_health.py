@@ -252,7 +252,7 @@ async def check_recording_health(
             cutoff = now_ts - max(segment_sec * 4, 3600)
             recent_rows = await db.execute_fetchall(
                 """
-                SELECT camera_id, filename, ts_start, ts_end, file_size
+                SELECT camera_id, filename, ts_start, ts_end, file_size, COALESCE(backed_up, 0) as backed_up
                 FROM recordings
                 WHERE ts_end IS NOT NULL AND ts_end >= ?
                 ORDER BY ts_end DESC
@@ -265,6 +265,8 @@ async def check_recording_health(
                 date_str = _date_from_filename_or_ts(row["filename"], float(row["ts_start"]))
                 final_path = base_recordings / row["camera_id"] / date_str / row["filename"]
                 if not final_path.exists():
+                    if row["backed_up"]:
+                        continue  # 백업 완료 후 로컬 삭제됨 — 정상
                     issues.append(_issue(
                         "recording_file_missing",
                         "ERROR",
