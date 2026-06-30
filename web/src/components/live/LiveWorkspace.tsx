@@ -20,8 +20,10 @@ const GRID_ROWS = 48;
 const GRID_MARGIN: [number, number] = [4, 4];
 const LAST_LAYOUT_KEY = "camstation-live-layout-id";
 const TIMELINE_KEY = "camstation-live-timeline-collapsed";
+const DEFAULT_VIDEO_VIEWPORT: VideoViewport = { scale: 1, tx: 0, ty: 0 };
 
 type TimelineRange = { ts_start: number; ts_end: number };
+type VideoViewport = { scale: number; tx: number; ty: number };
 type MonitorLayoutItem = {
   i: string;
   x: number;
@@ -30,6 +32,7 @@ type MonitorLayoutItem = {
   h: number;
   minW?: number;
   minH?: number;
+  videoZoom?: VideoViewport;
 };
 
 export function LiveWorkspace() {
@@ -88,7 +91,29 @@ export function LiveWorkspace() {
   const onlineCount = rows.filter((camera) => camera.state === "streaming").length;
 
   const handleLayoutChange = useCallback((next: MonitorLayoutItem[]) => {
-    setLayout(clampLayout(next));
+    setLayout((current) => {
+      const zoomByStream = new Map(current.map((item) => [item.i, item.videoZoom]));
+      return clampLayout(
+        next.map((item) => ({
+          ...item,
+          videoZoom: zoomByStream.get(item.i),
+        })),
+      );
+    });
+    setDirty(true);
+  }, []);
+
+  const handleVideoViewportChange = useCallback((streamName: string, viewport: VideoViewport) => {
+    setLayout((current) =>
+      current.map((item) =>
+        item.i === streamName
+          ? {
+              ...item,
+              videoZoom: viewport.scale > 1 ? viewport : undefined,
+            }
+          : item,
+      ),
+    );
     setDirty(true);
   }, []);
 
@@ -226,6 +251,7 @@ export function LiveWorkspace() {
                 setSelectedStream(camera.streamName);
                 setZoomedStream((current) => (current === camera.streamName ? null : camera.streamName));
               }}
+              onVideoViewportChange={handleVideoViewportChange}
             />
           ) : (
             <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
@@ -325,6 +351,7 @@ function CameraGrid({
   onSelectCamera,
   zoomedStream,
   onToggleZoom,
+  onVideoViewportChange,
 }: {
   cameras: Camera[];
   layout: MonitorLayoutItem[];
@@ -333,6 +360,7 @@ function CameraGrid({
   onSelectCamera: (camera: Camera) => void;
   zoomedStream: string | null;
   onToggleZoom: (camera: Camera) => void;
+  onVideoViewportChange: (streamName: string, viewport: VideoViewport) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -382,6 +410,8 @@ function CameraGrid({
                   selected={camera.streamName === selectedStream}
                   onSelect={() => onSelectCamera(camera)}
                   onToggleZoom={() => onToggleZoom(camera)}
+                  videoViewport={item.videoZoom}
+                  onVideoViewportChange={(viewport) => onVideoViewportChange(camera.streamName, viewport)}
                 />
               </div>
             );
@@ -396,6 +426,8 @@ function CameraGrid({
             zoomed
             onSelect={() => onSelectCamera(zoomedCamera)}
             onToggleZoom={() => onToggleZoom(zoomedCamera)}
+            videoViewport={layout.find((item) => item.i === zoomedCamera.streamName)?.videoZoom}
+            onVideoViewportChange={(viewport) => onVideoViewportChange(zoomedCamera.streamName, viewport)}
           />
         </div>
       )}
@@ -409,12 +441,16 @@ function CameraTile({
   zoomed = false,
   onSelect,
   onToggleZoom,
+  videoViewport,
+  onVideoViewportChange,
 }: {
   camera: Camera;
   selected: boolean;
   zoomed?: boolean;
   onSelect: () => void;
   onToggleZoom: () => void;
+  videoViewport?: VideoViewport;
+  onVideoViewportChange: (viewport: VideoViewport) => void;
 }) {
   return (
     <article
@@ -426,7 +462,7 @@ function CameraTile({
       }}
     >
       {camera.state === "streaming" ? (
-        <LiveVideo streamName={camera.streamName} />
+        <LiveVideo streamName={camera.streamName} viewport={videoViewport} onViewportChange={onVideoViewportChange} />
       ) : (
         <div className="new-offline-layer">연결 없음</div>
       )}
@@ -449,22 +485,30 @@ function CameraTile({
   );
 }
 
-function LiveVideo({ streamName }: { streamName: string }) {
+function LiveVideo({
+  streamName,
+  viewport,
+  onViewportChange,
+}: {
+  streamName: string;
+  viewport?: VideoViewport;
+  onViewportChange: (viewport: VideoViewport) => void;
+}) {
   const { videoRef, connected } = useMseStream(streamName);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
-  const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
-  const zoomed = viewport.scale > 1.001;
+  const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
+  const zoomed = currentViewport.scale > 1.001;
 
-  const applyViewport = useCallback((next: typeof viewport) => {
+  const applyViewport = useCallback((next: VideoViewport) => {
     const frame = frameRef.current;
     if (!frame || next.scale <= 1) {
-      setViewport({ scale: 1, tx: 0, ty: 0 });
+      onViewportChange(DEFAULT_VIDEO_VIEWPORT);
       return;
     }
     const rect = frame.getBoundingClientRect();
-    setViewport(clampVideoViewport(next, rect.width, rect.height));
-  }, []);
+    onViewportChange(clampVideoViewport(next, rect.width, rect.height));
+  }, [onViewportChange]);
 
   const handleWheel = useCallback(
     (event: WheelEvent<HTMLDivElement>) => {
@@ -473,21 +517,21 @@ function LiveVideo({ streamName }: { streamName: string }) {
       const frame = frameRef.current;
       if (!frame) return;
       const rect = frame.getBoundingClientRect();
-      const nextScale = clampNumber(viewport.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15), 1, 4);
+      const nextScale = clampNumber(currentViewport.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15), 1, 4);
       if (nextScale === 1) {
         applyViewport({ scale: 1, tx: 0, ty: 0 });
         return;
       }
       const offsetX = event.clientX - rect.left - rect.width / 2;
       const offsetY = event.clientY - rect.top - rect.height / 2;
-      const scaleRatio = nextScale / viewport.scale;
+      const scaleRatio = nextScale / currentViewport.scale;
       applyViewport({
         scale: nextScale,
-        tx: viewport.tx * scaleRatio - offsetX * (scaleRatio - 1),
-        ty: viewport.ty * scaleRatio - offsetY * (scaleRatio - 1),
+        tx: currentViewport.tx * scaleRatio - offsetX * (scaleRatio - 1),
+        ty: currentViewport.ty * scaleRatio - offsetY * (scaleRatio - 1),
       });
     },
-    [applyViewport, viewport],
+    [applyViewport, currentViewport],
   );
 
   const handleMouseDown = useCallback(
@@ -495,17 +539,17 @@ function LiveVideo({ streamName }: { streamName: string }) {
       if (!zoomed || event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
-      dragRef.current = { x: event.clientX, y: event.clientY, tx: viewport.tx, ty: viewport.ty };
+      dragRef.current = { x: event.clientX, y: event.clientY, tx: currentViewport.tx, ty: currentViewport.ty };
 
       const handleMove = (moveEvent: globalThis.MouseEvent) => {
         const drag = dragRef.current;
         const frame = frameRef.current;
         if (!drag || !frame) return;
         const rect = frame.getBoundingClientRect();
-        setViewport(
+        onViewportChange(
           clampVideoViewport(
             {
-              scale: viewport.scale,
+              scale: currentViewport.scale,
               tx: drag.tx + moveEvent.clientX - drag.x,
               ty: drag.ty + moveEvent.clientY - drag.y,
             },
@@ -524,7 +568,7 @@ function LiveVideo({ streamName }: { streamName: string }) {
       window.addEventListener("mousemove", handleMove);
       window.addEventListener("mouseup", handleUp);
     },
-    [viewport, zoomed],
+    [currentViewport, onViewportChange, zoomed],
   );
 
   return (
@@ -547,11 +591,11 @@ function LiveVideo({ streamName }: { streamName: string }) {
         disablePictureInPicture
         controls={false}
         style={{
-          transform: `scale(${viewport.scale}) translate(${viewport.tx / viewport.scale}px, ${viewport.ty / viewport.scale}px)`,
+          transform: `scale(${currentViewport.scale}) translate(${currentViewport.tx / currentViewport.scale}px, ${currentViewport.ty / currentViewport.scale}px)`,
         }}
       />
       {!connected && <div className="new-offline-layer">연결 중...</div>}
-      {zoomed && <div className="new-zoom-badge">{viewport.scale.toFixed(1)}x</div>}
+      {zoomed && <div className="new-zoom-badge">{currentViewport.scale.toFixed(1)}x</div>}
     </div>
   );
 }
@@ -672,7 +716,7 @@ function defaultLayout(cameras: Camera[]): MonitorLayoutItem[] {
   }));
 }
 
-function mergeWithCameras(saved: Array<{ i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }>, cameras: Camera[]): MonitorLayoutItem[] {
+function mergeWithCameras(saved: MonitorLayoutItem[], cameras: Camera[]): MonitorLayoutItem[] {
   const savedMap = new Map(saved.map((item) => [item.i, item]));
   return cameras.map((camera, index) => savedMap.get(camera.streamName) ?? defaultLayout([camera]).map((item) => ({
     ...item,
@@ -720,6 +764,7 @@ function toLayoutItem(item: MonitorLayoutItem) {
     h: item.h,
     minW: item.minW,
     minH: item.minH,
+    videoZoom: item.videoZoom,
   };
 }
 

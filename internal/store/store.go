@@ -39,13 +39,20 @@ type Camera struct {
 }
 
 type LayoutItem struct {
-	I    string `json:"i"`
-	X    int    `json:"x"`
-	Y    int    `json:"y"`
-	W    int    `json:"w"`
-	H    int    `json:"h"`
-	MinW int    `json:"minW,omitempty"`
-	MinH int    `json:"minH,omitempty"`
+	I         string     `json:"i"`
+	X         int        `json:"x"`
+	Y         int        `json:"y"`
+	W         int        `json:"w"`
+	H         int        `json:"h"`
+	MinW      int        `json:"minW,omitempty"`
+	MinH      int        `json:"minH,omitempty"`
+	VideoZoom *VideoZoom `json:"videoZoom,omitempty"`
+}
+
+type VideoZoom struct {
+	Scale float64 `json:"scale"`
+	TX    float64 `json:"tx"`
+	TY    float64 `json:"ty"`
 }
 
 type LayoutProfile struct {

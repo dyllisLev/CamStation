@@ -43,6 +43,11 @@ export type LayoutItem = {
   h: number;
   minW?: number;
   minH?: number;
+  videoZoom?: {
+    scale: number;
+    tx: number;
+    ty: number;
+  };
 };
 
 export type LayoutProfile = {
