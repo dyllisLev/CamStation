@@ -46,3 +46,10 @@ CamStation 2.0 should provide:
 
 The web console is not only a viewer. It is the operational control center for the entire NVR.
 
+## Current Implementation Handoff
+
+The current implemented/not-implemented task status is tracked in:
+
+- `docs/07-implementation-status.md`
+
+Read that file before continuing implementation work.

@@ -17,6 +17,7 @@ The goal is a single-program NVR:
 - `docs/03-camstationd-architecture.md` — proposed single-daemon architecture
 - `docs/04-cctv2-test-plan.md` — real-camera testing plan for cctv2
 - `docs/05-next-decisions.md` — decisions to make before coding
+- `docs/07-implementation-status.md` — current implemented/not-implemented task status and handoff notes
 
 ## Existing Reference Files
 
