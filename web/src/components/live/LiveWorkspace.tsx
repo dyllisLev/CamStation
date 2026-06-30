@@ -12,7 +12,7 @@ import {
   useTimeline,
   useUpdateLayout,
 } from "../../app/queries";
-import { cn, liveUrl } from "../../lib/utils";
+import { cn } from "../../lib/utils";
 import { useMseStream } from "./useMseStream";
 
 const GRID_COLS = 48;
@@ -167,11 +167,6 @@ export function LiveWorkspace() {
     setDirty(true);
   }
 
-  function toggleSelectedZoom() {
-    if (!selectedCamera) return;
-    setZoomedStream((current) => (current === selectedCamera.streamName ? null : selectedCamera.streamName));
-  }
-
   function flashSaved() {
     setSavedFlash(true);
     window.setTimeout(() => setSavedFlash(false), 1400);
@@ -217,14 +212,6 @@ export function LiveWorkspace() {
           onClick={toggleTimeline}
         >
           {timelineCollapsed ? "타임라인 보기" : "타임라인 숨기기"}
-        </button>
-        <button
-          className={cn("new-timeline-command", zoomedStream ? "new-primary" : "new-ghost")}
-          type="button"
-          onClick={toggleSelectedZoom}
-          disabled={!selectedCamera}
-        >
-          {zoomedStream ? "타일 확대 종료" : "타일 확대"}
         </button>
         <div className="new-spacer" />
         <div className="new-live-pill">
@@ -476,10 +463,10 @@ function CameraTile({
         type="button"
         onClick={(event) => {
           event.stopPropagation();
-          window.open(liveUrl(camera.streamName, "mse"), "_blank");
+          onToggleZoom();
         }}
       >
-        집중 보기
+        {zoomed ? "집중 보기 종료" : "집중 보기"}
       </button>
     </article>
   );
