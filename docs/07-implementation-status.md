@@ -78,10 +78,17 @@ This document records the current implementation state so the next session can c
   - `-max-storage-gb` / `CAMSTATION_MAX_STORAGE_GB` enables automatic cleanup
   - startup cleanup runs once when max storage is configured
   - segment-complete cleanup runs after a temp segment is moved to recordings
+  - `GET /api/recordings/storage` exposes recordings/temp usage and configured max storage
   - `POST /api/recordings/cleanup` can run a manual capacity cleanup with `maxBytes` or `maxStorageGB`
   - only completed `ready` segments are deleted
   - active `recording` temp segments are not deletion candidates
   - deleted segments are marked `deleted` in SQLite so timeline queries exclude them
+- Recordings page at `/recordings`:
+  - shows recordings/temp/total storage usage
+  - shows automatic cleanup threshold and usage bar
+  - runs manual capacity cleanup from the UI
+  - lists recorder workers, current temp segment, and local go2rtc RTSP input
+  - shows segment length and temp-to-recordings policy
 
 ## Stream And Recording Policy
 
@@ -152,7 +159,7 @@ Browser/Playwright verification performed:
 ## Partially Implemented
 
 - Timeline UI can read recording segment metadata, but aggregate timeline and motion data are still incomplete.
-- Recordings page is a placeholder surface, not a real recording browser.
+- Recordings page shows storage/cleanup/recorder state, but does not yet include playback or segment browsing.
 - Settings page includes language settings, but does not yet cover all legacy settings.
 - System/Streams/Logs/Viewers pages are early status surfaces and feature matrices.
 - Camera management is basic registration/listing; edit/delete/group/ONVIF are not complete.

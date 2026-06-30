@@ -142,7 +142,7 @@ func main() {
 		}()
 	}
 
-	mux, err := routes(db, prober, streamer, recorderManager, cleaner, *recordingEnabled)
+	mux, err := routes(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled)
 	if err != nil {
 		log.Fatalf("build routes: %v", err)
 	}
@@ -167,7 +167,7 @@ func main() {
 	}
 }
 
-func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingEnabled bool) (http.Handler, error) {
+func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool) (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -304,6 +304,27 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			Details: map[string]any{"stream": streamName},
 		})
 		writeJSON(w, http.StatusOK, recorderManager.Status())
+	})
+
+	mux.HandleFunc("GET /api/recordings/storage", func(w http.ResponseWriter, r *http.Request) {
+		recordingsBytes, err := cleanup.DirSize(recordingsDir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		tempBytes, err := cleanup.DirSize(tempDir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"recordingsDir":      recordingsDir,
+			"tempDir":            tempDir,
+			"recordingsBytes":    recordingsBytes,
+			"tempBytes":          tempBytes,
+			"maxBytes":           maxStorageBytes,
+			"autoCleanupEnabled": maxStorageBytes > 0,
+		})
 	})
 
 	mux.HandleFunc("POST /api/recordings/cleanup", func(w http.ResponseWriter, r *http.Request) {

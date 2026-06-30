@@ -85,6 +85,43 @@ export type EventLog = {
   details?: Record<string, unknown>;
 };
 
+export type RecorderStatus = {
+  enabled: boolean;
+  recordingsDir: string;
+  tempDir: string;
+  segmentMinutes: number;
+  workers: Array<{
+    streamName: string;
+    camera_id: number;
+    state: string;
+    input: string;
+    current?: string;
+    lastError?: string;
+  }>;
+};
+
+export type RecordingStorage = {
+  recordingsDir: string;
+  tempDir: string;
+  recordingsBytes: number;
+  tempBytes: number;
+  maxBytes: number;
+  autoCleanupEnabled: boolean;
+};
+
+export type CleanupResult = {
+  maxBytes: number;
+  beforeBytes: number;
+  afterBytes: number;
+  deleted: Array<{
+    id: number;
+    streamName: string;
+    filename: string;
+    path: string;
+    bytes: number;
+  }>;
+};
+
 export type CreateCamera = {
   name: string;
   url: string;
@@ -129,6 +166,13 @@ export const api = {
   timeline: (camera: string, date: string) =>
     request<TimelineData>(`/api/timeline?cam=${encodeURIComponent(camera)}&date=${encodeURIComponent(date)}`),
   events: () => request<EventLog[]>("/api/events"),
+  recorderStatus: () => request<RecorderStatus>("/api/recorders/status"),
+  recordingStorage: () => request<RecordingStorage>("/api/recordings/storage"),
+  cleanupRecordings: (maxBytes: number) =>
+    request<CleanupResult>("/api/recordings/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ maxBytes }),
+    }),
   streamStatus: () => request<StreamStatus>("/api/streams/status"),
   createCamera: (camera: CreateCamera) =>
     request<{ ok: boolean; camera: Camera; go2rtc: StreamStatus; warning?: string }>(

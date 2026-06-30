@@ -26,6 +26,36 @@ export function useEvents() {
   return useQuery({ queryKey: ["events"], queryFn: api.events, refetchInterval: 7000 });
 }
 
+export function useRecorderStatus() {
+  return useQuery({
+    queryKey: ["recorder-status"],
+    queryFn: api.recorderStatus,
+    refetchInterval: 5000,
+  });
+}
+
+export function useRecordingStorage() {
+  return useQuery({
+    queryKey: ["recording-storage"],
+    queryFn: api.recordingStorage,
+    refetchInterval: 5000,
+  });
+}
+
+export function useCleanupRecordings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (maxBytes: number) => api.cleanupRecordings(maxBytes),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["recording-storage"] }),
+        queryClient.invalidateQueries({ queryKey: ["events"] }),
+        queryClient.invalidateQueries({ queryKey: ["timeline"] }),
+      ]);
+    },
+  });
+}
+
 export function useCreateLayout() {
   const queryClient = useQueryClient();
   return useMutation({
