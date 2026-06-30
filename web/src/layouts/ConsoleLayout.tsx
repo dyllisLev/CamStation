@@ -1,12 +1,17 @@
 import {
   Activity,
+  AlertTriangle,
+  Archive,
   Camera,
   Clapperboard,
-  LayoutDashboard,
   ListFilter,
   MonitorPlay,
   RefreshCw,
   Settings,
+  Shield,
+  SlidersHorizontal,
+  Users,
+  Wifi,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,21 +21,31 @@ import { StatusDot } from "../components/StatusDot";
 import { cn, formatDate } from "../lib/utils";
 
 const navItems = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/", label: "Control Room", icon: Shield },
   { to: "/live", label: "Live", icon: MonitorPlay },
-  { to: "/cameras", label: "Cameras", icon: Camera },
   { to: "/recordings", label: "Recordings", icon: Clapperboard },
+  { to: "/cameras", label: "Cameras", icon: Camera },
+  { to: "/incidents", label: "Incidents", icon: AlertTriangle },
+  { to: "/streams", label: "Streams", icon: Wifi },
+  { to: "/backup", label: "Backup", icon: Archive },
+  { to: "/viewers", label: "Viewers", icon: Users },
   { to: "/logs", label: "Logs", icon: ListFilter },
   { to: "/system", label: "System", icon: Settings },
+  { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
 const titles: Record<string, string> = {
-  "/": "Dashboard",
+  "/": "Control Room",
   "/live": "Live",
-  "/cameras": "Cameras",
   "/recordings": "Recordings",
+  "/cameras": "Cameras",
+  "/incidents": "Incidents",
+  "/streams": "Streams",
+  "/backup": "Backup",
+  "/viewers": "Viewers",
   "/logs": "Logs",
   "/system": "System",
+  "/settings": "Settings",
 };
 
 export function ConsoleLayout() {
@@ -127,4 +142,3 @@ export function ConsoleLayout() {
     </div>
   );
 }
-

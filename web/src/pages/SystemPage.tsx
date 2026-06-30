@@ -1,5 +1,6 @@
-import { RotateCcw } from "lucide-react";
+import { Download, FileArchive, PackageCheck, Power, RotateCcw, ServerCog, Wrench } from "lucide-react";
 import { useRestartStreams, useStreamStatus } from "../app/queries";
+import { FeatureMatrix } from "../components/FeatureMatrix";
 import { Button } from "../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 
@@ -8,7 +9,18 @@ export function SystemPage() {
   const restart = useRestartStreams();
 
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
+    <div className="space-y-4">
+      <FeatureMatrix
+        title="System Operations"
+        items={[
+          { icon: ServerCog, title: "Service State", status: "running", detail: "camstationd is serving API and embedded React console." },
+          { icon: PackageCheck, title: "Version", status: "unknown", detail: "Release/version checks from the legacy updater need a Go API." },
+          { icon: Download, title: "Update", status: "unknown", detail: "Update orchestration should run from one managed workflow." },
+          { icon: FileArchive, title: "Diagnostics", status: "unknown", detail: "Diagnostic bundles should include config, logs, and process state." },
+          { icon: Power, title: "Restart", status: "unknown", detail: "Restart controls need guardrails before production use." },
+          { icon: Wrench, title: "Maintenance", status: "unknown", detail: "Cleanup, DB vacuum, and health checks belong in this panel." },
+        ]}
+      />
       <Panel>
         <PanelHeader>
           <h2 className="text-sm font-semibold">Stream Manager</h2>
@@ -42,4 +54,3 @@ export function SystemPage() {
     </div>
   );
 }
-
