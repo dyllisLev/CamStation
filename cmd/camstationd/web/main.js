@@ -21,7 +21,11 @@ function escapeHTML(value) {
 }
 
 function playerURL(streamName) {
-  return `/live/stream.html?src=${encodeURIComponent(streamName)}`;
+  return `/live/stream.html?src=${encodeURIComponent(streamName)}&mode=mse`;
+}
+
+function webrtcURL(streamName) {
+  return `/live/stream.html?src=${encodeURIComponent(streamName)}&mode=webrtc`;
 }
 
 async function refresh() {
@@ -49,7 +53,10 @@ async function refresh() {
                 <p>${escapeHTML(camera.redactedUrl)}</p>
                 <code>${escapeHTML(probe)}</code>
               </div>
-              <a class="button" href="${escapeHTML(url)}" target="_blank" rel="noreferrer">Open Live</a>
+              <div class="actions">
+                <a class="button" href="${escapeHTML(url)}" target="_blank" rel="noreferrer">Open Live</a>
+                <a class="button secondary" href="${escapeHTML(webrtcURL(camera.streamName))}" target="_blank" rel="noreferrer">WebRTC</a>
+              </div>
             </div>`;
           })
           .join("")

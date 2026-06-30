@@ -97,6 +97,11 @@ button {
   text-decoration: none;
 }
 
+.button.secondary {
+  background: #1d232a;
+  color: #c7d0dc;
+}
+
 input {
   width: 100%;
   padding: 0 12px;
@@ -140,6 +145,13 @@ pre {
   align-items: center;
   padding: 12px 0;
   border-top: 1px solid #2b3036;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .camera:first-child {

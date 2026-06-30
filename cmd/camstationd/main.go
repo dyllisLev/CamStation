@@ -317,6 +317,9 @@ func go2RTCProxy() (http.Handler, error) {
 	proxy.Director = func(r *http.Request) {
 		originalDirector(r)
 		r.Host = target.Host
+		if r.URL.Path == "/api/ws" {
+			r.Header.Set("Origin", target.String())
+		}
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

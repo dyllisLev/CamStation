@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -58,6 +59,13 @@ func (g *Go2RTC) WriteConfig(cameras []store.Camera) error {
 	buf.WriteString("  listen: 127.0.0.1:8554\n")
 	buf.WriteString("webrtc:\n")
 	buf.WriteString("  listen: 0.0.0.0:8555\n")
+	candidates := localCandidates(8555)
+	if len(candidates) > 0 {
+		buf.WriteString("  candidates:\n")
+		for _, candidate := range candidates {
+			buf.WriteString(fmt.Sprintf("    - %s\n", quoteYAML(candidate)))
+		}
+	}
 	buf.WriteString("streams:\n")
 	if len(cameras) == 0 {
 		buf.WriteString("  {}\n")
@@ -154,4 +162,35 @@ func yamlKey(value string) string {
 
 func quoteYAML(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+}
+
+func localCandidates(port int) []string {
+	var candidates []string
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return candidates
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch value := addr.(type) {
+			case *net.IPNet:
+				ip = value.IP
+			case *net.IPAddr:
+				ip = value.IP
+			}
+			if ip == nil || ip.To4() == nil {
+				continue
+			}
+			candidates = append(candidates, fmt.Sprintf("%s:%d", ip.String(), port))
+		}
+	}
+	return candidates
 }
