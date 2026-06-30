@@ -84,6 +84,19 @@ button {
   padding: 0 14px;
 }
 
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 108px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1px solid #4b5561;
+  background: #27313b;
+  color: #eef1f4;
+  text-decoration: none;
+}
+
 input {
   width: 100%;
   padding: 0 12px;
@@ -91,7 +104,7 @@ input {
 
 form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
   gap: 8px;
 }
 
@@ -113,6 +126,56 @@ pre {
 .events {
   display: grid;
   gap: 8px;
+}
+
+.cameras {
+  display: grid;
+  gap: 10px;
+}
+
+.camera {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid #2b3036;
+}
+
+.camera:first-child {
+  border-top: 0;
+}
+
+.camera p {
+  overflow-wrap: anywhere;
+}
+
+.camera code {
+  display: block;
+  margin-top: 8px;
+  color: #99a3ae;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #3b424b;
+  color: #c7d0dc;
+  font-size: 12px;
+}
+
+.state.streaming {
+  border-color: #44845d;
+  color: #b8e0c4;
+}
+
+.state.offline {
+  border-color: #9d5148;
+  color: #ffb4a8;
 }
 
 .event {
@@ -148,8 +211,8 @@ pre {
 @media (max-width: 760px) {
   .grid,
   form,
-  .event {
+  .event,
+  .camera {
     grid-template-columns: 1fr;
   }
 }
-

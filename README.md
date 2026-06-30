@@ -74,3 +74,19 @@ make probe
 ```
 
 Or test through the running web console. Probe results and stored events redact `user:pass@` by default.
+
+## Live View Prototype
+
+After registering a camera in the web console, CamStation writes a generated go2rtc config and starts go2rtc as a managed child process.
+
+Open live video through CamStation, not through the raw go2rtc port:
+
+```text
+http://SERVER_IP:18080/live/stream.html?src=STREAM_NAME
+```
+
+Security rule for the prototype:
+
+- go2rtc API and RTSP listeners are bound to `127.0.0.1`.
+- CamStation exposes only the minimal live-player paths under `/live/`.
+- Raw go2rtc status APIs such as `/api/streams` are not exposed because they can include camera credentials.

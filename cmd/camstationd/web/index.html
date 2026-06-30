@@ -22,13 +22,19 @@
           <pre id="health">Loading...</pre>
         </article>
         <article>
-          <h2>Camera Probe</h2>
-          <form id="probeForm">
+          <h2>Register Camera</h2>
+          <form id="cameraForm">
+            <input id="cameraName" name="name" type="text" placeholder="Camera 1" autocomplete="off" />
             <input id="cameraUrl" name="url" type="password" placeholder="rtsp://user:pass@host/path" autocomplete="off" />
-            <button type="submit">Probe</button>
+            <button type="submit">Save</button>
           </form>
           <pre id="probeResult">No probe yet.</pre>
         </article>
+      </section>
+
+      <section>
+        <h2>Cameras</h2>
+        <div id="cameras" class="cameras">Loading...</div>
       </section>
 
       <section>
@@ -39,4 +45,3 @@
     <script src="/main.js"></script>
   </body>
 </html>
-
