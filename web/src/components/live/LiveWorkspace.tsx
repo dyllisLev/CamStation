@@ -46,6 +46,7 @@ export function LiveWorkspace() {
   const [savedFlash, setSavedFlash] = useState(false);
   const [sideHidden, setSideHidden] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [zoomedStream, setZoomedStream] = useState<string | null>(null);
   const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
   const selectedCamera = rows.find((camera) => camera.streamName === selectedStream) ?? rows[0];
@@ -61,6 +62,15 @@ export function LiveWorkspace() {
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
+
+  useEffect(() => {
+    if (!zoomedStream) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setZoomedStream(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [zoomedStream]);
 
   useEffect(() => {
     if (rows.length === 0 || layout.length > 0) return;
@@ -132,6 +142,11 @@ export function LiveWorkspace() {
     setDirty(true);
   }
 
+  function toggleSelectedZoom() {
+    if (!selectedCamera) return;
+    setZoomedStream((current) => (current === selectedCamera.streamName ? null : selectedCamera.streamName));
+  }
+
   function flashSaved() {
     setSavedFlash(true);
     window.setTimeout(() => setSavedFlash(false), 1400);
@@ -178,6 +193,14 @@ export function LiveWorkspace() {
         >
           {timelineCollapsed ? "타임라인 보기" : "타임라인 숨기기"}
         </button>
+        <button
+          className={cn("new-timeline-command", zoomedStream ? "new-primary" : "new-ghost")}
+          type="button"
+          onClick={toggleSelectedZoom}
+          disabled={!selectedCamera}
+        >
+          {zoomedStream ? "확대 종료" : "영상 확대"}
+        </button>
         <div className="new-spacer" />
         <div className="new-live-pill">
           <span className="new-pulse" />
@@ -198,6 +221,11 @@ export function LiveWorkspace() {
               selectedStream={selectedCamera?.streamName ?? ""}
               onLayoutChange={handleLayoutChange}
               onSelectCamera={(camera) => setSelectedStream(camera.streamName)}
+              zoomedStream={zoomedStream}
+              onToggleZoom={(camera) => {
+                setSelectedStream(camera.streamName);
+                setZoomedStream((current) => (current === camera.streamName ? null : camera.streamName));
+              }}
             />
           ) : (
             <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
@@ -295,16 +323,21 @@ function CameraGrid({
   selectedStream,
   onLayoutChange,
   onSelectCamera,
+  zoomedStream,
+  onToggleZoom,
 }: {
   cameras: Camera[];
   layout: MonitorLayoutItem[];
   selectedStream: string;
   onLayoutChange: (layout: MonitorLayoutItem[]) => void;
   onSelectCamera: (camera: Camera) => void;
+  zoomedStream: string | null;
+  onToggleZoom: (camera: Camera) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const cameraByStream = useMemo(() => new Map(cameras.map((camera) => [camera.streamName, camera])), [cameras]);
+  const zoomedCamera = zoomedStream ? cameraByStream.get(zoomedStream) : undefined;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -322,7 +355,7 @@ function CameraGrid({
       : 1;
 
   return (
-    <div ref={containerRef} className="new-grid-stage">
+    <div ref={containerRef} className={cn("new-grid-stage", zoomedCamera && "new-zoom-active")}>
       {containerSize.width > 0 && containerSize.height > 0 && (
         <GridLayout
           layout={clampLayout(layout)}
@@ -348,23 +381,51 @@ function CameraGrid({
                   camera={camera}
                   selected={camera.streamName === selectedStream}
                   onSelect={() => onSelectCamera(camera)}
+                  onToggleZoom={() => onToggleZoom(camera)}
                 />
               </div>
             );
           })}
         </GridLayout>
       )}
+      {zoomedCamera && (
+        <div className="new-zoom-layer">
+          <CameraTile
+            camera={zoomedCamera}
+            selected
+            zoomed
+            onSelect={() => onSelectCamera(zoomedCamera)}
+            onToggleZoom={() => onToggleZoom(zoomedCamera)}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-function CameraTile({ camera, selected, onSelect }: { camera: Camera; selected: boolean; onSelect: () => void }) {
+function CameraTile({
+  camera,
+  selected,
+  zoomed = false,
+  onSelect,
+  onToggleZoom,
+}: {
+  camera: Camera;
+  selected: boolean;
+  zoomed?: boolean;
+  onSelect: () => void;
+  onToggleZoom: () => void;
+}) {
   const { videoRef, connected } = useMseStream(camera.state === "streaming" ? camera.streamName : "");
 
   return (
     <article
-      className={cn("new-camera-tile", selected && "new-selected", camera.state !== "streaming" && "new-offline")}
+      className={cn("new-camera-tile", selected && "new-selected", zoomed && "new-zoomed", camera.state !== "streaming" && "new-offline")}
       onClick={onSelect}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onToggleZoom();
+      }}
     >
       {camera.state === "streaming" ? (
         <video

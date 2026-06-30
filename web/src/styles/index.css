@@ -218,6 +218,11 @@ iframe {
   overflow: hidden;
 }
 
+.new-grid-stage.new-zoom-active .react-grid-layout {
+  opacity: .18;
+  pointer-events: none;
+}
+
 .new-grid-item {
   overflow: hidden;
   border-radius: 6px;
@@ -305,6 +310,17 @@ iframe {
 .new-camera-tile.new-selected {
   border-color: color-mix(in oklch, var(--new-accent), white 12%);
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--new-accent), transparent 35%) inset;
+}
+
+.new-camera-tile.new-zoomed {
+  border-color: var(--new-accent);
+}
+
+.new-zoom-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: #05070a;
 }
 
 .new-live-video {
