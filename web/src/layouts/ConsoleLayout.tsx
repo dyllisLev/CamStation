@@ -58,6 +58,15 @@ export function ConsoleLayout() {
   const streams = useStreamStatus();
   const online = cameras.data?.filter((camera) => camera.state === "streaming").length ?? 0;
   const title = t(titles[location.pathname] ?? "controlRoom");
+  const isLiveWorkspace = location.pathname === "/" || location.pathname === "/live";
+
+  if (isLiveWorkspace) {
+    return (
+      <div className="min-h-svh bg-[#03090d] text-slate-100">
+        <Outlet />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-svh bg-slate-950 text-slate-100">
