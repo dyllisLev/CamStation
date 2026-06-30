@@ -1,6 +1,6 @@
 import { Expand } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent, ReactNode, WheelEvent } from "react";
 import GridLayout from "react-grid-layout/legacy";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
@@ -199,7 +199,7 @@ export function LiveWorkspace() {
           onClick={toggleSelectedZoom}
           disabled={!selectedCamera}
         >
-          {zoomedStream ? "확대 종료" : "영상 확대"}
+          {zoomedStream ? "타일 확대 종료" : "타일 확대"}
         </button>
         <div className="new-spacer" />
         <div className="new-live-pill">
@@ -416,8 +416,6 @@ function CameraTile({
   onSelect: () => void;
   onToggleZoom: () => void;
 }) {
-  const { videoRef, connected } = useMseStream(camera.state === "streaming" ? camera.streamName : "");
-
   return (
     <article
       className={cn("new-camera-tile", selected && "new-selected", zoomed && "new-zoomed", camera.state !== "streaming" && "new-offline")}
@@ -428,19 +426,10 @@ function CameraTile({
       }}
     >
       {camera.state === "streaming" ? (
-        <video
-          ref={videoRef}
-          className="new-live-video"
-          autoPlay
-          muted
-          playsInline
-          disablePictureInPicture
-          controls={false}
-        />
+        <LiveVideo streamName={camera.streamName} />
       ) : (
         <div className="new-offline-layer">연결 없음</div>
       )}
-      {camera.state === "streaming" && !connected && <div className="new-offline-layer">연결 중...</div>}
       <div className="new-tile-head cam-drag-handle">
         <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
         <strong>{camera.name}</strong>
@@ -457,6 +446,113 @@ function CameraTile({
         집중 보기
       </button>
     </article>
+  );
+}
+
+function LiveVideo({ streamName }: { streamName: string }) {
+  const { videoRef, connected } = useMseStream(streamName);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  const [viewport, setViewport] = useState({ scale: 1, tx: 0, ty: 0 });
+  const zoomed = viewport.scale > 1.001;
+
+  const applyViewport = useCallback((next: typeof viewport) => {
+    const frame = frameRef.current;
+    if (!frame || next.scale <= 1) {
+      setViewport({ scale: 1, tx: 0, ty: 0 });
+      return;
+    }
+    const rect = frame.getBoundingClientRect();
+    setViewport(clampVideoViewport(next, rect.width, rect.height));
+  }, []);
+
+  const handleWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const frame = frameRef.current;
+      if (!frame) return;
+      const rect = frame.getBoundingClientRect();
+      const nextScale = clampNumber(viewport.scale * (event.deltaY < 0 ? 1.15 : 1 / 1.15), 1, 4);
+      if (nextScale === 1) {
+        applyViewport({ scale: 1, tx: 0, ty: 0 });
+        return;
+      }
+      const offsetX = event.clientX - rect.left - rect.width / 2;
+      const offsetY = event.clientY - rect.top - rect.height / 2;
+      const scaleRatio = nextScale / viewport.scale;
+      applyViewport({
+        scale: nextScale,
+        tx: viewport.tx * scaleRatio - offsetX * (scaleRatio - 1),
+        ty: viewport.ty * scaleRatio - offsetY * (scaleRatio - 1),
+      });
+    },
+    [applyViewport, viewport],
+  );
+
+  const handleMouseDown = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (!zoomed || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragRef.current = { x: event.clientX, y: event.clientY, tx: viewport.tx, ty: viewport.ty };
+
+      const handleMove = (moveEvent: globalThis.MouseEvent) => {
+        const drag = dragRef.current;
+        const frame = frameRef.current;
+        if (!drag || !frame) return;
+        const rect = frame.getBoundingClientRect();
+        setViewport(
+          clampVideoViewport(
+            {
+              scale: viewport.scale,
+              tx: drag.tx + moveEvent.clientX - drag.x,
+              ty: drag.ty + moveEvent.clientY - drag.y,
+            },
+            rect.width,
+            rect.height,
+          ),
+        );
+      };
+
+      const handleUp = () => {
+        dragRef.current = null;
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+      };
+
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
+    },
+    [viewport, zoomed],
+  );
+
+  return (
+    <div
+      ref={frameRef}
+      className="new-live-video-frame"
+      onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        applyViewport({ scale: 1, tx: 0, ty: 0 });
+      }}
+    >
+      <video
+        ref={videoRef}
+        className="new-live-video"
+        autoPlay
+        muted
+        playsInline
+        disablePictureInPicture
+        controls={false}
+        style={{
+          transform: `scale(${viewport.scale}) translate(${viewport.tx / viewport.scale}px, ${viewport.ty / viewport.scale}px)`,
+        }}
+      />
+      {!connected && <div className="new-offline-layer">연결 중...</div>}
+      {zoomed && <div className="new-zoom-badge">{viewport.scale.toFixed(1)}x</div>}
+    </div>
   );
 }
 
@@ -599,6 +695,20 @@ function clampLayout(layout: MonitorLayoutItem[]): MonitorLayoutItem[] {
       y: Math.min(Math.max(item.y, 0), GRID_ROWS - h),
     };
   });
+}
+
+function clampVideoViewport(viewport: { scale: number; tx: number; ty: number }, width: number, height: number) {
+  const scale = clampNumber(viewport.scale, 1, 4);
+  if (scale <= 1) return { scale: 1, tx: 0, ty: 0 };
+  return {
+    scale,
+    tx: clampNumber(viewport.tx, -((scale - 1) * width) / 2, ((scale - 1) * width) / 2),
+    ty: clampNumber(viewport.ty, -((scale - 1) * height) / 2, ((scale - 1) * height) / 2),
+  };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function toLayoutItem(item: MonitorLayoutItem) {

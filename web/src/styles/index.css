@@ -323,6 +323,23 @@ iframe {
   background: #05070a;
 }
 
+.new-live-video-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #05070a;
+  cursor: default;
+}
+
+.new-live-video-frame:has(.new-zoom-badge) {
+  cursor: grab;
+}
+
+.new-live-video-frame:active:has(.new-zoom-badge) {
+  cursor: grabbing;
+}
+
 .new-live-video {
   width: 100%;
   height: 100%;
@@ -331,6 +348,21 @@ iframe {
   background: #05070a;
   pointer-events: none;
   user-select: none;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.new-zoom-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  font: 11px/1.4 var(--new-font-mono);
+  pointer-events: none;
 }
 
 .new-live-video::-webkit-media-controls,
