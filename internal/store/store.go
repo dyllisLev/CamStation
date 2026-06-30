@@ -560,6 +560,42 @@ func (d *DB) ListRecordingSegments(ctx context.Context, streamName string, from,
 	return segments, rows.Err()
 }
 
+func (d *DB) ListDeletableRecordingSegments(ctx context.Context) ([]RecordingSegment, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
+		        ts_end, file_size, status, error, created_at, updated_at
+		 FROM recording_segments
+		 WHERE status = 'ready' AND final_path IS NOT NULL AND final_path != ''
+		 ORDER BY ts_start, id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	segments := make([]RecordingSegment, 0)
+	for rows.Next() {
+		segment, err := scanRecordingSegment(rows)
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, segment)
+	}
+	return segments, rows.Err()
+}
+
+func (d *DB) MarkRecordingSegmentDeleted(ctx context.Context, id int64, reason string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recording_segments
+		 SET status = 'deleted', error = ?, updated_at = ?
+		 WHERE id = ? AND status = 'ready'`,
+		nullString(reason),
+		time.Now().Unix(),
+		id,
+	)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

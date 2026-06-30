@@ -29,6 +29,7 @@ type Manager struct {
 	tempDir        string
 	segmentMinutes int
 	rtspBase       string
+	afterSegment   func()
 
 	mu      sync.Mutex
 	workers map[string]*worker
@@ -165,6 +166,12 @@ func (m *Manager) StopAll() {
 	}
 }
 
+func (m *Manager) SetAfterSegmentClosed(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.afterSegment = fn
+}
+
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	workers := make([]*worker, 0, len(m.workers))
@@ -184,6 +191,15 @@ func (m *Manager) Status() Status {
 		status.Workers = append(status.Workers, worker.status())
 	}
 	return status
+}
+
+func (m *Manager) notifySegmentClosed() {
+	m.mu.Lock()
+	fn := m.afterSegment
+	m.mu.Unlock()
+	if fn != nil {
+		go fn()
+	}
 }
 
 func (w *worker) run() {
@@ -333,7 +349,9 @@ func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
 	}
 	if err := w.manager.db.CloseRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size); err != nil {
 		w.setState(statusRunning, segment.path, err.Error())
+		return
 	}
+	w.manager.notifySegmentClosed()
 }
 
 func (w *worker) currentRef() *segmentRef {

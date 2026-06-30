@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"camstation/internal/camera"
+	"camstation/internal/cleanup"
 	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
@@ -40,6 +41,7 @@ func main() {
 		recordingsDir    = flag.String("recordings-dir", getenv("CAMSTATION_RECORDINGS_DIR", "./data/recordings"), "final recording directory")
 		tempDir          = flag.String("temp-dir", getenv("CAMSTATION_TEMP_DIR", "./data/temp"), "temporary recording directory")
 		segmentMinutes   = flag.Int("segment-minutes", getenvInt("CAMSTATION_SEGMENT_MINUTES", 30), "recording segment length in minutes")
+		maxStorageGB     = flag.Float64("max-storage-gb", getenvFloat("CAMSTATION_MAX_STORAGE_GB", 0), "maximum recording storage in GB; 0 disables automatic cleanup")
 	)
 	flag.Parse()
 
@@ -67,6 +69,29 @@ func main() {
 	prober := camera.NewFFProbe()
 	streamer := stream.NewGo2RTC("./data/go2rtc.yaml")
 	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
+	cleaner := cleanup.New(db, *recordingsDir)
+	maxStorageBytes := int64(*maxStorageGB * 1024 * 1024 * 1024)
+	if maxStorageBytes > 0 {
+		runAutomaticCleanup := func() {
+			result, err := cleaner.EnforceMaxBytes(context.Background(), maxStorageBytes)
+			level := "info"
+			message := "automatic recording cleanup completed"
+			details := map[string]any{"maxBytes": result.MaxBytes, "beforeBytes": result.BeforeBytes, "afterBytes": result.AfterBytes, "deleted": len(result.Deleted)}
+			if err != nil {
+				level = "error"
+				message = "automatic recording cleanup failed"
+				details = map[string]any{"maxBytes": maxStorageBytes, "error": err.Error()}
+			}
+			_ = db.AppendEvent(context.Background(), store.Event{
+				Source:  "recording.cleanup",
+				Level:   level,
+				Message: message,
+				Details: details,
+			})
+		}
+		recorderManager.SetAfterSegmentClosed(runAutomaticCleanup)
+		go runAutomaticCleanup()
+	}
 	if cameras, err := db.ListCameras(ctx, true); err == nil && len(cameras) > 0 {
 		if err := streamer.Ensure(ctx, cameras); err != nil {
 			_ = db.AppendEvent(ctx, store.Event{
@@ -117,7 +142,7 @@ func main() {
 		}()
 	}
 
-	mux, err := routes(db, prober, streamer, recorderManager, *recordingEnabled)
+	mux, err := routes(db, prober, streamer, recorderManager, cleaner, *recordingEnabled)
 	if err != nil {
 		log.Fatalf("build routes: %v", err)
 	}
@@ -142,7 +167,7 @@ func main() {
 	}
 }
 
-func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, recordingEnabled bool) (http.Handler, error) {
+func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingEnabled bool) (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +304,44 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			Details: map[string]any{"stream": streamName},
 		})
 		writeJSON(w, http.StatusOK, recorderManager.Status())
+	})
+
+	mux.HandleFunc("POST /api/recordings/cleanup", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			MaxBytes     int64   `json:"maxBytes"`
+			MaxStorageGB float64 `json:"maxStorageGB"`
+		}
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		if req.MaxBytes <= 0 && req.MaxStorageGB > 0 {
+			req.MaxBytes = int64(req.MaxStorageGB * 1024 * 1024 * 1024)
+		}
+		if req.MaxBytes <= 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("maxBytes or maxStorageGB is required"))
+			return
+		}
+		result, err := cleaner.EnforceMaxBytes(r.Context(), req.MaxBytes)
+		if err != nil {
+			_ = db.AppendEvent(r.Context(), store.Event{
+				Source:  "recording.cleanup",
+				Level:   "error",
+				Message: "recording cleanup failed",
+				Details: map[string]any{"error": err.Error(), "maxBytes": req.MaxBytes},
+			})
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		_ = db.AppendEvent(r.Context(), store.Event{
+			Source:  "recording.cleanup",
+			Level:   "info",
+			Message: "recording cleanup completed",
+			Details: map[string]any{"maxBytes": result.MaxBytes, "beforeBytes": result.BeforeBytes, "afterBytes": result.AfterBytes, "deleted": len(result.Deleted)},
+		})
+		writeJSON(w, http.StatusOK, result)
 	})
 
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
@@ -611,6 +674,18 @@ func getenvInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getenvFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return fallback
 	}

@@ -8,7 +8,7 @@ This document records the current implementation state so the next session can c
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
 - Active branch used for this work: `camstation2-initial`
-- Latest pushed implementation commit at the time of this note: `3e0bd97 Unify console styling and add recorder foundation`
+- Latest implementation commit at the time of this note: `Add capacity cleanup for recordings`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.29:18080/`
 - Main monitoring page: `http://10.0.0.29:18080/live`
 
@@ -74,6 +74,14 @@ This document records the current implementation state so the next session can c
   - recorder status/start/stop API
   - single-stream start/stop using `?stream={streamName}`
   - `/api/timeline` now reads recording segment rows
+- Recording capacity cleanup:
+  - `-max-storage-gb` / `CAMSTATION_MAX_STORAGE_GB` enables automatic cleanup
+  - startup cleanup runs once when max storage is configured
+  - segment-complete cleanup runs after a temp segment is moved to recordings
+  - `POST /api/recordings/cleanup` can run a manual capacity cleanup with `maxBytes` or `maxStorageGB`
+  - only completed `ready` segments are deleted
+  - active `recording` temp segments are not deletion candidates
+  - deleted segments are marked `deleted` in SQLite so timeline queries exclude them
 
 ## Stream And Recording Policy
 
@@ -118,6 +126,17 @@ Browser/Playwright verification performed:
 - Recorder API status returns no workers by default.
 - A short single-camera recorder smoke test confirmed ffmpeg uses `rtsp://127.0.0.1:8554/{streamName}`.
 - Smoke-test recording output and DB row were removed afterward.
+- Three-camera 5-minute recording test on the camera-reachable server:
+  - all recorders used local go2rtc RTSP inputs
+  - completed segments moved from `data/temp` to `data/recordings`
+  - live RTSP probes stayed healthy during segment rollover
+  - moved files were playable with ffprobe
+- Capacity cleanup test on the camera-reachable server:
+  - manual cleanup at `maxBytes=320000000` reduced recordings from `499747035` to `310851459` bytes and deleted 11 oldest ready segments
+  - automatic startup cleanup with `-max-storage-gb 0.30` reduced recordings from `423656322` to `297866145` bytes
+  - automatic segment-complete cleanup after the next 5-minute rollover reduced recordings from `337207565` to `282317129` bytes
+  - all three recorders stayed `running`
+  - local RTSP ffprobe stayed healthy for streams `camera-1`, `1`, and `2`
 
 ## Important Corrections Learned
 
@@ -146,7 +165,7 @@ Browser/Playwright verification performed:
 - Motion data API
 - Recording playback page
 - Clip download/export
-- Storage usage and retention enforcement
+- Retention-by-days settings and stale-temp recovery
 - Motion event detection/storage
 - Camera edit/delete/sort/group management
 - ONVIF discovery/reboot/status management
