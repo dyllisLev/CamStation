@@ -7,3 +7,10 @@ node_modules/
 *.xls
 *.apk
 .superpowers/
+
+# Local secrets and generated state
+.env
+*.local
+*.secret
+config/go2rtc.yaml
+*.db
