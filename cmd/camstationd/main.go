@@ -359,6 +359,9 @@ func layoutID() string {
 func spaHandler(files http.FileSystem) http.Handler {
 	fileServer := http.FileServer(files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || !strings.Contains(filepathBase(r.URL.Path), ".") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		if r.URL.Path == "/" {
 			fileServer.ServeHTTP(w, r)
 			return
@@ -371,6 +374,13 @@ func spaHandler(files http.FileSystem) http.Handler {
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+func filepathBase(path string) string {
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
 }
 
 func go2RTCProxy() (http.Handler, error) {

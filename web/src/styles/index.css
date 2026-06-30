@@ -255,6 +255,20 @@ iframe {
   user-select: none;
 }
 
+.new-live-video::-webkit-media-controls,
+.new-live-video::-webkit-media-controls-enclosure,
+.new-live-video::-webkit-media-controls-panel,
+.new-live-video::-webkit-media-controls-play-button,
+.new-live-video::-webkit-media-controls-timeline,
+.new-live-video::-webkit-media-controls-current-time-display,
+.new-live-video::-webkit-media-controls-time-remaining-display,
+.new-live-video::-webkit-media-controls-mute-button,
+.new-live-video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 .new-offline-layer {
   position: absolute;
   inset: 0;
