@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { withAppBase } from "../../app/basePath";
 
 const CODECS = ["avc1.640029", "avc1.64002A", "avc1.640033", "mp4a.40.2", "mp4a.40.5", "opus"];
 const STALL_MS = 10_000;
@@ -104,7 +105,9 @@ export function useMseStream(streamName: string) {
         () => {
           if (destroyed || currentGeneration !== generation) return;
           const protocol = location.protocol === "https:" ? "wss" : "ws";
-          ws = new WebSocket(`${protocol}://${location.host}/player/api/ws?src=${encodeURIComponent(streamName)}`);
+          ws = new WebSocket(
+            `${protocol}://${location.host}${withAppBase(`/player/api/ws?src=${encodeURIComponent(streamName)}`)}`,
+          );
           ws.binaryType = "arraybuffer";
 
           ws.onopen = () => {

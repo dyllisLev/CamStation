@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: process.env.CAMSTATION_BASE || '/',
   plugins: [react(), tailwindcss()],
   build: {
     outDir: '../cmd/camstationd/web',

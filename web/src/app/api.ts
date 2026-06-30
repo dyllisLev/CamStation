@@ -1,3 +1,5 @@
+import { withAppBase } from "./basePath";
+
 export type Health = {
   ok: boolean;
   mode: string;
@@ -128,7 +130,7 @@ export type CreateCamera = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(withAppBase(path), {
     ...init,
     headers: {
       "Content-Type": "application/json",
