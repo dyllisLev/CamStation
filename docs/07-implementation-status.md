@@ -8,7 +8,7 @@ This document records the current implementation state so the next session can c
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
 - Active branch used for this work: `camstation2-initial`
-- Latest pushed implementation commit at the time of this note: `2c37ada Use focus button for tile zoom`
+- Latest pushed implementation commit at the time of this note: `3e0bd97 Unify console styling and add recorder foundation`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.29:18080/`
 - Main monitoring page: `http://10.0.0.29:18080/live`
 
