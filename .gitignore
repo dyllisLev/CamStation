@@ -4,3 +4,7 @@ node_modules/
 /camstationd
 *.log
 .env
+*.local
+*.secret
+config/go2rtc.yaml
+*.db
