@@ -155,6 +155,51 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 		writeJSON(w, http.StatusOK, cameras)
 	})
 
+	mux.HandleFunc("GET /api/layouts", func(w http.ResponseWriter, r *http.Request) {
+		layouts, err := db.ListLayouts(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, layouts)
+	})
+
+	mux.HandleFunc("POST /api/layouts", func(w http.ResponseWriter, r *http.Request) {
+		var req store.LayoutProfile
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		req.ID = layoutID()
+		layout, err := db.CreateLayout(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, layout)
+	})
+
+	mux.HandleFunc("PUT /api/layouts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var req store.LayoutProfile
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		layout, err := db.UpdateLayout(r.Context(), r.PathValue("id"), req)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, layout)
+	})
+
+	mux.HandleFunc("GET /api/timeline", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"segments":      []any{},
+			"motion_events": []any{},
+		})
+	})
+
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name string `json:"name"`
@@ -305,6 +350,10 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 	}
 	mux.Handle("/", spaHandler(http.FS(static)))
 	return mux, nil
+}
+
+func layoutID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 func spaHandler(files http.FileSystem) http.Handler {

@@ -35,6 +35,42 @@ export type Camera = {
   updatedAt: string;
 };
 
+export type LayoutItem = {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+};
+
+export type LayoutProfile = {
+  id: string;
+  name: string;
+  data: LayoutItem[];
+  timeline_collapsed: boolean;
+  grid_cols: number;
+  grid_rows: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type TimelineData = {
+  segments: Array<{
+    camera_id: string;
+    filename: string;
+    ts_start: number;
+    ts_end: number | null;
+    file_size?: number | null;
+  }>;
+  motion_events: Array<{
+    camera_id: string;
+    ts_start: number;
+    ts_end: number | null;
+  }>;
+};
+
 export type EventLog = {
   id: number;
   createdAt: string;
@@ -71,6 +107,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<Health>("/api/health"),
   cameras: () => request<Camera[]>("/api/cameras"),
+  layouts: () => request<LayoutProfile[]>("/api/layouts"),
+  createLayout: (layout: Pick<LayoutProfile, "name" | "data" | "timeline_collapsed" | "grid_cols" | "grid_rows">) =>
+    request<LayoutProfile>("/api/layouts", {
+      method: "POST",
+      body: JSON.stringify(layout),
+    }),
+  updateLayout: (
+    id: string,
+    layout: Partial<Pick<LayoutProfile, "name" | "data" | "timeline_collapsed" | "grid_cols" | "grid_rows">>,
+  ) =>
+    request<LayoutProfile>(`/api/layouts/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(layout),
+    }),
+  timeline: (camera: string, date: string) =>
+    request<TimelineData>(`/api/timeline?cam=${encodeURIComponent(camera)}&date=${encodeURIComponent(date)}`),
   events: () => request<EventLog[]>("/api/events"),
   streamStatus: () => request<StreamStatus>("/api/streams/status"),
   createCamera: (camera: CreateCamera) =>
@@ -83,4 +135,3 @@ export const api = {
     ),
   restartStreams: () => request<StreamStatus>("/api/streams/restart", { method: "POST" }),
 };
-

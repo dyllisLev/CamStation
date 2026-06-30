@@ -1,367 +1,575 @@
+import { Expand } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent, ReactNode } from "react";
+import GridLayout from "react-grid-layout/legacy";
+import "react-grid-layout/css/styles.css";
+import "react-resizable/css/styles.css";
+import type { Camera, TimelineData } from "../../app/api";
 import {
-  ChevronDown,
-  Columns3,
-  Expand,
-  EyeOff,
-  LayoutGrid,
-  MonitorPlay,
-  PanelRightClose,
-  PanelRightOpen,
-  Save,
-  Settings,
-  SkipBack,
-} from "lucide-react";
-import { useEffect, useState } from "react";
-import type { ComponentType } from "react";
-import { NavLink } from "react-router-dom";
-import type { Camera } from "../../app/api";
-import { useCameras } from "../../app/queries";
-import { StatusDot } from "../../components/StatusDot";
-import { cn, formatDate, liveUrl } from "../../lib/utils";
+  useCameras,
+  useCreateLayout,
+  useLayouts,
+  useTimeline,
+  useUpdateLayout,
+} from "../../app/queries";
+import { cn, liveUrl } from "../../lib/utils";
+import { useMseStream } from "./useMseStream";
 
-type Mode = "mse" | "webrtc";
+const GRID_COLS = 48;
+const GRID_ROWS = 48;
+const GRID_MARGIN: [number, number] = [4, 4];
+const LAST_LAYOUT_KEY = "camstation-live-layout-id";
+const TIMELINE_KEY = "camstation-live-timeline-collapsed";
 
-const emptySlots = Array.from({ length: 7 }, (_, index) => index);
+type TimelineRange = { ts_start: number; ts_end: number };
+type MonitorLayoutItem = {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+};
 
 export function LiveWorkspace() {
   const cameras = useCameras();
-  const rows = cameras.data ?? [];
-  const streaming = rows.filter((camera) => camera.state === "streaming");
-  const activeCamera = streaming[0] ?? rows[0];
-  const [mode, setMode] = useState<Mode>("mse");
-  const [sideVisible, setSideVisible] = useState(true);
-  const [timelineVisible, setTimelineVisible] = useState(true);
-  const [now, setNow] = useState(() => new Date());
+  const layoutsQuery = useLayouts();
+  const createLayout = useCreateLayout();
+  const updateLayout = useUpdateLayout();
+  const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
+  const layouts = useMemo(() => layoutsQuery.data ?? [], [layoutsQuery.data]);
+  const [layout, setLayout] = useState<MonitorLayoutItem[]>([]);
+  const [currentId, setCurrentId] = useState<string>("");
+  const [selectedStream, setSelectedStream] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [sideHidden, setSideHidden] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
+  const selectedCamera = rows.find((camera) => camera.streamName === selectedStream) ?? rows[0];
+  const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
+    if (selectedStream || rows.length === 0) return;
+    setSelectedStream(rows[0].streamName);
+  }, [rows, selectedStream]);
+
+  useEffect(() => {
+    const handler = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  const filled = rows.slice(0, 8);
-  const wall = [
-    ...filled,
-    ...emptySlots.slice(0, Math.max(0, 8 - filled.length)).map((index) => ({
-      id: `empty-${index}`,
-    })),
-  ];
+  useEffect(() => {
+    if (rows.length === 0 || layout.length > 0) return;
+    const savedId = localStorage.getItem(LAST_LAYOUT_KEY);
+    const saved = layouts.find((item) => item.id === savedId) ?? layouts[0];
+    if (saved) {
+      setCurrentId(saved.id);
+      setLayout(mergeWithCameras(saved.data, rows));
+      setTimelineCollapsed(saved.timeline_collapsed);
+      return;
+    }
+    setLayout(defaultLayout(rows));
+  }, [layout.length, layouts, rows]);
 
-  function requestFullscreen() {
-    void document.documentElement.requestFullscreen?.();
+  const onlineCount = rows.filter((camera) => camera.state === "streaming").length;
+
+  const handleLayoutChange = useCallback((next: MonitorLayoutItem[]) => {
+    setLayout(clampLayout(next));
+    setDirty(true);
+  }, []);
+
+  async function saveCurrentLayout() {
+    const payload = {
+      name: layouts.find((item) => item.id === currentId)?.name ?? "기본",
+      data: layout.map(toLayoutItem),
+      timeline_collapsed: timelineCollapsed,
+      grid_cols: GRID_COLS,
+      grid_rows: GRID_ROWS,
+    };
+    const result = currentId
+      ? await updateLayout.mutateAsync({ id: currentId, layout: payload })
+      : await createLayout.mutateAsync(payload);
+    setCurrentId(result.id);
+    localStorage.setItem(LAST_LAYOUT_KEY, result.id);
+    setDirty(false);
+    flashSaved();
+  }
+
+  async function saveAsLayout() {
+    const name = window.prompt("새 배치 이름", "신규 관제 배치");
+    if (!name) return;
+    const result = await createLayout.mutateAsync({
+      name,
+      data: layout.map(toLayoutItem),
+      timeline_collapsed: timelineCollapsed,
+      grid_cols: GRID_COLS,
+      grid_rows: GRID_ROWS,
+    });
+    setCurrentId(result.id);
+    localStorage.setItem(LAST_LAYOUT_KEY, result.id);
+    setDirty(false);
+    flashSaved();
+  }
+
+  function loadLayout(id: string) {
+    const saved = layouts.find((item) => item.id === id);
+    if (!saved) return;
+    setCurrentId(saved.id);
+    setLayout(mergeWithCameras(saved.data, rows));
+    setTimelineCollapsed(saved.timeline_collapsed);
+    setDirty(false);
+    localStorage.setItem(LAST_LAYOUT_KEY, saved.id);
+  }
+
+  function toggleTimeline() {
+    const next = !timelineCollapsed;
+    setTimelineCollapsed(next);
+    localStorage.setItem(TIMELINE_KEY, String(next));
+    setDirty(true);
+  }
+
+  function flashSaved() {
+    setSavedFlash(true);
+    window.setTimeout(() => setSavedFlash(false), 1400);
+  }
+
+  async function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen();
+      return;
+    }
+    await document.exitFullscreen();
   }
 
   return (
-    <div className="flex min-h-svh flex-col bg-[#03090d] text-slate-100">
-      <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-cyan-400/20 bg-[#071016] px-3 py-2 shadow-[0_1px_0_rgba(34,211,238,0.25)]">
-        <NavLink to="/" className="flex items-center gap-3 pr-3">
-          <div className="flex size-9 items-center justify-center rounded-md border border-cyan-400 bg-cyan-400/10 text-xs font-black text-cyan-300">
-            CS
-          </div>
-          <div className="leading-tight">
-            <div className="text-base font-bold">CamStation</div>
-            <div className="text-xs font-medium text-slate-500">HOME MONITOR</div>
-          </div>
-        </NavLink>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <ToolbarLink to="/live" active icon={MonitorPlay} label="라이브" />
-          <ToolbarLink to="/recordings" icon={SkipBack} label="녹화" />
-          <ToolbarLink to="/settings" icon={Settings} label="설정" />
-          <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-slate-200">
-            <LayoutGrid size={16} />
-            기본
-            <ChevronDown size={15} className="text-slate-500" />
-          </button>
-          <ToolbarButton icon={Save} label="배치 저장" />
-          <ToolbarButton icon={Columns3} label="새 이름 저장" />
-          <ToolbarButton
-            icon={sideVisible ? PanelRightClose : PanelRightOpen}
-            label={sideVisible ? "우측 패널 숨기기" : "우측 패널 보이기"}
-            onClick={() => setSideVisible((value) => !value)}
-          />
-          <ToolbarButton
-            icon={EyeOff}
-            label={timelineVisible ? "타임라인 숨기기" : "타임라인 보이기"}
-            onClick={() => setTimelineVisible((value) => !value)}
-          />
+    <div className="new-app new-live-app">
+      <MonitorHeader>
+        <select
+          className="new-select"
+          value={currentId}
+          onChange={(event) => loadLayout(event.target.value)}
+          aria-label="저장된 배치 선택"
+        >
+          {layouts.length === 0 && <option value="">기본</option>}
+          {layouts.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+              {item.id === currentId && dirty ? " *" : ""}
+            </option>
+          ))}
+        </select>
+        <button className="new-primary" type="button" onClick={saveCurrentLayout}>
+          {savedFlash ? "저장됨" : "배치 저장"}
+        </button>
+        <button className="new-ghost" type="button" onClick={saveAsLayout}>
+          새 이름 저장
+        </button>
+        <button className="new-ghost" type="button" onClick={() => setSideHidden((value) => !value)}>
+          {sideHidden ? "우측 패널 보기" : "우측 패널 숨기기"}
+        </button>
+        <button
+          className={cn("new-timeline-command", timelineCollapsed ? "new-primary" : "new-ghost")}
+          type="button"
+          onClick={toggleTimeline}
+        >
+          {timelineCollapsed ? "타임라인 보기" : "타임라인 숨기기"}
+        </button>
+        <div className="new-spacer" />
+        <div className="new-live-pill">
+          <span className="new-pulse" />
+          LIVE
         </div>
+        <button className="new-ghost" type="button" onClick={toggleFullscreen}>
+          <Expand size={14} />
+          {fullscreen ? "전체화면 종료" : "전체화면"}
+        </button>
+      </MonitorHeader>
 
-        <div className="ml-auto flex items-center gap-2">
-          <span className="inline-flex h-9 items-center gap-2 rounded-full bg-red-500 px-4 text-sm font-bold text-white">
-            <span className="size-2 rounded-full bg-white" />
-            LIVE
-          </span>
-          <button
-            type="button"
-            onClick={requestFullscreen}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-slate-200 hover:border-cyan-500/60"
-          >
-            <Expand size={16} />
-            전체화면
-          </button>
-        </div>
-      </header>
-
-      <main
-        className={cn(
-          "grid min-h-0 flex-1 border-b border-slate-800",
-          sideVisible ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "grid-cols-1",
-        )}
-      >
-        <section className="min-h-0 overflow-auto p-2">
-          <div className="grid auto-rows-[minmax(164px,1fr)] gap-2 xl:grid-cols-4">
-            {wall.map((item, index) =>
-              "streamName" in item ? (
-                <CameraTile
-                  key={item.id}
-                  camera={item}
-                  mode={mode}
-                  featured={index === 0}
-                  selected={item.id === activeCamera?.id}
-                />
-              ) : (
-                <EmptyTile key={item.id} featured={index === 0 && rows.length === 0} />
-              ),
-            )}
-          </div>
-        </section>
-
-        {sideVisible && (
-          <aside className="hidden min-h-0 space-y-4 overflow-auto border-l border-slate-800 bg-[#071016] p-4 xl:block">
-            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-bold">저장된 배치</h2>
-                <span className="font-mono text-xs text-slate-500">1 profiles</span>
-              </div>
-              <button className="flex h-11 w-full items-center justify-between rounded-md border border-cyan-500 bg-cyan-500/15 px-3 text-sm font-semibold text-cyan-100">
-                기본
-                <span className="font-mono text-xs text-slate-400">{timeText(now, false)}</span>
-              </button>
-            </section>
-
-            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-bold">카메라 상태</h2>
-                <span className="font-mono text-xs text-slate-500">
-                  {streaming.length} / {rows.length} online
+      <section className={cn("new-live-workspace", sideHidden && "new-panel-hidden")}>
+        <main className="new-grid-wrap" aria-label="라이브 카메라 그리드">
+          {layout.length > 0 ? (
+            <CameraGrid
+              cameras={rows}
+              layout={layout}
+              selectedStream={selectedCamera?.streamName ?? ""}
+              onLayoutChange={handleLayoutChange}
+              onSelectCamera={(camera) => setSelectedStream(camera.streamName)}
+            />
+          ) : (
+            <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
+          )}
+        </main>
+        {!sideHidden && (
+          <aside className="new-side-panel" aria-label="운영 패널">
+            <section className="new-panel-card">
+              <div className="new-section-title">
+                <span>
+                  저장된 배치 <em>{Math.max(layouts.length, 1)} profiles</em>
                 </span>
+                <button className="new-icon-button" type="button" onClick={() => setSideHidden(true)} aria-label="우측 패널 숨기기">
+                  -
+                </button>
               </div>
-              <div className="space-y-2">
-                {rows.map((camera) => (
+              <div className="new-layout-list">
+                {layouts.map((item) => (
                   <button
-                    key={camera.id}
-                    className={cn(
-                      "flex h-11 w-full items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950/60 px-3 text-left text-sm text-slate-300",
-                      camera.id === activeCamera?.id && "border-cyan-500 bg-cyan-500/10 text-cyan-50",
-                    )}
+                    key={item.id}
+                    type="button"
+                    className={cn("new-layout-row", item.id === currentId && "new-active-row")}
+                    onClick={() => loadLayout(item.id)}
                   >
-                    <span className="flex min-w-0 items-center gap-3">
-                      <StatusDot status={camera.state} />
-                      <span className="truncate font-semibold">{camera.name}</span>
-                    </span>
-                    <span className="font-mono text-xs text-slate-500">
-                      {camera.state === "streaming" ? "live" : camera.state}
-                    </span>
+                    <span>{item.name}</span>
+                    <em>{item.id === currentId && dirty ? "편집됨" : formatShortTime(item.updated_at)}</em>
                   </button>
                 ))}
-                {rows.length === 0 && (
-                  <div className="rounded-md border border-dashed border-slate-800 px-3 py-8 text-center text-sm text-slate-500">
-                    등록된 카메라 없음
-                  </div>
+                {layouts.length === 0 && (
+                  <button type="button" className="new-layout-row new-active-row">
+                    <span>기본</span>
+                    <em>미저장</em>
+                  </button>
                 )}
               </div>
             </section>
-
-            <section className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-bold">재생 방식</h2>
-                <span className="font-mono text-xs text-slate-500">{mode.toUpperCase()}</span>
+            <section className="new-panel-card">
+              <div className="new-section-title">
+                카메라 상태 <em>{onlineCount} / {rows.length} online</em>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMode("mse")}
-                  className={cn(modeButtonClass, mode === "mse" && activeModeClass)}
-                >
-                  MSE
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode("webrtc")}
-                  className={cn(modeButtonClass, mode === "webrtc" && activeModeClass)}
-                >
-                  WebRTC
-                </button>
+              <div className="new-camera-list">
+                {rows.map((camera) => (
+                  <button
+                    key={camera.id}
+                    className={cn("new-camera-row", camera.streamName === selectedCamera?.streamName && "new-active-row")}
+                    type="button"
+                    onClick={() => setSelectedStream(camera.streamName)}
+                  >
+                    <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
+                    <span>{camera.name}</span>
+                    <em>{camera.state === "streaming" ? "live" : camera.state}</em>
+                  </button>
+                ))}
               </div>
             </section>
           </aside>
         )}
-      </main>
+      </section>
 
-      {timelineVisible && (
-        <footer className="border-t border-slate-800 bg-[#071016]">
-          <div className="flex flex-wrap items-center gap-4 border-b border-slate-800 px-4 py-2">
-            <div className="font-mono text-2xl font-black text-cyan-300">{timeText(now, true)}</div>
-            <div className="text-sm text-slate-500">
-              {formatDate(now.toISOString())} · 1줄 선택 카메라 · 2줄 전체 집계
-            </div>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="inline-flex h-8 items-center gap-2 rounded-full bg-red-500 px-4 text-xs font-bold text-white">
-                <span className="size-2 rounded-full bg-white" />
-                LIVE
-              </span>
-              <button
-                type="button"
-                onClick={() => setTimelineVisible(false)}
-                className="h-9 rounded-md border border-cyan-500 px-3 text-sm font-semibold text-cyan-100"
-              >
-                타임라인 숨기기
-              </button>
-            </div>
-          </div>
-          <div className="grid gap-2 px-4 py-3 text-xs">
-            <TimelineRow label={activeCamera?.name ?? "선택 카메라"} subLabel="선택 카메라" color="bg-cyan-500/70" />
-            <TimelineRow label="전체 카메라" subLabel="녹화 없음" color="bg-emerald-500/60" />
-            <div className="ml-40 hidden grid-cols-7 text-slate-600 md:grid">
-              {["00", "04", "08", "12", "16", "20", "24"].map((hour) => (
-                <span key={hour}>{hour}</span>
-              ))}
-            </div>
-          </div>
-        </footer>
+      <TwoRowTimeline
+        cameras={rows}
+        selectedCamera={selectedCamera}
+        date={today}
+        data={selectedTimeline.data}
+        collapsed={timelineCollapsed}
+        onToggle={toggleTimeline}
+      />
+    </div>
+  );
+}
+
+function MonitorHeader({ children }: { children: ReactNode }) {
+  return (
+    <header className="new-command">
+      <a className="new-brand" href="/" aria-label="CamStation 모니터링">
+        <div className="new-brand-mark">CS</div>
+        <div>
+          <div className="new-brand-title">CamStation</div>
+          <div className="new-mini">HOME MONITOR</div>
+        </div>
+      </a>
+      <nav className="new-nav" aria-label="주요 화면">
+        <a className="new-active" href="/live">라이브</a>
+        <a href="/recordings">녹화</a>
+        <a href="/settings">설정</a>
+      </nav>
+      {children}
+    </header>
+  );
+}
+
+function CameraGrid({
+  cameras,
+  layout,
+  selectedStream,
+  onLayoutChange,
+  onSelectCamera,
+}: {
+  cameras: Camera[];
+  layout: MonitorLayoutItem[];
+  selectedStream: string;
+  onLayoutChange: (layout: MonitorLayoutItem[]) => void;
+  onSelectCamera: (camera: Camera) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const cameraByStream = useMemo(() => new Map(cameras.map((camera) => [camera.streamName, camera])), [cameras]);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const measure = () => setContainerSize({ width: element.offsetWidth, height: element.offsetHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const rowHeight =
+    containerSize.height > 0
+      ? Math.max(1, Math.floor((containerSize.height - (GRID_ROWS - 1) * GRID_MARGIN[1]) / GRID_ROWS))
+      : 1;
+
+  return (
+    <div ref={containerRef} className="new-grid-stage">
+      {containerSize.width > 0 && containerSize.height > 0 && (
+        <GridLayout
+          layout={clampLayout(layout)}
+          cols={GRID_COLS}
+          rowHeight={rowHeight}
+          width={containerSize.width}
+          onLayoutChange={(nextLayout) => onLayoutChange(nextLayout.map((item) => ({ ...item })))}
+          draggableHandle=".cam-drag-handle"
+          resizeHandles={["n", "s", "e", "w", "ne", "nw", "se", "sw"]}
+          margin={GRID_MARGIN}
+          containerPadding={[0, 0]}
+          maxRows={GRID_ROWS}
+          isBounded
+          autoSize={false}
+          style={{ height: "100%" }}
+        >
+          {layout.map((item) => {
+            const camera = cameraByStream.get(item.i);
+            if (!camera) return <div key={item.i} className="new-grid-item" />;
+            return (
+              <div key={item.i} className="new-grid-item">
+                <CameraTile
+                  camera={camera}
+                  selected={camera.streamName === selectedStream}
+                  onSelect={() => onSelectCamera(camera)}
+                />
+              </div>
+            );
+          })}
+        </GridLayout>
       )}
     </div>
   );
 }
 
-function CameraTile({
-  camera,
-  mode,
-  featured,
-  selected,
-}: {
-  camera: Camera;
-  mode: Mode;
-  featured?: boolean;
-  selected?: boolean;
-}) {
+function CameraTile({ camera, selected, onSelect }: { camera: Camera; selected: boolean; onSelect: () => void }) {
+  const { videoRef, connected } = useMseStream(camera.state === "streaming" ? camera.streamName : "");
+
   return (
     <article
-      className={cn(
-        "group relative min-h-0 overflow-hidden rounded-md border border-slate-800 bg-black",
-        featured && "xl:col-span-2 xl:row-span-2",
-        selected && "border-cyan-400 shadow-[0_0_0_1px_rgba(34,211,238,0.55)]",
-      )}
+      className={cn("new-camera-tile", selected && "new-selected", camera.state !== "streaming" && "new-offline")}
+      onClick={onSelect}
     >
-      <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between bg-gradient-to-b from-black/80 to-transparent px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <StatusDot status={camera.state} />
-          <span className="truncate text-sm font-bold text-white">{camera.name}</span>
-        </div>
-        <span className="truncate pl-3 text-xs font-semibold text-slate-300">{camera.streamName}</span>
-      </div>
       {camera.state === "streaming" ? (
-        <iframe
-          title={`${camera.name} live`}
-          src={liveUrl(camera.streamName, mode)}
-          className="size-full min-h-[164px] border-0"
-          allow="autoplay; fullscreen"
+        <video
+          ref={videoRef}
+          className="new-live-video"
+          autoPlay
+          muted
+          playsInline
+          disablePictureInPicture
+          controls={false}
         />
       ) : (
-        <div className="flex size-full min-h-[164px] items-center justify-center text-sm text-slate-500">
-          {camera.state}
-        </div>
+        <div className="new-offline-layer">연결 없음</div>
       )}
+      {camera.state === "streaming" && !connected && <div className="new-offline-layer">연결 중...</div>}
+      <div className="new-tile-head cam-drag-handle">
+        <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
+        <strong>{camera.name}</strong>
+        <span className="new-cam-id">{camera.name}</span>
+      </div>
+      <button
+        className="new-focus-btn"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          window.open(liveUrl(camera.streamName, "mse"), "_blank");
+        }}
+      >
+        집중 보기
+      </button>
     </article>
   );
 }
 
-function EmptyTile({ featured }: { featured?: boolean }) {
+function TwoRowTimeline({
+  cameras,
+  selectedCamera,
+  date,
+  data,
+  collapsed,
+  onToggle,
+}: {
+  cameras: Camera[];
+  selectedCamera?: Camera;
+  date: string;
+  data?: TimelineData;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const dayStart = new Date(`${date}T00:00:00+09:00`).getTime() / 1000;
+  const dayEnd = dayStart + 86400;
+  const cursorTs = now.getTime() / 1000;
+  const selectedRanges = (data?.segments ?? []).map((segment) => ({
+    ts_start: segment.ts_start,
+    ts_end: segment.ts_end ?? cursorTs,
+  }));
+  const motionEvents = data?.motion_events ?? [];
+
   return (
-    <div
-      className={cn(
-        "flex min-h-[164px] items-center justify-center rounded-md border border-dashed border-slate-800 bg-black/50 text-sm text-slate-700",
-        featured && "xl:col-span-2 xl:row-span-2",
+    <footer className={cn("new-timeline", collapsed && "new-collapsed")} aria-label="선택 카메라와 전체 카메라 2줄 타임라인">
+      <div className="new-timeline-top">
+        <div className="new-clock">{formatClock(now)}</div>
+        <div className="new-mini">{date} · 1줄 선택 카메라 · 2줄 전체 집계</div>
+        <div className="new-spacer" />
+        <div className="new-live-pill">
+          <span className="new-pulse" />
+          LIVE
+        </div>
+        <button className="new-ghost" type="button" onClick={onToggle}>
+          {collapsed ? "타임라인 보기" : "타임라인 숨기기"}
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="new-timeline-body">
+          <div className="new-track">
+            <div className="new-track-name">
+              <strong>{selectedCamera?.name ?? "카메라 없음"}</strong>선택 카메라
+            </div>
+            <TimelineBar ranges={selectedRanges} motionEvents={motionEvents} dayStart={dayStart} dayEnd={dayEnd} cursorTs={cursorTs} />
+          </div>
+          <div className="new-track">
+            <div className="new-track-name">
+              <strong>전체 카메라</strong>{cameras.length > 0 ? "녹화 있음" : "녹화 없음"}
+            </div>
+            <TimelineBar ranges={selectedRanges} motionEvents={motionEvents} dayStart={dayStart} dayEnd={dayEnd} cursorTs={cursorTs} aggregate />
+          </div>
+          <div className="new-ticks">
+            <span />
+            {["00", "04", "08", "12", "16", "20", "24"].map((tick) => (
+              <span key={tick}>{tick}</span>
+            ))}
+          </div>
+        </div>
       )}
-    >
-      빈 슬롯
+    </footer>
+  );
+}
+
+function TimelineBar({
+  ranges,
+  motionEvents,
+  dayStart,
+  dayEnd,
+  cursorTs,
+  aggregate,
+}: {
+  ranges: TimelineRange[];
+  motionEvents: Array<{ ts_start: number; ts_end: number | null }>;
+  dayStart: number;
+  dayEnd: number;
+  cursorTs: number;
+  aggregate?: boolean;
+}) {
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    event.currentTarget.blur();
+  };
+  return (
+    <div className={cn("new-daybar", aggregate && "new-aggregate")} onClick={handleClick}>
+      {ranges.map((range, index) => {
+        const left = pctInDay(range.ts_start, dayStart, dayEnd);
+        const right = pctInDay(range.ts_end, dayStart, dayEnd);
+        return <span key={`${range.ts_start}-${index}`} className="new-chunk" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.18)}%` }} />;
+      })}
+      {motionEvents.map((event, index) => {
+        const left = pctInDay(event.ts_start, dayStart, dayEnd);
+        const right = pctInDay(event.ts_end ?? event.ts_start + 5, dayStart, dayEnd);
+        return <span key={`${event.ts_start}-${index}`} className="new-motion" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.24)}%` }} />;
+      })}
+      <span className="new-cursor" style={{ left: `${pctInDay(cursorTs, dayStart, dayEnd)}%` }} />
     </div>
   );
 }
 
-function ToolbarLink({
-  to,
-  label,
-  icon: Icon,
-  active,
-}: {
-  to: string;
-  label: string;
-  icon: ComponentType<{ size?: number }>;
-  active?: boolean;
-}) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        cn(
-          "inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition",
-          active || isActive
-            ? "border-cyan-500 bg-cyan-500/20 text-cyan-100"
-            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500/60",
-        )
-      }
-    >
-      <Icon size={16} />
-      {label}
-    </NavLink>
-  );
+function defaultLayout(cameras: Camera[]): MonitorLayoutItem[] {
+  return cameras.map((camera, index) => ({
+    i: camera.streamName,
+    x: index === 0 ? 0 : 24 + ((index - 1) % 2) * 12,
+    y: index === 0 ? 0 : Math.floor((index - 1) / 2) * 12,
+    w: index === 0 ? 24 : 12,
+    h: index === 0 ? 24 : 12,
+    minW: 8,
+    minH: 8,
+  }));
 }
 
-function ToolbarButton({
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  icon: ComponentType<{ size?: number }>;
-  label: string;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-slate-300 transition hover:border-cyan-500/60"
-    >
-      <Icon size={16} />
-      {label}
-    </button>
-  );
+function mergeWithCameras(saved: Array<{ i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }>, cameras: Camera[]): MonitorLayoutItem[] {
+  const savedMap = new Map(saved.map((item) => [item.i, item]));
+  return cameras.map((camera, index) => savedMap.get(camera.streamName) ?? defaultLayout([camera]).map((item) => ({
+    ...item,
+    x: 24 + (index % 2) * 12,
+    y: Math.floor(index / 2) * 12,
+  }))[0]);
 }
 
-function TimelineRow({ label, subLabel, color }: { label: string; subLabel: string; color: string }) {
-  return (
-    <div className="grid items-center gap-3 md:grid-cols-[150px_minmax(0,1fr)]">
-      <div className="min-w-0 text-right">
-        <div className="truncate font-bold text-slate-200">{label}</div>
-        <div className="truncate text-slate-500">{subLabel}</div>
-      </div>
-      <div className="h-7 overflow-hidden rounded-md border border-slate-800 bg-black">
-        <div className={cn("h-full w-[56%] border-r border-cyan-200/70", color)} />
-      </div>
-    </div>
-  );
+function clampLayout(layout: MonitorLayoutItem[]): MonitorLayoutItem[] {
+  return layout.map((item) => {
+    const minW = item.minW ?? 1;
+    const minH = item.minH ?? 1;
+    const w = Math.min(Math.max(item.w, minW), GRID_COLS);
+    const h = Math.min(Math.max(item.h, minH), GRID_ROWS);
+    return {
+      ...item,
+      w,
+      h,
+      x: Math.min(Math.max(item.x, 0), GRID_COLS - w),
+      y: Math.min(Math.max(item.y, 0), GRID_ROWS - h),
+    };
+  });
 }
 
-function timeText(date: Date, withSeconds: boolean) {
+function toLayoutItem(item: MonitorLayoutItem) {
+  return {
+    i: item.i,
+    x: item.x,
+    y: item.y,
+    w: item.w,
+    h: item.h,
+    minW: item.minW,
+    minH: item.minH,
+  };
+}
+
+function pctInDay(ts: number, dayStart: number, dayEnd: number): number {
+  const value = ((ts - dayStart) / (dayEnd - dayStart)) * 100;
+  return Math.min(100, Math.max(0, value));
+}
+
+function formatClock(date: Date): string {
   return new Intl.DateTimeFormat("ko-KR", {
     hour: "2-digit",
     minute: "2-digit",
-    second: withSeconds ? "2-digit" : undefined,
+    second: "2-digit",
     hour12: false,
   }).format(date);
 }
 
-const modeButtonClass =
-  "h-9 rounded-md border border-slate-800 bg-slate-950 text-sm font-semibold text-slate-400 transition hover:border-cyan-500/60";
-const activeModeClass = "border-cyan-500 bg-cyan-500/15 text-cyan-100";
+function formatShortTime(value: number): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value * 1000));
+}
