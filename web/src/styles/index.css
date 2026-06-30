@@ -224,11 +224,73 @@ iframe {
 }
 
 .new-grid-item .react-resizable-handle {
-  opacity: 0;
+  opacity: .42;
+  background-image: none;
+  transition: opacity .12s, background-color .12s, border-color .12s;
 }
 
-.new-grid-item:hover .react-resizable-handle {
-  opacity: 1;
+.new-grid-item:hover .react-resizable-handle,
+.new-grid-item.resizing .react-resizable-handle {
+  opacity: .95;
+}
+
+.new-grid-item .react-resizable-handle:after {
+  display: none;
+}
+
+.new-grid-item .react-resizable-handle-se,
+.new-grid-item .react-resizable-handle-sw,
+.new-grid-item .react-resizable-handle-ne,
+.new-grid-item .react-resizable-handle-nw {
+  width: 18px;
+  height: 18px;
+  border-color: color-mix(in oklch, var(--new-accent), transparent 25%);
+}
+
+.new-grid-item .react-resizable-handle-se {
+  border-right: 2px solid;
+  border-bottom: 2px solid;
+  right: 2px;
+  bottom: 2px;
+}
+
+.new-grid-item .react-resizable-handle-sw {
+  border-left: 2px solid;
+  border-bottom: 2px solid;
+  left: 2px;
+  bottom: 2px;
+}
+
+.new-grid-item .react-resizable-handle-ne {
+  border-right: 2px solid;
+  border-top: 2px solid;
+  right: 2px;
+  top: 2px;
+}
+
+.new-grid-item .react-resizable-handle-nw {
+  border-left: 2px solid;
+  border-top: 2px solid;
+  left: 2px;
+  top: 2px;
+}
+
+.new-grid-item .react-resizable-handle-n,
+.new-grid-item .react-resizable-handle-s {
+  width: 46px;
+  height: 8px;
+  margin-left: -23px;
+  background: color-mix(in oklch, var(--new-accent), transparent 72%);
+  border-radius: 999px;
+}
+
+.new-grid-item .react-resizable-handle-e,
+.new-grid-item .react-resizable-handle-w {
+  width: 8px;
+  height: 46px;
+  margin-top: -23px;
+  background: color-mix(in oklch, var(--new-accent), transparent 72%);
+  border-radius: 999px;
 }
 
 .new-camera-tile {
