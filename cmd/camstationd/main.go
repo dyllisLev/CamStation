@@ -257,7 +257,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle("/live/", http.StripPrefix("/live", liveProxy))
+	mux.Handle("/player/", http.StripPrefix("/player", liveProxy))
 
 	mux.HandleFunc("POST /api/camera/probe", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -303,8 +303,25 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle("/", http.FileServer(http.FS(static)))
+	mux.Handle("/", spaHandler(http.FS(static)))
 	return mux, nil
+}
+
+func spaHandler(files http.FileSystem) http.Handler {
+	fileServer := http.FileServer(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if file, err := files.Open(strings.TrimPrefix(r.URL.Path, "/")); err == nil {
+			_ = file.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func go2RTCProxy() (http.Handler, error) {

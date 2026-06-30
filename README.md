@@ -31,7 +31,8 @@ This workspace now contains the first `camstationd` skeleton:
 - Go daemon entrypoint: `cmd/camstationd`
 - SQLite store and migrations: `internal/store`
 - ffprobe-based single-camera smoke test: `internal/camera`
-- Minimal embedded web console: `cmd/camstationd/web`
+- React/Vite web console source: `web`
+- Embedded web console build output: `cmd/camstationd/web`
 
 Installed tools on this server:
 
@@ -47,6 +48,7 @@ go2rtc is not required for the first smoke test yet.
 
 ```bash
 make test
+cd web && npm run build && cd ..
 make build
 ./camstationd -addr :18080 -db ./data/camstation.db
 ```
@@ -63,6 +65,15 @@ Health and events:
 curl http://127.0.0.1:18080/api/health
 curl http://127.0.0.1:18080/api/events
 ```
+
+During frontend development, run Vite separately:
+
+```bash
+cd web
+npm run dev -- --host 0.0.0.0
+```
+
+The Vite dev server proxies `/api` and `/player` to `camstationd`.
 
 ## Single Camera Smoke Test
 
@@ -82,11 +93,11 @@ After registering a camera in the web console, CamStation writes a generated go2
 Open live video through CamStation, not through the raw go2rtc port:
 
 ```text
-http://SERVER_IP:18080/live/stream.html?src=STREAM_NAME
+http://SERVER_IP:18080/player/stream.html?src=STREAM_NAME
 ```
 
 Security rule for the prototype:
 
 - go2rtc API and RTSP listeners are bound to `127.0.0.1`.
-- CamStation exposes only the minimal live-player paths under `/live/`.
+- CamStation exposes only the minimal live-player paths under `/player/`.
 - Raw go2rtc status APIs such as `/api/streams` are not exposed because they can include camera credentials.
