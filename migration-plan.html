@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CamStation 개선 플랜</title>
+<style>
+:root {
+  --bg: #0a0b10; --surface: #12141c; --surface2: #1a1d28;
+  --border: #2a2e42; --text: #e2e8f0; --text2: #8892b0; --text3: #5a6480;
+  --red: #ff6b6b; --red-bg: rgba(255,107,107,0.08);
+  --green: #51cf66; --green-bg: rgba(81,207,102,0.08);
+  --orange: #ffa94d; --orange-bg: rgba(255,169,77,0.08);
+  --blue: #74c0fc; --blue-bg: rgba(116,192,252,0.08);
+  --purple: #b197fc; --purple-bg: rgba(177,151,252,0.08);
+  --code-bg: #0d1117; --code-border: #21262d;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; font-size: 15px; }
+.container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+
+.hero { text-align: center; padding: 3rem 2rem; margin-bottom: 3rem; background: linear-gradient(180deg, rgba(99,102,241,0.08), transparent); border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.2rem; margin-bottom: 0.5rem; }
+.hero p { color: var(--text2); }
+.hero .meta { display: flex; justify-content: center; gap: 2rem; margin-top: 1.5rem; flex-wrap: wrap; }
+.hero .meta-item { background: var(--surface); padding: 0.8rem 1.5rem; border-radius: 0.8rem; border: 1px solid var(--border); }
+.hero .meta-item .label { font-size: 0.75rem; color: var(--text3); text-transform: uppercase; }
+.hero .meta-item .value { font-size: 1.3rem; font-weight: 700; color: var(--blue); }
+
+section { margin-bottom: 3rem; }
+section > h2 { font-size: 1.4rem; margin-bottom: 1.5rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--border); }
+section > h2 .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; margin-right: 0.5rem; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+.card h3 { margin-bottom: 1rem; }
+.card .badge { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; margin-left: 0.5rem; }
+.badge-red { background: var(--red-bg); color: var(--red); border: 1px solid rgba(255,107,107,0.2); }
+.badge-green { background: var(--green-bg); color: var(--green); border: 1px solid rgba(81,207,102,0.2); }
+
+.desc { color: var(--text2); font-size: 0.9rem; margin-bottom: 1rem; }
+
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+th { text-align: left; padding: 0.6rem 0.8rem; background: var(--surface2); color: var(--text2); font-weight: 600; border-bottom: 1px solid var(--border); }
+td { padding: 0.5rem 0.8rem; border-bottom: 1px solid rgba(42,46,66,0.5); vertical-align: top; }
+tr:hover td { background: rgba(116,192,252,0.03); }
+
+.before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+.before, .after { border-radius: 12px; padding: 1.5rem; }
+.before { background: var(--red-bg); border: 1px solid rgba(255,107,107,0.15); }
+.after { background: var(--green-bg); border: 1px solid rgba(81,207,102,0.15); }
+.before .label, .after .label { font-weight: 600; font-size: 0.9rem; margin-bottom: 1rem; }
+.before .label { color: var(--red); }
+.after .label { color: var(--green); }
+.before ul, .after ul { margin-left: 1.2rem; color: var(--text2); font-size: 0.85rem; }
+.before li, .after li { margin-bottom: 0.3rem; }
+
+.root-cause { background: var(--red-bg); border: 1px solid rgba(255,107,107,0.15); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+.root-cause .title { color: var(--red); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem; }
+.root-cause p { color: var(--text2); font-size: 0.85rem; }
+
+.solution { background: var(--green-bg); border: 1px solid rgba(81,207,102,0.15); border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+.solution .title { color: var(--green); font-weight: 600; font-size: 0.9rem; margin-bottom: 0.5rem; }
+.solution ul { margin-left: 1.2rem; color: var(--text2); font-size: 0.85rem; }
+.solution li { margin-bottom: 0.3rem; }
+
+.stats { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.5rem; text-align: center; min-width: 100px; }
+.stat .number { font-size: 1.8rem; font-weight: 700; line-height: 1; }
+.stat .number.bad { color: var(--red); }
+.stat .number.good { color: var(--green); }
+.stat .desc { font-size: 0.75rem; color: var(--text3); margin-top: 0.3rem; }
+
+.tree { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; line-height: 1.8; padding: 1rem; background: var(--code-bg); border: 1px solid var(--code-border); border-radius: 8px; overflow-x: auto; }
+.tree-item { white-space: nowrap; padding: 0.1rem 0; }
+.tree-item.root { font-weight: 700; color: var(--text); margin-bottom: 0.3rem; }
+.tree-item.l1 { color: var(--text); }
+.tree-item.l2 { color: var(--text2); }
+.tree-item.l3 { color: var(--text3); }
+.tree-branch { color: var(--text3); margin-right: 0.3rem; }
+.tree-icon { margin-right: 0.4rem; }
+.tree-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.65rem; font-weight: 600; font-family: sans-serif; vertical-align: middle; margin-left: 0.3rem; }
+.tree-badge-red { background: var(--red-bg); color: var(--red); border: 1px solid rgba(255,107,107,0.2); }
+.tree-badge-green { background: var(--green-bg); color: var(--green); border: 1px solid rgba(81,207,102,0.2); }
+
+.footer { text-align: center; padding: 2rem; color: var(--text3); font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+@media (max-width: 768px) { .before-after { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- Hero -->
+<div class="hero">
+  <h1>CamStation 개선 플랜</h1>
+  <p>현재 시스템의 문제 분석과 개선 방안</p>
+  <div class="meta">
+    <div class="meta-item"><div class="label">서버</div><div class="value">10.0.0.26</div></div>
+    <div class="meta-item"><div class="label">카메라</div><div class="value">8대</div></div>
+    <div class="meta-item"><div class="label">ffmpeg</div><div class="value">18개</div></div>
+    <div class="meta-item"><div class="label">7일 알람</div><div class="value">377건</div></div>
+  </div>
+</div>
+
+<!-- Section 1: 설정 관리 -->
+<section>
+  <h2><span class="num" style="background:var(--red-bg);color:var(--red);">1</span> 설정 관리 분산</h2>
+
+  <div class="card">
+    <h3>문제: 설정이 7곳에 분산되어 있고 중복이 많음</h3>
+    <div class="desc">카메라, 녹화, 백업, 네트워크, 알람 설정이 서로 다른 파일과 DB에 흩어져 있습니다.</div>
+
+    <table>
+      <thead><tr><th>설정</th><th>go2rtc.yaml</th><th>DB</th><th>backend.env</th><th>systemd</th><th>config.py</th><th>backup.sh</th></tr></thead>
+      <tbody>
+        <tr><td>카메라 URL</td><td>✅</td><td>✅ 중복</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>카메라 활성화</td><td>✅ 주석</td><td>✅ 중복</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>녹화 보존기간</td><td></td><td>✅</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>세그먼트 길이</td><td></td><td>✅</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>모션 설정</td><td></td><td>✅</td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>알람 URL/시크릿</td><td></td><td></td><td>✅</td><td></td><td>✅ 기본값</td><td></td></tr>
+        <tr><td>알람 간격</td><td></td><td></td><td>✅</td><td></td><td>✅ 중복</td><td></td></tr>
+        <tr><td>RECORDINGS_DIR</td><td></td><td></td><td></td><td>✅</td><td>✅ 중복</td><td>✅ 심링크</td></tr>
+        <tr><td>DB_PATH</td><td></td><td></td><td></td><td>✅</td><td>✅ 중복</td><td>✅ 중복</td></tr>
+        <tr><td>GO2RTC_URL</td><td>✅</td><td></td><td></td><td>✅</td><td>✅ 중복</td><td></td></tr>
+        <tr><td>WebRTC candidates</td><td>✅</td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>TLS 프록시 IP</td><td></td><td></td><td></td><td></td><td></td><td>✅ 하드코딩</td></tr>
+        <tr><td>rclone 대상</td><td></td><td></td><td></td><td></td><td></td><td>✅ 하드코딩</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>현재 설정 메뉴 UI</h3>
+    <div class="tree">
+      <div class="tree-item root"><span class="tree-icon">⚙️</span>설정</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">💾</span>저장소 현황</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>녹화 데이터 / 디스크 사용량 / 보관 가능 일수</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📹</span>녹화 정책</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>보존 기간 / 세그먼트 길이 / 모션 감도 / 삭제 한도</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📊</span>카메라별 저장량</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📷</span>카메라 관리</div>
+      <div class="tree-item l2"><span class="tree-branch">│  ├─</span>카메라 목록 / 추가 / 수정 / 활성화 / 재부팅 / 아카이브</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span><span class="tree-badge tree-badge-red">설정 적용 버튼</span> (go2rtc 재시작 필요)</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">🔍</span>감지 설정</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>모션 감지 활성화 토글</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">🔄</span>시스템 업데이트</div>
+      <div class="tree-item l1"><span class="tree-branch">└─</span><span class="tree-icon">🖥️</span>Viewer App</div>
+    </div>
+    <div class="desc" style="margin-top:0.5rem; font-size:0.8rem;">
+      <span class="tree-badge tree-badge-red">문제</span> 알람 설정, 백업 설정, 네트워크 설정, go2rtc 상태가 UI에 없음. 파일을 직접 수정해야 함.
+    </div>
+  </div>
+
+  <div class="solution">
+    <div class="title">개선: 설정 메뉴를 8개 그룹으로 재구성</div>
+    <div class="tree">
+      <div class="tree-item root"><span class="tree-icon">⚙️</span>설정</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📷</span>카메라</div>
+      <div class="tree-item l2"><span class="tree-branch">│  ├─</span>카메라 목록 (표시명/위치/상태/URL/ONVIF)</div>
+      <div class="tree-item l2"><span class="tree-branch">│  ├─</span>카메라 추가/수정/삭제</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span><span class="tree-badge tree-badge-green">자동 적용</span> (go2rtc 자동 반영, 수동 버튼 불필요)</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📹</span>녹화</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>보존 기간 / 세그먼트 / 최대 용량 / 카메라별 저장량</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">🔍</span>감지</div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>모션 감지 활성화 / 감도 임계값</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">🔔</span>알람 <span class="tree-badge tree-badge-green">신규</span></div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>Hermes 웹훅 URL / 간격 / 테스트 버튼</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">💾</span>백업 <span class="tree-badge tree-badge-green">신규</span></div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>백업 대상 / rclone 원격 / 상태 표시</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">🌐</span>네트워크 <span class="tree-badge tree-badge-green">신규</span></div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>go2rtc 포트 / WebRTC candidates</div>
+      <div class="tree-item l1"><span class="tree-branch">├─</span><span class="tree-icon">📡</span>go2rtc <span class="tree-badge tree-badge-green">신규</span></div>
+      <div class="tree-item l2"><span class="tree-branch">│  └─</span>스트림 상태 (실시간) / 설정 보기 / 웹 UI 열기</div>
+      <div class="tree-item l1"><span class="tree-branch">└─</span><span class="tree-icon">🔄</span>시스템</div>
+      <div class="tree-item l2"><span class="tree-branch">   └─</span>저장소 현황 / 업데이트 / Viewer App</div>
+    </div>
+  </div>
+</section>
+
+<!-- Section 2: 스트림 안정성 -->
+<section>
+  <h2><span class="num" style="background:var(--orange-bg);color:var(--orange);">2</span> 카메라 스트림 불안정</h2>
+
+  <div class="card">
+    <h3>문제: 특정 카메라가 주기적으로 연결 끊김</h3>
+    <div class="desc">camera-site-3/4(192.0.2.12)와 camera-storage-2(192.0.2.9)가 주기적으로 RTSP 연결을 끊습니다.</div>
+
+    <table>
+      <thead><tr><th>카메라</th><th>IP</th><th>7일간 에러</th><th>패턴</th></tr></thead>
+      <tbody>
+        <tr><td>camera-site-3/4</td><td>192.0.2.12</td><td>다수</td><td>i/o timeout, EOF (같은 장비 2개 카메라 동시 끊김)</td></tr>
+        <tr><td>camera-storage-2</td><td>192.0.2.9</td><td>다수</td><td>i/o timeout + 빠른 재연결 시도</td></tr>
+        <tr><td>camera-storage-1</td><td>192.0.2.4</td><td>소수</td><td>i/o timeout</td></tr>
+        <tr><td>camera-pen</td><td>192.0.2.55</td><td>소수</td><td>i/o timeout</td></tr>
+      </tbody>
+    </table>
+
+    <div class="stats">
+      <div class="stat"><div class="number bad">377</div><div class="desc">7일간 웹훅 알람</div></div>
+      <div class="stat"><div class="number bad">54/일</div><div class="desc">평균 알람</div></div>
+      <div class="stat"><div class="number bad">81%</div><div class="desc">viewer_health_failed</div></div>
+      <div class="stat"><div class="number bad">18%</div><div class="desc">recording_process_failed</div></div>
+    </div>
+
+    <div class="root-cause">
+      <div class="title">근본 원인</div>
+      <p>카메라가 실제로 끊기고 있습니다. 알람은 정상 동작 — 실제 문제를 올바르게 감지하고 있습니다.
+         문제는 알람이 아니라 카메라 연결 자체입니다.</p>
+    </div>
+  </div>
+
+  <div class="solution">
+    <div class="title">개선: 카메라 연결 안정화</div>
+    <ul>
+      <li><strong>ffmpeg 재연결 옵션</strong>: <code>-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 120</code> 추가. 카메라가 잠시 끊어져도 ffmpeg가 종료되지 않고 재연결 시도</li>
+      <li><strong>go2rtc 설정 개선</strong>: <code>on_demand: false</code>로 모든 스트림 항상 유지. 재연결 속도 향상</li>
+      <li><strong>서브 keepalive ffmpeg 제거</strong>: go2rtc <code>on_demand: false</code>로 대체. ffmpeg 18개 → 10개</li>
+      <li><strong>카메라 자체 조사</strong>: camera-site-3/4(IMOU)의 주기적 끊김 원인 파악 (펌웨어? 네트워크?)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- Section 3: 웹뷰어 -->
+<section>
+  <h2><span class="num" style="background:var(--blue-bg);color:var(--blue);">3</span> 웹뷰어 정리</h2>
+
+  <div class="card">
+    <h3>현재 경로 구조</h3>
+
+    <table>
+      <thead><tr><th>경로</th><th>컴포넌트</th><th>상태</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td><code>/</code></td><td>App.tsx (구버전)</td><td><span class="badge badge-red">미사용</span></td><td>삭제 대상</td></tr>
+        <tr><td><code>/new</code></td><td>NewCamStation.tsx</td><td><span class="badge badge-green">사용 중</span></td><td>라이브/녹화/설정</td></tr>
+        <tr><td><code>/new?viewer=1</code></td><td>NewCamStation.tsx</td><td><span class="badge badge-green">사용 중</span></td><td>뷰어 모드 (read-only, heartbeat)</td></tr>
+        <tr><td><code>/mobile</code></td><td>MobilePage.tsx</td><td><span class="badge badge-green">사용 중</span></td><td>간단한 모바일 뷰어 (유지)</td></tr>
+        <tr><td><code>/viewer</code></td><td>ViewerPage.tsx</td><td><span class="badge badge-orange">확인 필요</span></td><td>별도 뷰어 컴포넌트</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="solution">
+    <div class="title">개선: /new 기반 신규 웹뷰어 작성</div>
+    <table>
+      <thead><tr><th>경로</th><th>페이지</th><th>기능</th></tr></thead>
+      <tbody>
+        <tr><td><code>/</code></td><td>PC 라이브/녹화/설정</td><td>카메라 그리드, 2줄 타임라인, 8개 설정 그룹</td></tr>
+        <tr><td><code>/new?viewer=1</code></td><td>Viewer 모드</td><td>라이브만 표시, read-only, heartbeat</td></tr>
+        <tr><td><code>/mobile</code></td><td>모바일 뷰어</td><td>간단한 모바일 뷰어 (기존 유지)</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li>구버전 코드 삭제 (App.tsx, LiveView.tsx) → <code>/</code>이 NewCamStation을 렌더링하도록 변경</li>
+      <li>설정 UI를 8개 그룹으로 새로 구성</li>
+      <li><code>/viewer</code> (ViewerPage.tsx) 정리 검토 — <code>/new?viewer=1</code>과 통합 가능</li>
+    </ul>
+  </div>
+</section>
+
+<!-- Section 4: 구현 계획 -->
+<section>
+  <h2><span class="num" style="background:var(--green-bg);color:var(--green);">4</span> 구현 계획</h2>
+
+  <table>
+    <thead><tr><th>순위</th><th>작업</th><th>노력</th><th>효과</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>ffmpeg <code>-reconnect</code> 옵션 추가</td><td>1시간</td><td>높음 (불필요한 알람/재시작 방지)</td></tr>
+      <tr><td>2</td><td>go2rtc <code>on_demand: false</code> 설정</td><td>2시간</td><td>중간 (스트림 항상 유지, keepalive 제거)</td></tr>
+      <tr><td>3</td><td>구버전 웹뷰어 삭제 + <code>/</code> → <code>/new</code> 연결</td><td>1시간</td><td>중간 (코드 정리)</td></tr>
+      <tr><td>4</td><td>설정 UI에 알람/백업/go2rtc 패널 추가</td><td>하루</td><td>중간 (운영 편의)</td></tr>
+      <tr><td>5</td><td>설정 통합 (camstation.yaml)</td><td>2~3일</td><td>낮음 (현재 스케일에서는 과도)</td></tr>
+      <tr><td>6</td><td>웹뷰어 신규 작성</td><td>3~5일</td><td>낮음 (이미 동작하는 것을 대체)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="stats">
+    <div class="stat"><div class="number bad">54/일</div><div class="desc">현재 알람</div></div>
+    <div class="stat"><div class="number good">5~10/일</div><div class="desc">개선 후 예상</div></div>
+    <div class="stat"><div class="number bad">18</div><div class="desc">현재 ffmpeg</div></div>
+    <div class="stat"><div class="number good">10</div><div class="desc">개선 후</div></div>
+  </div>
+</section>
+
+<div class="footer">
+  <p>CamStation 개선 플랜 — 2026-06-29</p>
+  <p>분석 대상: <code>/opt/camstation/</code> (cctv 10.0.0.26)</p>
+</div>
+
+</div>
+</body>
+</html>

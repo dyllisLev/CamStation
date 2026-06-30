@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CamStation 2.0</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <section class="topbar">
+        <div>
+          <h1>CamStation 2.0</h1>
+          <p>development console</p>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Health</h2>
+          <pre id="health">Loading...</pre>
+        </article>
+        <article>
+          <h2>Camera Probe</h2>
+          <form id="probeForm">
+            <input id="cameraUrl" name="url" type="password" placeholder="rtsp://user:pass@host/path" autocomplete="off" />
+            <button type="submit">Probe</button>
+          </form>
+          <pre id="probeResult">No probe yet.</pre>
+        </article>
+      </section>
+
+      <section>
+        <h2>Recent Events</h2>
+        <div id="events" class="events">Loading...</div>
+      </section>
+    </main>
+    <script src="/main.js"></script>
+  </body>
+</html>
+
