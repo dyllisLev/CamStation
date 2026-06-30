@@ -15,47 +15,49 @@ import {
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLanguage } from "../app/useLanguage";
 import { useCameras, useHealth, useStreamStatus } from "../app/queries";
 import { Button } from "../components/ui/button";
 import { StatusDot } from "../components/StatusDot";
 import { cn, formatDate } from "../lib/utils";
 
 const navItems = [
-  { to: "/", label: "Control Room", icon: Shield },
-  { to: "/live", label: "Live", icon: MonitorPlay },
-  { to: "/recordings", label: "Recordings", icon: Clapperboard },
-  { to: "/cameras", label: "Cameras", icon: Camera },
-  { to: "/incidents", label: "Incidents", icon: AlertTriangle },
-  { to: "/streams", label: "Streams", icon: Wifi },
-  { to: "/backup", label: "Backup", icon: Archive },
-  { to: "/viewers", label: "Viewers", icon: Users },
-  { to: "/logs", label: "Logs", icon: ListFilter },
-  { to: "/system", label: "System", icon: Settings },
-  { to: "/settings", label: "Settings", icon: SlidersHorizontal },
+  { to: "/", labelKey: "controlRoom", icon: Shield },
+  { to: "/live", labelKey: "live", icon: MonitorPlay },
+  { to: "/recordings", labelKey: "recordings", icon: Clapperboard },
+  { to: "/cameras", labelKey: "cameras", icon: Camera },
+  { to: "/incidents", labelKey: "incidents", icon: AlertTriangle },
+  { to: "/streams", labelKey: "streams", icon: Wifi },
+  { to: "/backup", labelKey: "backup", icon: Archive },
+  { to: "/viewers", labelKey: "viewers", icon: Users },
+  { to: "/logs", labelKey: "logs", icon: ListFilter },
+  { to: "/system", labelKey: "system", icon: Settings },
+  { to: "/settings", labelKey: "settings", icon: SlidersHorizontal },
 ];
 
 const titles: Record<string, string> = {
-  "/": "Control Room",
-  "/live": "Live",
-  "/recordings": "Recordings",
-  "/cameras": "Cameras",
-  "/incidents": "Incidents",
-  "/streams": "Streams",
-  "/backup": "Backup",
-  "/viewers": "Viewers",
-  "/logs": "Logs",
-  "/system": "System",
-  "/settings": "Settings",
+  "/": "controlRoom",
+  "/live": "live",
+  "/recordings": "recordings",
+  "/cameras": "cameras",
+  "/incidents": "incidents",
+  "/streams": "streams",
+  "/backup": "backup",
+  "/viewers": "viewers",
+  "/logs": "logs",
+  "/system": "system",
+  "/settings": "settings",
 };
 
 export function ConsoleLayout() {
   const location = useLocation();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const health = useHealth();
   const cameras = useCameras();
   const streams = useStreamStatus();
   const online = cameras.data?.filter((camera) => camera.state === "streaming").length ?? 0;
-  const title = titles[location.pathname] ?? "CamStation";
+  const title = t(titles[location.pathname] ?? "controlRoom");
 
   return (
     <div className="min-h-svh bg-slate-950 text-slate-100">
@@ -66,7 +68,7 @@ export function ConsoleLayout() {
           </div>
           <div>
             <div className="text-sm font-semibold">CamStation</div>
-            <div className="text-xs text-slate-500">2.0 console</div>
+            <div className="text-xs text-slate-500">2.0 {t("console")}</div>
           </div>
         </div>
         <nav className="space-y-1 px-3 py-4">
@@ -83,7 +85,7 @@ export function ConsoleLayout() {
               }
             >
               <item.icon size={18} />
-              {item.label}
+              {t(item.labelKey)}
             </NavLink>
           ))}
         </nav>
@@ -97,13 +99,15 @@ export function ConsoleLayout() {
               <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1.5">
                   <StatusDot status={health.data?.ok ? "ok" : "unknown"} />
-                  API {health.data?.mode ?? "checking"}
+                  {t("api")} {health.data?.mode ?? t("checking")}
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <StatusDot status={streams.data?.running ? "running" : "offline"} />
-                  go2rtc {streams.data?.running ? "running" : "stopped"}
+                  go2rtc {streams.data?.running ? t("running") : t("stopped")}
                 </span>
-                <span>{online} streaming</span>
+                <span>
+                  {online} {t("streaming")}
+                </span>
                 <span>{formatDate(new Date().toISOString())}</span>
               </div>
             </div>
@@ -113,7 +117,7 @@ export function ConsoleLayout() {
               onClick={() => queryClient.invalidateQueries()}
             >
               <RefreshCw size={16} />
-              Refresh
+              {t("refresh")}
             </Button>
           </div>
           <nav className="flex gap-1 overflow-x-auto border-t border-slate-900 px-3 py-2 lg:hidden">
@@ -130,7 +134,7 @@ export function ConsoleLayout() {
                 }
               >
                 <item.icon size={16} />
-                {item.label}
+                {t(item.labelKey)}
               </NavLink>
             ))}
           </nav>

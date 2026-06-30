@@ -1,4 +1,5 @@
 import { cn } from "../../lib/utils";
+import { useLanguage } from "../../app/useLanguage";
 
 const styles: Record<string, string> = {
   streaming: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
@@ -11,6 +12,7 @@ const styles: Record<string, string> = {
 };
 
 export function Badge({ value, className }: { value: string; className?: string }) {
+  const { t } = useLanguage();
   return (
     <span
       className={cn(
@@ -19,8 +21,7 @@ export function Badge({ value, className }: { value: string; className?: string 
         className,
       )}
     >
-      {value}
+      {t(value)}
     </span>
   );
 }
-
