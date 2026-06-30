@@ -37,7 +37,8 @@ iframe {
   background: #000;
 }
 
-.new-app {
+.new-app,
+.new-console-app {
   --new-bg: oklch(12% 0.018 245);
   --new-surface: oklch(17% 0.022 245);
   --new-panel: oklch(22% 0.026 245);
@@ -51,10 +52,142 @@ iframe {
   --new-ok: oklch(70% 0.16 150);
   --new-danger: oklch(65% 0.19 25);
   --new-font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
-  min-height: 100vh;
   color: var(--new-fg);
-  background: linear-gradient(180deg, oklch(15% 0.018 245), var(--new-bg));
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+
+.new-app {
+  min-height: 100vh;
+  background: linear-gradient(180deg, oklch(15% 0.018 245), var(--new-bg));
+}
+
+.new-console-app {
+  min-height: 100svh;
+  background:
+    radial-gradient(circle at 20% 0%, color-mix(in oklch, var(--new-accent), transparent 90%), transparent 26rem),
+    linear-gradient(180deg, oklch(14% 0.018 245), var(--new-bg));
+}
+
+.new-console-sidebar {
+  border-right: 1px solid var(--new-border);
+  background: color-mix(in oklch, var(--new-surface), black 14%);
+}
+
+.new-console-brand {
+  border-bottom: 1px solid var(--new-border);
+}
+
+.new-console-nav a {
+  color: var(--new-muted);
+  border: 1px solid transparent;
+}
+
+.new-console-nav a:hover {
+  color: var(--new-fg);
+  background: color-mix(in oklch, var(--new-panel), transparent 30%);
+  border-color: color-mix(in oklch, var(--new-border), transparent 20%);
+}
+
+.new-console-nav a.new-active {
+  color: var(--new-fg);
+  background: color-mix(in oklch, var(--new-accent), transparent 90%);
+  border-color: color-mix(in oklch, var(--new-accent), var(--new-border) 45%);
+}
+
+.new-console-header {
+  border-bottom: 1px solid var(--new-border);
+  background: color-mix(in oklch, var(--new-surface), black 8%);
+  backdrop-filter: blur(14px);
+}
+
+.new-console-main {
+  min-height: calc(100svh - 64px);
+}
+
+.new-console-title {
+  color: var(--new-fg);
+  font-size: 18px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.new-console-meta {
+  color: var(--new-muted);
+  font-size: 11px;
+}
+
+.new-panel {
+  border: 1px solid var(--new-border);
+  background: color-mix(in oklch, var(--new-panel), black 10%);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.new-panel-header {
+  border-bottom: 1px solid color-mix(in oklch, var(--new-border), black 12%);
+  padding: 12px 14px;
+  background: color-mix(in oklch, var(--new-surface), black 6%);
+}
+
+.new-panel-body {
+  padding: 14px;
+}
+
+.new-feature-card {
+  border: 1px solid var(--new-border);
+  background: color-mix(in oklch, var(--new-surface), black 18%);
+  border-radius: 7px;
+  padding: 12px;
+}
+
+.new-feature-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--new-accent);
+  background: color-mix(in oklch, var(--new-accent), transparent 90%);
+  border: 1px solid color-mix(in oklch, var(--new-accent), transparent 76%);
+}
+
+.new-form-control {
+  height: 40px;
+  width: 100%;
+  border-radius: 7px;
+  border: 1px solid var(--new-border);
+  background: color-mix(in oklch, var(--new-bg), black 12%);
+  color: var(--new-fg);
+  padding: 0 11px;
+  font-size: 13px;
+  outline: none;
+}
+
+.new-form-control:focus {
+  border-color: color-mix(in oklch, var(--new-accent), white 8%);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--new-accent), transparent 55%);
+}
+
+.new-table-wrap {
+  overflow: hidden;
+  border: 1px solid var(--new-border);
+  border-radius: 7px;
+}
+
+.new-table {
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+}
+
+.new-table thead {
+  background: color-mix(in oklch, var(--new-surface), black 10%);
+  color: var(--new-muted);
+  font-size: 11px;
+}
+
+.new-table tbody tr {
+  border-top: 1px solid color-mix(in oklch, var(--new-border), black 10%);
 }
 
 .new-live-app {

@@ -32,7 +32,7 @@ export function CamerasPage() {
               <label className="block space-y-2">
                 <span className="text-xs font-medium text-slate-400">Name</span>
                 <input
-                  className="h-10 w-full rounded-md border border-slate-800 bg-slate-950 px-3 text-sm outline-none focus:border-sky-500"
+                  className="new-form-control"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="Camera 1"
@@ -41,7 +41,7 @@ export function CamerasPage() {
               <label className="block space-y-2">
                 <span className="text-xs font-medium text-slate-400">RTSP URL</span>
                 <input
-                  className="h-10 w-full rounded-md border border-slate-800 bg-slate-950 px-3 text-sm outline-none focus:border-sky-500"
+                  className="new-form-control"
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
                   placeholder="rtsp://user:pass@host:554/stream"
@@ -67,9 +67,9 @@ export function CamerasPage() {
             <h2 className="text-sm font-semibold">Registered Cameras</h2>
           </PanelHeader>
           <PanelBody>
-            <div className="overflow-hidden rounded-md border border-slate-800">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-900 text-xs text-slate-500">
+            <div className="new-table-wrap">
+              <table className="new-table">
+                <thead>
                   <tr>
                     <th className="px-3 py-2 font-medium">Name</th>
                     <th className="px-3 py-2 font-medium">State</th>
@@ -77,7 +77,7 @@ export function CamerasPage() {
                     <th className="px-3 py-2 font-medium">Updated</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800">
+                <tbody>
                   {(cameras.data ?? []).map((camera) => {
                     const video = camera.lastProbe?.streams?.find((stream) => stream.type === "video");
                     return (

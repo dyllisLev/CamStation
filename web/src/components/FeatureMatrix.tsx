@@ -18,10 +18,10 @@ export function FeatureMatrix({ title, items }: { title: string; items: FeatureI
       <PanelBody>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {items.map((item) => (
-            <div key={item.title} className="rounded-md border border-slate-800 bg-slate-950 p-3">
+            <div key={item.title} className="new-feature-card">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <div className="flex size-8 items-center justify-center rounded-md bg-slate-900 text-sky-300">
+                  <div className="new-feature-icon">
                     <item.icon size={16} />
                   </div>
                   <div className="text-sm font-medium">{item.title}</div>
@@ -36,4 +36,3 @@ export function FeatureMatrix({ title, items }: { title: string; items: FeatureI
     </Panel>
   );
 }
-

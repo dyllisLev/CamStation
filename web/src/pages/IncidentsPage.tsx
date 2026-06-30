@@ -26,7 +26,7 @@ export function IncidentsPage() {
         </PanelHeader>
         <PanelBody className="space-y-3">
           {errors.map((event) => (
-            <div key={event.id} className="flex items-start justify-between gap-3 rounded-md border border-slate-800 p-3">
+            <div key={event.id} className="new-feature-card flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 size={15} className="text-red-300" />
@@ -45,4 +45,3 @@ export function IncidentsPage() {
     </div>
   );
 }
-

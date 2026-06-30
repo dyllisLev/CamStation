@@ -40,6 +40,10 @@ This document records the current implementation state so the next session can c
 - Video progress/control overlays hidden and avoided by direct MSE `<video>` use
 - Camera tile movement and resizing through `react-grid-layout`
 - Visible resize handles
+- Unified UI styling between the monitoring workspace and console pages:
+  - shared dark monitoring palette
+  - cyan/teal active controls
+  - matching panel, table, button, and form styling
 - Layout persistence API:
   - `GET /api/layouts`
   - `POST /api/layouts`
@@ -62,6 +66,30 @@ This document records the current implementation state so the next session can c
   - zoom badge such as `1.3x` appears while zoomed
   - `videoZoom: { scale, tx, ty }` is stored in each layout item
   - page refresh restores saved video zoom and pan
+- Initial recording foundation:
+  - `recording_segments` SQLite table
+  - recorder manager package
+  - ffmpeg segment command builder
+  - temp-to-recordings finalization flow
+  - recorder status/start/stop API
+  - single-stream start/stop using `?stream={streamName}`
+  - `/api/timeline` now reads recording segment rows
+
+## Stream And Recording Policy
+
+- go2rtc is the local stream hub.
+- Recorder workers must read local go2rtc RTSP inputs, not camera URLs directly:
+
+```text
+rtsp://127.0.0.1:8554/{streamName}
+```
+
+- The default recording path remains compatible with the existing system concept:
+  - active ffmpeg segment writes to temp
+  - completed segment moves to recordings
+  - timeline reads finalized segment metadata
+- Direct camera recording should only be an explicit troubleshooting/special-camera option later, not the default.
+- Recording workers do not auto-start unless `CAMSTATION_RECORDING_ENABLED=true` or `-recording-enabled` is set. They can be started manually through the recorder API.
 
 ## Verified
 
@@ -87,6 +115,9 @@ Browser/Playwright verification performed:
 - `집중 보기` toggles in-page tile enlargement.
 - `집중 보기` does not call `window.open` or create a popup.
 - The removed top-level `타일 확대` button is no longer present.
+- Recorder API status returns no workers by default.
+- A short single-camera recorder smoke test confirmed ffmpeg uses `rtsp://127.0.0.1:8554/{streamName}`.
+- Smoke-test recording output and DB row were removed afterward.
 
 ## Important Corrections Learned
 
@@ -101,7 +132,7 @@ Browser/Playwright verification performed:
 
 ## Partially Implemented
 
-- Timeline UI exists but recording segment and motion data are placeholder/empty.
+- Timeline UI can read recording segment metadata, but aggregate timeline and motion data are still incomplete.
 - Recordings page is a placeholder surface, not a real recording browser.
 - Settings page includes language settings, but does not yet cover all legacy settings.
 - System/Streams/Logs/Viewers pages are early status surfaces and feature matrices.
@@ -110,9 +141,9 @@ Browser/Playwright verification performed:
 
 ## Not Implemented Yet
 
-- Recording worker supervision with ffmpeg
-- Recording segment metadata persistence
-- Actual timeline segment/motion API data
+- Full recording worker supervision lifecycle
+- Recording segment recovery for stale temp/orphan files
+- Motion data API
 - Recording playback page
 - Clip download/export
 - Storage usage and retention enforcement
@@ -152,9 +183,9 @@ Browser/Playwright verification performed:
 
 ## Suggested Next Tasks
 
-1. Implement real timeline data from recording metadata.
-2. Build the recording worker model and segment database table.
-3. Finish recordings page playback and segment list.
-4. Expand camera management beyond initial registration.
-5. Add connection state machine and incident grouping before adding alert delivery.
-6. Decide whether `집중 보기` state itself should be saved in layouts; currently wheel zoom state is saved, while active tile enlargement is not.
+1. Add recorder recovery for stale temp files, orphaned DB rows, and final files already moved.
+2. Add recording segment list/playback/download APIs and connect the recordings page.
+3. Improve the live aggregate timeline so it loads all camera segments, not only the selected camera.
+4. Add recording settings UI for segment length, auto-start, storage path, and retention.
+5. Expand camera management beyond initial registration.
+6. Add connection state machine and incident grouping before alert delivery.

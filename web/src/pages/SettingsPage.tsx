@@ -17,7 +17,7 @@ export function SettingsPage() {
           <label className="block space-y-2">
             <span className="text-xs font-medium text-slate-400">{t("language")}</span>
             <select
-              className="h-10 w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 text-sm outline-none focus:border-sky-500"
+              className="new-form-control max-w-xs"
               value={language}
               onChange={(event) => setLanguage(event.target.value as Language)}
             >

@@ -22,7 +22,7 @@ export function LogsPage() {
         <h2 className="text-sm font-semibold">Events</h2>
         <div className="flex flex-wrap gap-2">
           <select
-            className="h-9 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm"
+            className="new-form-control h-9 w-auto"
             value={level}
             onChange={(event) => setLevel(event.target.value)}
           >
@@ -32,7 +32,7 @@ export function LogsPage() {
             <option value="error">Error</option>
           </select>
           <select
-            className="h-9 rounded-md border border-slate-800 bg-slate-950 px-3 text-sm"
+            className="new-form-control h-9 w-auto"
             value={source}
             onChange={(event) => setSource(event.target.value)}
           >
@@ -46,9 +46,9 @@ export function LogsPage() {
         </div>
       </PanelHeader>
       <PanelBody>
-        <div className="overflow-hidden rounded-md border border-slate-800">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-900 text-xs text-slate-500">
+        <div className="new-table-wrap">
+          <table className="new-table">
+            <thead>
               <tr>
                 <th className="px-3 py-2 font-medium">Time</th>
                 <th className="px-3 py-2 font-medium">Level</th>
@@ -56,7 +56,7 @@ export function LogsPage() {
                 <th className="px-3 py-2 font-medium">Message</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800">
+            <tbody>
               {filtered.map((event) => (
                 <tr key={event.id}>
                   <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(event.createdAt)}</td>

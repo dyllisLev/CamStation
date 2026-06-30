@@ -4,13 +4,13 @@ import type { ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium transition disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex h-9 items-center justify-center gap-2 rounded-[7px] border px-3 text-sm font-semibold transition disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary: "border-sky-500/40 bg-sky-500 text-slate-950 hover:bg-sky-400",
-        secondary: "border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800",
-        ghost: "border-transparent bg-transparent text-slate-300 hover:bg-slate-900",
+        primary: "border-cyan-400/70 bg-cyan-400 text-slate-950 hover:bg-cyan-300",
+        secondary: "border-slate-700 bg-slate-900/80 text-slate-100 hover:border-cyan-500/40 hover:bg-slate-800",
+        ghost: "border-transparent bg-transparent text-slate-300 hover:border-slate-800 hover:bg-slate-900",
         danger: "border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
       },
       size: {
@@ -35,4 +35,3 @@ export function Button({ asChild, className, variant, size, ...props }: ButtonPr
   const Comp = asChild ? Slot : "button";
   return <Comp className={cn(buttonVariants({ variant, size }), className)} {...props} />;
 }
-

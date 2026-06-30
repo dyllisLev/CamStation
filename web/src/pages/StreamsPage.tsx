@@ -31,9 +31,9 @@ export function StreamsPage() {
           </Button>
         </PanelHeader>
         <PanelBody>
-          <div className="overflow-hidden rounded-md border border-slate-800">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-900 text-xs text-slate-500">
+          <div className="new-table-wrap">
+            <table className="new-table">
+              <thead>
                 <tr>
                   <th className="px-3 py-2 font-medium">Stream</th>
                   <th className="px-3 py-2 font-medium">Camera</th>
@@ -41,7 +41,7 @@ export function StreamsPage() {
                   <th className="px-3 py-2 font-medium">URL</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800">
+              <tbody>
                 {(cameras.data ?? []).map((camera) => (
                   <tr key={camera.id}>
                     <td className="px-3 py-3 text-slate-300">{camera.streamName}</td>
@@ -60,4 +60,3 @@ export function StreamsPage() {
     </div>
   );
 }
-

@@ -66,6 +66,22 @@ type LayoutProfile struct {
 	UpdatedAt         int64        `json:"updated_at"`
 }
 
+type RecordingSegment struct {
+	ID         int64    `json:"id"`
+	CameraID   int64    `json:"camera_id"`
+	StreamName string   `json:"streamName"`
+	Filename   string   `json:"filename"`
+	TempPath   string   `json:"tempPath,omitempty"`
+	FinalPath  string   `json:"finalPath,omitempty"`
+	TSStart    float64  `json:"ts_start"`
+	TSEnd      *float64 `json:"ts_end"`
+	FileSize   *int64   `json:"file_size"`
+	Status     string   `json:"status"`
+	Error      string   `json:"error,omitempty"`
+	CreatedAt  int64    `json:"created_at"`
+	UpdatedAt  int64    `json:"updated_at"`
+}
+
 func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -123,6 +139,26 @@ func (d *DB) Migrate(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS recording_segments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			camera_id INTEGER NOT NULL,
+			stream_name TEXT NOT NULL,
+			filename TEXT NOT NULL,
+			temp_path TEXT,
+			final_path TEXT,
+			ts_start REAL NOT NULL,
+			ts_end REAL,
+			file_size INTEGER,
+			status TEXT NOT NULL,
+			error TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE(stream_name, ts_start)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_recording_segments_stream_ts
+			ON recording_segments(stream_name, ts_start)`,
+		`CREATE INDEX IF NOT EXISTS idx_recording_segments_status
+			ON recording_segments(status, updated_at)`,
 		`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'))`,
 	}
 	for _, statement := range statements {
@@ -412,6 +448,118 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	return scanCamera(row, true)
 }
 
+func (d *DB) OpenRecordingSegment(ctx context.Context, segment RecordingSegment) (RecordingSegment, error) {
+	now := time.Now().Unix()
+	if segment.Status == "" {
+		segment.Status = "recording"
+	}
+	segment.CreatedAt = now
+	segment.UpdatedAt = now
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO recording_segments(
+			camera_id, stream_name, filename, temp_path, final_path, ts_start,
+			ts_end, file_size, status, error, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(stream_name, ts_start) DO UPDATE SET
+			filename=excluded.filename,
+			temp_path=excluded.temp_path,
+			status=excluded.status,
+			error='',
+			updated_at=excluded.updated_at`,
+		segment.CameraID,
+		segment.StreamName,
+		segment.Filename,
+		nullString(segment.TempPath),
+		nullString(segment.FinalPath),
+		segment.TSStart,
+		segment.TSEnd,
+		segment.FileSize,
+		segment.Status,
+		nullString(segment.Error),
+		segment.CreatedAt,
+		segment.UpdatedAt,
+	)
+	if err != nil {
+		return RecordingSegment{}, err
+	}
+	return d.GetRecordingSegment(ctx, segment.StreamName, segment.TSStart)
+}
+
+func (d *DB) CloseRecordingSegment(ctx context.Context, streamName, filename string, tsEnd float64, finalPath string, fileSize *int64) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recording_segments
+		 SET ts_end = ?, final_path = ?, file_size = ?, status = 'ready', error = '', updated_at = ?
+		 WHERE stream_name = ? AND filename = ? AND status IN ('recording', 'finalizing', 'failed')`,
+		tsEnd,
+		nullString(finalPath),
+		fileSize,
+		time.Now().Unix(),
+		streamName,
+		filename,
+	)
+	return err
+}
+
+func (d *DB) MarkRecordingSegmentStatus(ctx context.Context, streamName, filename, status, message string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recording_segments
+		 SET status = ?, error = ?, updated_at = ?
+		 WHERE stream_name = ? AND filename = ?`,
+		status,
+		nullString(message),
+		time.Now().Unix(),
+		streamName,
+		filename,
+	)
+	return err
+}
+
+func (d *DB) GetRecordingSegment(ctx context.Context, streamName string, tsStart float64) (RecordingSegment, error) {
+	row := d.db.QueryRowContext(ctx,
+		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
+		        ts_end, file_size, status, error, created_at, updated_at
+		 FROM recording_segments WHERE stream_name = ? AND ts_start = ?`,
+		streamName,
+		tsStart,
+	)
+	return scanRecordingSegment(row)
+}
+
+func (d *DB) ListRecordingSegments(ctx context.Context, streamName string, from, to time.Time, statuses ...string) ([]RecordingSegment, error) {
+	args := []any{streamName, float64(from.Unix()), float64(to.Unix())}
+	statusClause := ""
+	if len(statuses) > 0 {
+		placeholders := make([]string, 0, len(statuses))
+		for _, status := range statuses {
+			placeholders = append(placeholders, "?")
+			args = append(args, status)
+		}
+		statusClause = " AND status IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
+		        ts_end, file_size, status, error, created_at, updated_at
+		 FROM recording_segments
+		 WHERE stream_name = ? AND ts_start >= ? AND ts_start < ?`+statusClause+`
+		 ORDER BY ts_start`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	segments := make([]RecordingSegment, 0)
+	for rows.Next() {
+		segment, err := scanRecordingSegment(rows)
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, segment)
+	}
+	return segments, rows.Err()
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -442,6 +590,55 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 		camera.URL = ""
 	}
 	return camera, nil
+}
+
+func scanRecordingSegment(row scanner) (RecordingSegment, error) {
+	var segment RecordingSegment
+	var tempPath, finalPath, errorText sql.NullString
+	var tsEnd sql.NullFloat64
+	var fileSize sql.NullInt64
+	if err := row.Scan(
+		&segment.ID,
+		&segment.CameraID,
+		&segment.StreamName,
+		&segment.Filename,
+		&tempPath,
+		&finalPath,
+		&segment.TSStart,
+		&tsEnd,
+		&fileSize,
+		&segment.Status,
+		&errorText,
+		&segment.CreatedAt,
+		&segment.UpdatedAt,
+	); err != nil {
+		return RecordingSegment{}, err
+	}
+	if tempPath.Valid {
+		segment.TempPath = tempPath.String
+	}
+	if finalPath.Valid {
+		segment.FinalPath = finalPath.String
+	}
+	if tsEnd.Valid {
+		value := tsEnd.Float64
+		segment.TSEnd = &value
+	}
+	if fileSize.Valid {
+		value := fileSize.Int64
+		segment.FileSize = &value
+	}
+	if errorText.Valid {
+		segment.Error = errorText.String
+	}
+	return segment, nil
+}
+
+func nullString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func redactCameraURL(rawURL string) string {

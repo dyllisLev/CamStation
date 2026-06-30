@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"camstation/internal/camera"
+	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
 )
@@ -30,11 +31,15 @@ var webFS embed.FS
 
 func main() {
 	var (
-		addr         = flag.String("addr", getenv("CAMSTATION_ADDR", ":18080"), "HTTP listen address")
-		dbPath       = flag.String("db", getenv("CAMSTATION_DB", "./data/camstation.db"), "SQLite database path")
-		cameraURL    = flag.String("camera-url", getenv("CAMSTATION_CAMERA_URL", ""), "single camera URL for smoke testing")
-		probeOnly    = flag.Bool("probe-only", false, "run one camera probe and exit")
-		probeOnStart = flag.Bool("probe-on-start", false, "probe CAMSTATION_CAMERA_URL during startup")
+		addr             = flag.String("addr", getenv("CAMSTATION_ADDR", ":18080"), "HTTP listen address")
+		dbPath           = flag.String("db", getenv("CAMSTATION_DB", "./data/camstation.db"), "SQLite database path")
+		cameraURL        = flag.String("camera-url", getenv("CAMSTATION_CAMERA_URL", ""), "single camera URL for smoke testing")
+		probeOnly        = flag.Bool("probe-only", false, "run one camera probe and exit")
+		probeOnStart     = flag.Bool("probe-on-start", false, "probe CAMSTATION_CAMERA_URL during startup")
+		recordingEnabled = flag.Bool("recording-enabled", getenvBool("CAMSTATION_RECORDING_ENABLED", false), "start recorder workers for registered cameras")
+		recordingsDir    = flag.String("recordings-dir", getenv("CAMSTATION_RECORDINGS_DIR", "./data/recordings"), "final recording directory")
+		tempDir          = flag.String("temp-dir", getenv("CAMSTATION_TEMP_DIR", "./data/temp"), "temporary recording directory")
+		segmentMinutes   = flag.Int("segment-minutes", getenvInt("CAMSTATION_SEGMENT_MINUTES", 30), "recording segment length in minutes")
 	)
 	flag.Parse()
 
@@ -61,6 +66,7 @@ func main() {
 
 	prober := camera.NewFFProbe()
 	streamer := stream.NewGo2RTC("./data/go2rtc.yaml")
+	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
 	if cameras, err := db.ListCameras(ctx, true); err == nil && len(cameras) > 0 {
 		if err := streamer.Ensure(ctx, cameras); err != nil {
 			_ = db.AppendEvent(ctx, store.Event{
@@ -68,6 +74,15 @@ func main() {
 				Level:   "error",
 				Message: "go2rtc start failed",
 				Details: map[string]any{"error": err.Error()},
+			})
+		}
+		if *recordingEnabled {
+			recorderManager.Reconcile(cameras)
+			_ = db.AppendEvent(ctx, store.Event{
+				Source:  "recorder",
+				Level:   "info",
+				Message: "recorder workers started",
+				Details: map[string]any{"cameras": len(cameras), "input": "go2rtc-local-rtsp"},
 			})
 		}
 	}
@@ -102,7 +117,7 @@ func main() {
 		}()
 	}
 
-	mux, err := routes(db, prober, streamer)
+	mux, err := routes(db, prober, streamer, recorderManager, *recordingEnabled)
 	if err != nil {
 		log.Fatalf("build routes: %v", err)
 	}
@@ -115,6 +130,7 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
+		recorderManager.StopAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
@@ -126,7 +142,7 @@ func main() {
 	}
 }
 
-func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.Handler, error) {
+func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, recordingEnabled bool) (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -194,10 +210,75 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 	})
 
 	mux.HandleFunc("GET /api/timeline", func(w http.ResponseWriter, r *http.Request) {
+		streamName := r.URL.Query().Get("cam")
+		date := r.URL.Query().Get("date")
+		if streamName == "" || date == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("cam and date are required"))
+			return
+		}
+		from, to, err := dayRangeKST(date)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		segments, err := db.ListRecordingSegments(r.Context(), streamName, from, to, "ready", "recording")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"segments":      []any{},
+			"segments":      timelineSegments(segments),
 			"motion_events": []any{},
 		})
+	})
+
+	mux.HandleFunc("GET /api/recorders/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, recorderManager.Status())
+	})
+
+	mux.HandleFunc("POST /api/recorders/start", func(w http.ResponseWriter, r *http.Request) {
+		cameras, err := db.ListCameras(r.Context(), true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		streamName := r.URL.Query().Get("stream")
+		if streamName != "" {
+			camera, ok := cameraByStream(cameras, streamName)
+			if !ok {
+				writeError(w, http.StatusNotFound, fmt.Errorf("camera stream not found: %s", streamName))
+				return
+			}
+			if err := recorderManager.Start(camera); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			recorderManager.Reconcile(cameras)
+		}
+		_ = db.AppendEvent(r.Context(), store.Event{
+			Source:  "recorder",
+			Level:   "info",
+			Message: "recorder workers started",
+			Details: map[string]any{"stream": streamName, "cameras": len(cameras), "input": "go2rtc-local-rtsp"},
+		})
+		writeJSON(w, http.StatusOK, recorderManager.Status())
+	})
+
+	mux.HandleFunc("POST /api/recorders/stop", func(w http.ResponseWriter, r *http.Request) {
+		streamName := r.URL.Query().Get("stream")
+		if streamName != "" {
+			recorderManager.Stop(streamName)
+		} else {
+			recorderManager.StopAll()
+		}
+		_ = db.AppendEvent(r.Context(), store.Event{
+			Source:  "recorder",
+			Level:   "info",
+			Message: "recorder workers stopped",
+			Details: map[string]any{"stream": streamName},
+		})
+		writeJSON(w, http.StatusOK, recorderManager.Status())
 	})
 
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +354,9 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 			})
 			return
 		}
+		if recordingEnabled {
+			recorderManager.Reconcile(cameras)
+		}
 
 		status := http.StatusOK
 		if probeErr != nil {
@@ -294,6 +378,9 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 		if err := streamer.Restart(r.Context(), cameras); err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
+		}
+		if recordingEnabled {
+			recorderManager.Reconcile(cameras)
 		}
 		writeJSON(w, http.StatusOK, streamer.Status(r.Context()))
 	})
@@ -354,6 +441,42 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC) (http.H
 
 func layoutID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+func dayRangeKST(date string) (time.Time, time.Time, error) {
+	location, err := time.LoadLocation("Asia/Seoul")
+	if err != nil {
+		location = time.FixedZone("KST", 9*60*60)
+	}
+	start, err := time.ParseInLocation("2006-01-02", date, location)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid date format; expected YYYY-MM-DD")
+	}
+	return start, start.Add(24 * time.Hour), nil
+}
+
+func timelineSegments(segments []store.RecordingSegment) []map[string]any {
+	out := make([]map[string]any, 0, len(segments))
+	for _, segment := range segments {
+		out = append(out, map[string]any{
+			"camera_id": segment.StreamName,
+			"filename":  segment.Filename,
+			"ts_start":  segment.TSStart,
+			"ts_end":    segment.TSEnd,
+			"file_size": segment.FileSize,
+			"status":    segment.Status,
+		})
+	}
+	return out
+}
+
+func cameraByStream(cameras []store.Camera, streamName string) (store.Camera, bool) {
+	for _, camera := range cameras {
+		if camera.StreamName == streamName {
+			return camera, true
+		}
+	}
+	return store.Camera{}, false
 }
 
 func spaHandler(files http.FileSystem) http.Handler {
@@ -472,6 +595,26 @@ func getenv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getenvBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func getenvInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func listenURL(addr string) string {
