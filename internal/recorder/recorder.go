@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -233,7 +234,8 @@ func (w *worker) run() {
 
 func (w *worker) runOnce() error {
 	now := time.Now().In(kst())
-	outputDir := filepath.Join(w.manager.tempDir, w.camera.StreamName, now.Format("2006-01-02"))
+	archiveName := RecordingArchiveName(w.camera.Name, w.camera.StreamName)
+	outputDir := filepath.Join(w.manager.tempDir, archiveName, now.Format("2006-01-02"))
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return err
 	}
@@ -241,7 +243,7 @@ func (w *worker) runOnce() error {
 		return err
 	}
 
-	cmdArgs := BuildFFmpegArgs(w.input, outputDir, w.manager.segmentMinutes)
+	cmdArgs := BuildFFmpegArgsForCamera(w.input, outputDir, w.manager.segmentMinutes, archiveName)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = append(os.Environ(), "TZ=Asia/Seoul")
 	stderr, err := cmd.StderrPipe()
@@ -341,7 +343,7 @@ func (w *worker) closeCurrent(tsEnd int64) {
 }
 
 func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
-	finalPath, size, err := MoveToRecordings(segment.path, w.camera.StreamName, w.manager.recordingsDir)
+	finalPath, size, err := MoveToRecordings(segment.path, w.camera.Name, w.camera.StreamName, w.manager.recordingsDir)
 	if err != nil {
 		_ = w.manager.db.MarkRecordingSegmentStatus(context.Background(), w.camera.StreamName, segment.filename, "failed", err.Error())
 		w.setState(statusRunning, segment.path, err.Error())
@@ -395,10 +397,18 @@ func (w *worker) status() WorkerStatus {
 }
 
 func BuildFFmpegArgs(input, outputDir string, segmentMinutes int) []string {
+	return BuildFFmpegArgsForCamera(input, outputDir, segmentMinutes, "")
+}
+
+func BuildFFmpegArgsForCamera(input, outputDir string, segmentMinutes int, archiveName string) []string {
 	if segmentMinutes <= 0 {
 		segmentMinutes = 30
 	}
-	outputPattern := filepath.Join(outputDir, "%Y-%m-%d_%H-%M.mp4")
+	filenamePattern := "%Y-%m-%d_%H-%M.mp4"
+	if archiveName != "" {
+		filenamePattern = archiveName + "_" + filenamePattern
+	}
+	outputPattern := filepath.Join(outputDir, filenamePattern)
 	return []string{
 		"ffmpeg", "-y",
 		"-nostats",
@@ -417,6 +427,17 @@ func BuildFFmpegArgs(input, outputDir string, segmentMinutes int) []string {
 	}
 }
 
+func RecordingArchiveName(cameraName, streamName string) string {
+	name := sanitizeArchiveName(cameraName)
+	if name == "" {
+		name = sanitizeArchiveName(streamName)
+	}
+	if name == "" {
+		return "camera"
+	}
+	return name
+}
+
 func ParseSegmentPath(line string) string {
 	matches := regexp.MustCompile(`Opening '(.+?\.mp4)' for writing`).FindStringSubmatch(line)
 	if len(matches) != 2 {
@@ -427,7 +448,7 @@ func ParseSegmentPath(line string) string {
 
 func TimestampFromSegmentPath(path string) (float64, bool) {
 	stem := fileStem(path)
-	matches := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})$`).FindStringSubmatch(stem)
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})$`).FindStringSubmatch(stem)
 	if len(matches) != 4 {
 		return 0, false
 	}
@@ -438,13 +459,14 @@ func TimestampFromSegmentPath(path string) (float64, bool) {
 	return float64(parsed.Unix()), true
 }
 
-func MoveToRecordings(tempPath, streamName, recordingsDir string) (string, *int64, error) {
+func MoveToRecordings(tempPath, cameraName, streamName, recordingsDir string) (string, *int64, error) {
 	date, ok := dateFromSegmentPath(tempPath)
 	if !ok {
 		return "", nil, fmt.Errorf("cannot determine segment date from %s", tempPath)
 	}
-	finalDir := filepath.Join(recordingsDir, streamName, date)
-	finalPath := filepath.Join(finalDir, filepath.Base(tempPath))
+	archiveName := RecordingArchiveName(cameraName, streamName)
+	finalDir := filepath.Join(recordingsDir, archiveName, date)
+	finalPath := filepath.Join(finalDir, archiveSegmentFilename(tempPath, archiveName))
 	if err := os.MkdirAll(finalDir, 0o755); err != nil {
 		return "", nil, err
 	}
@@ -463,7 +485,7 @@ func MoveToRecordings(tempPath, streamName, recordingsDir string) (string, *int6
 
 func dateFromSegmentPath(path string) (string, bool) {
 	stem := fileStem(path)
-	matches := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}$`).FindStringSubmatch(stem)
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}$`).FindStringSubmatch(stem)
 	if len(matches) == 2 {
 		return matches[1], true
 	}
@@ -474,6 +496,24 @@ func fileStem(path string) string {
 	base := filepath.Base(path)
 	ext := filepath.Ext(base)
 	return base[:len(base)-len(ext)]
+}
+
+func archiveSegmentFilename(path, archiveName string) string {
+	stem := fileStem(path)
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})$`).FindStringSubmatch(stem)
+	if len(matches) != 2 {
+		return filepath.Base(path)
+	}
+	return archiveName + "_" + matches[1] + filepath.Ext(path)
+}
+
+func sanitizeArchiveName(name string) string {
+	value := strings.TrimSpace(name)
+	value = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1F]+`).ReplaceAllString(value, "-")
+	value = regexp.MustCompile(`\s+`).ReplaceAllString(value, "-")
+	value = regexp.MustCompile(`-+`).ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-. ")
+	return value
 }
 
 func fileSize(path string) *int64 {

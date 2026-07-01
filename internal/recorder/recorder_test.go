@@ -40,22 +40,29 @@ func TestTimestampFromSegmentPath(t *testing.T) {
 	}
 }
 
-func TestMoveToRecordings(t *testing.T) {
+func TestMoveToRecordingsUsesCameraNameForArchivePath(t *testing.T) {
 	root := t.TempDir()
-	tempPath := filepath.Join(root, "temp", "cam1", "2026-06-30", "2026-06-30_16-30.mp4")
+	tempPath := filepath.Join(root, "temp", "cam1", "2026-06-30", "Front Gate_2026-06-30_16-30.mp4")
 	if err := mkdirWrite(tempPath, []byte("video")); err != nil {
 		t.Fatal(err)
 	}
-	final, size, err := MoveToRecordings(tempPath, "cam1", filepath.Join(root, "recordings"))
+	final, size, err := MoveToRecordings(tempPath, "Front Gate", "cam1", filepath.Join(root, "recordings"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "recordings", "cam1", "2026-06-30", "2026-06-30_16-30.mp4")
+	want := filepath.Join(root, "recordings", "Front-Gate", "2026-06-30", "Front-Gate_2026-06-30_16-30.mp4")
 	if final != want {
 		t.Fatalf("final = %q, want %q", final, want)
 	}
 	if size == nil || *size != 5 {
 		t.Fatalf("size = %v, want 5", size)
+	}
+}
+
+func TestRecordingArchiveNameFallsBackToStreamName(t *testing.T) {
+	got := RecordingArchiveName(" / ", "cam1")
+	if got != "cam1" {
+		t.Fatalf("RecordingArchiveName() = %q, want cam1", got)
 	}
 }
 
