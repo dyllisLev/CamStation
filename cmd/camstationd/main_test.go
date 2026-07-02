@@ -149,3 +149,36 @@ func TestConsolePagesKeepSeparateRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "pages", "CamerasPage.tsx"))
+	if err != nil {
+		t.Fatalf("read cameras page: %v", err)
+	}
+	content := string(source)
+
+	for _, required := range []string{
+		"useScanCamera",
+		"프로파일 스캔",
+		"장비 프로파일",
+		"역할별 스트림",
+		"VStarcam",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("CamerasPage missing profile registration requirement %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"Register Camera",
+		"Registered Cameras",
+		"FeatureMatrix",
+		"Save and probe",
+		"Camera Operations",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("CamerasPage still contains legacy UI marker %q", forbidden)
+		}
+	}
+}
