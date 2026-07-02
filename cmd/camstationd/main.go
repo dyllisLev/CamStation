@@ -437,101 +437,76 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		})
 	})
 
+	mux.HandleFunc("POST /api/cameras/{streamName}/scan", func(w http.ResponseWriter, r *http.Request) {
+		existing, err := db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		var req cameraCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		req = cameraUpdateRequest(existing, req)
+		profile, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), scanRequestFromCamera(req))
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "profile": redactDeviceProfile(profile)})
+	})
+
+	mux.HandleFunc("POST /api/cameras/{streamName}/preview", func(w http.ResponseWriter, r *http.Request) {
+		existing, err := db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		var req cameraPreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		req = previewRequestWithExisting(existing, req)
+		profile, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), req.ScanRequest)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		candidates := selectProfileCandidates(profile, req.ChannelIndexValue(), []cameraStreamSelection{{
+			Role:         req.Role,
+			ProfileToken: req.ProfileToken,
+		}})
+		if len(candidates) == 0 || candidates[0].URL == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("preview profile candidate not found"))
+			return
+		}
+		streamName, expiresAt := previews.Put(candidates[0].URL, 10*time.Minute)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"streamName": streamName,
+			"expiresAt":  expiresAt.UTC().Format(time.RFC3339),
+		})
+	})
+
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
 		var req cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if req.Name == "" {
-			req.Name = "Camera 1"
-		}
-		if req.Stream == "" {
-			req.Stream = streamName(req.Name, 1)
-		}
-
-		profile := req.Profile
-		scanReq := cameraprofile.ScanRequest{
-			Name:      req.Name,
-			URL:       req.URL,
-			Host:      req.Host,
-			Username:  req.Username,
-			Password:  req.Password,
-			RTSPPort:  req.RTSPPort,
-			HTTPPort:  req.HTTPPort,
-			ONVIFPort: req.ONVIFPort,
-			Adapter:   req.Adapter,
-		}
-		if !hasProfileCandidates(profile) && scanReqHasTarget(scanReq) {
-			scanned, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), scanReq)
-			if err != nil {
-				writeError(w, http.StatusBadGateway, err)
-				return
-			}
-			profile = scanned
-		}
-
-		candidates := profileCandidates(profile)
-		if len(req.Streams) > 0 {
-			candidates = req.Streams
-		}
-		if len(req.StreamSelections) > 0 {
-			candidates = selectProfileCandidates(profile, req.ChannelIndexValue(), req.StreamSelections)
-			if len(candidates) == 0 {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("selected stream profiles were not found"))
-				return
-			}
-		}
-		primaryURL := req.URL
-		if primaryURL == "" {
-			primaryURL = primaryCandidateURL(candidates)
-		}
-		if primaryURL == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("url or stream candidates are required"))
-			return
-		}
-
-		result, probeErr := prober.Probe(r.Context(), primaryURL, 12*time.Second)
-		state := "streaming"
-		level := "info"
-		message := "camera registered"
-		if probeErr != nil {
-			state = "offline"
-			level = "error"
-			message = "camera registered but probe failed"
-		}
-
-		saved, err := db.UpsertCamera(r.Context(), store.Camera{
-			Name:           req.Name,
-			URL:            primaryURL,
-			StreamName:     req.Stream,
-			State:          state,
-			Manufacturer:   profile.Manufacturer,
-			Model:          profile.Model,
-			ProfileAdapter: profile.Adapter,
-			Host:           firstNonEmpty(profile.Host, scanReq.Host),
-			RTSPPort:       firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
-			HTTPPort:       firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
-			ONVIFPort:      firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
-			ChannelIndex:   req.ChannelIndex,
-			LastProbeJSON:  toMap(result),
-			LastScanJSON:   profile.LastScan,
-		})
+		saved, result, probeErr, err := persistCameraProfile(r.Context(), db, prober, req, "")
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+			if errors.Is(err, errBadCameraProfileRequest) {
+				writeError(w, http.StatusBadRequest, err)
+			} else if errors.Is(err, errCameraProfileScanFailed) {
+				writeError(w, http.StatusBadGateway, err)
+			} else {
+				writeError(w, http.StatusInternalServerError, err)
+			}
 			return
 		}
-		if len(candidates) > 0 {
-			if err := db.ReplaceCameraStreams(r.Context(), saved.ID, toStoreStreams(saved.StreamName, candidates, state)); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			saved, err = db.GetCameraByStream(r.Context(), saved.StreamName)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
+		level, message := cameraMutationEvent("camera registered", probeErr)
 		publicSaved := saved
 		sanitizeCameraSecrets(&publicSaved)
 
@@ -578,6 +553,130 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			status = http.StatusAccepted
 		}
 		writeJSON(w, status, map[string]any{"ok": probeErr == nil, "camera": publicSaved, "go2rtc": streamer.Status(r.Context())})
+	})
+
+	mux.HandleFunc("PUT /api/cameras/{streamName}", func(w http.ResponseWriter, r *http.Request) {
+		existing, err := db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		var req cameraCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		req = cameraUpdateRequest(existing, req)
+		saved, result, probeErr, err := persistCameraProfile(r.Context(), db, prober, req, existing.StreamName)
+		if err != nil {
+			if errors.Is(err, errBadCameraProfileRequest) {
+				writeError(w, http.StatusBadRequest, err)
+			} else if errors.Is(err, errCameraProfileScanFailed) {
+				writeError(w, http.StatusBadGateway, err)
+			} else {
+				writeError(w, http.StatusInternalServerError, err)
+			}
+			return
+		}
+		level, message := cameraMutationEvent("camera updated", probeErr)
+		publicSaved := saved
+		sanitizeCameraSecrets(&publicSaved)
+
+		_ = db.AppendEvent(r.Context(), store.Event{
+			Source:  "camera",
+			Level:   level,
+			Message: message,
+			Details: map[string]any{
+				"name":    saved.Name,
+				"stream":  saved.StreamName,
+				"state":   saved.State,
+				"adapter": saved.ProfileAdapter,
+				"result":  result,
+				"error":   errString(probeErr),
+			},
+		})
+
+		cameras, err := db.ListCameras(r.Context(), true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := streamer.Restart(r.Context(), cameras); err != nil {
+			_ = db.AppendEvent(r.Context(), store.Event{
+				Source:  "go2rtc",
+				Level:   "error",
+				Message: "go2rtc restart failed",
+				Details: map[string]any{"error": err.Error()},
+			})
+			if recordingEnabled {
+				recorderManager.Reconcile(cameras)
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"ok":      probeErr == nil,
+				"camera":  publicSaved,
+				"go2rtc":  streamer.Status(r.Context()),
+				"warning": err.Error(),
+			})
+			return
+		}
+		if recordingEnabled {
+			recorderManager.Reconcile(cameras)
+		}
+
+		status := http.StatusOK
+		if probeErr != nil {
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, map[string]any{"ok": probeErr == nil, "camera": publicSaved, "go2rtc": streamer.Status(r.Context())})
+	})
+
+	mux.HandleFunc("DELETE /api/cameras/{streamName}", func(w http.ResponseWriter, r *http.Request) {
+		deleted, err := db.DeleteCamera(r.Context(), r.PathValue("streamName"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		publicDeleted := deleted
+		sanitizeCameraSecrets(&publicDeleted)
+
+		_ = db.AppendEvent(r.Context(), store.Event{
+			Source:  "camera",
+			Level:   "warning",
+			Message: "camera deleted",
+			Details: map[string]any{
+				"name":   deleted.Name,
+				"stream": deleted.StreamName,
+				"roles":  len(deleted.Streams),
+			},
+		})
+
+		cameras, err := db.ListCameras(r.Context(), true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := streamer.Restart(r.Context(), cameras); err != nil {
+			_ = db.AppendEvent(r.Context(), store.Event{
+				Source:  "go2rtc",
+				Level:   "error",
+				Message: "go2rtc restart failed",
+				Details: map[string]any{"error": err.Error()},
+			})
+			if recordingEnabled {
+				recorderManager.Reconcile(cameras)
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"ok":      true,
+				"camera":  publicDeleted,
+				"go2rtc":  streamer.Status(r.Context()),
+				"warning": err.Error(),
+			})
+			return
+		}
+		if recordingEnabled {
+			recorderManager.Reconcile(cameras)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "camera": publicDeleted, "go2rtc": streamer.Status(r.Context())})
 	})
 
 	mux.HandleFunc("GET /api/streams/status", func(w http.ResponseWriter, r *http.Request) {
@@ -707,11 +806,145 @@ type cameraCreateRequest struct {
 	StreamSelections []cameraStreamSelection         `json:"streamSelections"`
 }
 
+var (
+	errBadCameraProfileRequest = errors.New("bad camera profile request")
+	errCameraProfileScanFailed = errors.New("camera profile scan failed")
+)
+
 func (r cameraCreateRequest) ChannelIndexValue() int {
 	if r.ChannelIndex == nil {
 		return 0
 	}
 	return *r.ChannelIndex
+}
+
+func cameraUpdateRequest(existing store.Camera, req cameraCreateRequest) cameraCreateRequest {
+	req.Stream = existing.StreamName
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+	if req.URL == "" {
+		req.URL = existing.URL
+	}
+	if req.Host == "" {
+		req.Host = existing.Host
+	}
+	if req.RTSPPort == 0 {
+		req.RTSPPort = existing.RTSPPort
+	}
+	if req.HTTPPort == 0 {
+		req.HTTPPort = existing.HTTPPort
+	}
+	if req.ONVIFPort == 0 {
+		req.ONVIFPort = existing.ONVIFPort
+	}
+	if req.Adapter == "" {
+		req.Adapter = existing.ProfileAdapter
+	}
+	if req.ChannelIndex == nil {
+		req.ChannelIndex = existing.ChannelIndex
+	}
+	return req
+}
+
+func scanRequestFromCamera(req cameraCreateRequest) cameraprofile.ScanRequest {
+	return cameraprofile.ScanRequest{
+		Name:      req.Name,
+		URL:       req.URL,
+		Host:      req.Host,
+		Username:  req.Username,
+		Password:  req.Password,
+		RTSPPort:  req.RTSPPort,
+		HTTPPort:  req.HTTPPort,
+		ONVIFPort: req.ONVIFPort,
+		Adapter:   req.Adapter,
+	}
+}
+
+func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Prober, req cameraCreateRequest, stableStreamName string) (store.Camera, camera.ProbeResult, error, error) {
+	if req.Name == "" {
+		req.Name = "Camera 1"
+	}
+	if stableStreamName != "" {
+		req.Stream = stableStreamName
+	}
+	if req.Stream == "" {
+		req.Stream = streamName(req.Name, 1)
+	}
+
+	profile := req.Profile
+	scanReq := scanRequestFromCamera(req)
+	if !hasProfileCandidates(profile) && scanReqHasTarget(scanReq) {
+		scanned, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(ctx, scanReq)
+		if err != nil {
+			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: %v", errCameraProfileScanFailed, err)
+		}
+		profile = scanned
+	}
+
+	candidates := profileCandidates(profile)
+	if len(req.Streams) > 0 {
+		candidates = req.Streams
+	}
+	if len(req.StreamSelections) > 0 {
+		candidates = selectProfileCandidates(profile, req.ChannelIndexValue(), req.StreamSelections)
+		if len(candidates) == 0 {
+			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: selected stream profiles were not found", errBadCameraProfileRequest)
+		}
+	}
+	primaryURL := req.URL
+	if primaryURL == "" {
+		primaryURL = primaryCandidateURL(candidates)
+	}
+	if primaryURL == "" {
+		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: url or stream candidates are required", errBadCameraProfileRequest)
+	}
+	if prober == nil {
+		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("camera prober unavailable")
+	}
+
+	result, probeErr := prober.Probe(ctx, primaryURL, 12*time.Second)
+	state := "streaming"
+	if probeErr != nil {
+		state = "offline"
+	}
+
+	saved, err := db.UpsertCamera(ctx, store.Camera{
+		Name:           req.Name,
+		URL:            primaryURL,
+		StreamName:     req.Stream,
+		State:          state,
+		Manufacturer:   profile.Manufacturer,
+		Model:          profile.Model,
+		ProfileAdapter: profile.Adapter,
+		Host:           firstNonEmpty(profile.Host, scanReq.Host),
+		RTSPPort:       firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
+		HTTPPort:       firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
+		ONVIFPort:      firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
+		ChannelIndex:   req.ChannelIndex,
+		LastProbeJSON:  toMap(result),
+		LastScanJSON:   profile.LastScan,
+	})
+	if err != nil {
+		return store.Camera{}, camera.ProbeResult{}, nil, err
+	}
+	if len(candidates) > 0 {
+		if err := db.ReplaceCameraStreams(ctx, saved.ID, toStoreStreams(saved.StreamName, candidates, state)); err != nil {
+			return store.Camera{}, camera.ProbeResult{}, nil, err
+		}
+		saved, err = db.GetCameraByStream(ctx, saved.StreamName)
+		if err != nil {
+			return store.Camera{}, camera.ProbeResult{}, nil, err
+		}
+	}
+	return saved, result, probeErr, nil
+}
+
+func cameraMutationEvent(successMessage string, probeErr error) (string, string) {
+	if probeErr != nil {
+		return "error", successMessage + " but probe failed"
+	}
+	return "info", successMessage
 }
 
 type cameraPreviewRequest struct {
@@ -726,6 +959,34 @@ func (r cameraPreviewRequest) ChannelIndexValue() int {
 		return 0
 	}
 	return *r.ChannelIndex
+}
+
+func previewRequestWithExisting(existing store.Camera, req cameraPreviewRequest) cameraPreviewRequest {
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+	if req.URL == "" {
+		req.URL = existing.URL
+	}
+	if req.Host == "" {
+		req.Host = existing.Host
+	}
+	if req.RTSPPort == 0 {
+		req.RTSPPort = existing.RTSPPort
+	}
+	if req.HTTPPort == 0 {
+		req.HTTPPort = existing.HTTPPort
+	}
+	if req.ONVIFPort == 0 {
+		req.ONVIFPort = existing.ONVIFPort
+	}
+	if req.Adapter == "" {
+		req.Adapter = existing.ProfileAdapter
+	}
+	if req.ChannelIndex == nil {
+		req.ChannelIndex = existing.ChannelIndex
+	}
+	return req
 }
 
 func scanReqHasTarget(req cameraprofile.ScanRequest) bool {

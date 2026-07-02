@@ -31,7 +31,7 @@ export function RegisteredCameraTable({ cameras, selectedCameraId, onSelectCamer
                 <th className="px-3 py-2 font-medium">역할별 스트림</th>
                 <th className="px-3 py-2 font-medium">상태</th>
                 <th className="px-3 py-2 font-medium">업데이트</th>
-                <th className="px-3 py-2 font-medium">선택</th>
+                <th className="px-3 py-2 font-medium">작업</th>
               </tr>
             </thead>
             <tbody>
@@ -88,9 +88,9 @@ function CameraRow({ camera, selected, onSelect }: { camera: Camera; selected: b
         <div className="mt-1 text-xs text-slate-500">{formatDurationNanos(camera.lastProbe?.duration)}</div>
       </td>
       <td className="px-3 py-3 text-slate-500" data-label="업데이트">{formatDate(camera.updatedAt)}</td>
-      <td className="px-3 py-3" data-label="선택">
+      <td className="px-3 py-3" data-label="작업">
         <button className="new-ghost" type="button" onClick={onSelect} aria-pressed={selected}>
-          프로파일 설정
+          프로파일 수정
         </button>
       </td>
     </tr>

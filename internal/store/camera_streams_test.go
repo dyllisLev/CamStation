@@ -101,3 +101,52 @@ func TestCameraStreamsPersistAndRedactWithMetadata(t *testing.T) {
 		t.Fatalf("private stream URL should be present")
 	}
 }
+
+func TestDeleteCameraRemovesCameraAndRoleStreams(t *testing.T) {
+	t.Parallel()
+
+	db, err := Open(filepath.Join(t.TempDir(), "camstation.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+
+	camera, err := db.UpsertCamera(t.Context(), Camera{
+		Name:       "삭제 테스트",
+		URL:        "rtsp://admin:secret@192.168.0.55:10554/tcp/av0_0",
+		StreamName: "delete-test",
+		State:      "streaming",
+	})
+	if err != nil {
+		t.Fatalf("upsert camera: %v", err)
+	}
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, []CameraStream{{
+		Role:             CameraStreamRoleRecording,
+		Label:            "main",
+		Source:           "test",
+		URL:              "rtsp://admin:secret@192.168.0.55:10554/tcp/av0_0",
+		Go2RTCStreamName: "delete-test-recording",
+		State:            "streaming",
+	}}); err != nil {
+		t.Fatalf("replace streams: %v", err)
+	}
+
+	deleted, err := db.DeleteCamera(t.Context(), "delete-test")
+	if err != nil {
+		t.Fatalf("delete camera: %v", err)
+	}
+	if deleted.StreamName != "delete-test" || len(deleted.Streams) != 1 {
+		t.Fatalf("deleted camera = %#v", deleted)
+	}
+
+	cameras, err := db.ListCameras(t.Context(), false)
+	if err != nil {
+		t.Fatalf("list cameras: %v", err)
+	}
+	if len(cameras) != 0 {
+		t.Fatalf("cameras after delete = %d, want 0", len(cameras))
+	}
+}

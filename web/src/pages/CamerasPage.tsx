@@ -19,13 +19,13 @@ export function CamerasPage() {
   return (
     <div className="new-camera-admin">
       <CameraSummary cameras={rows} profile={lastProfile} />
-      <CameraProfileRegistration onProfileScanned={setLastProfile} />
       <RegisteredCameraTable
         cameras={rows}
         selectedCameraId={selectedCamera?.id ?? null}
         onSelectCamera={setSelectedCameraId}
       />
       <RegisteredCameraProfile camera={selectedCamera} />
+      <CameraProfileRegistration onProfileScanned={setLastProfile} />
     </div>
   );
 }

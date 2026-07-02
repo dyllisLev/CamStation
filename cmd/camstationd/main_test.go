@@ -155,10 +155,15 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 	t.Parallel()
 
 	paths := []string{
+		filepath.Join("..", "..", "web", "src", "app", "api.ts"),
+		filepath.Join("..", "..", "web", "src", "app", "queries.ts"),
 		filepath.Join("..", "..", "web", "src", "pages", "CamerasPage.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraProfileRegistration.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraTable.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraProfile.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraEditForm.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraDeleteControls.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraStoredProfile.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraSummary.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "ProfileSelectionPanel.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "model.ts"),
@@ -175,6 +180,8 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 	for _, required := range []string{
 		"useScanCamera",
 		"usePreviewCamera",
+		"useScanRegisteredCamera",
+		"usePreviewRegisteredCamera",
 		"프로파일 스캔",
 		"장비 프로파일",
 		"녹화 프로필",
@@ -185,7 +192,14 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 		"selectedCameraId",
 		"onSelectCamera",
 		"등록된 카메라",
-		"프로파일 설정",
+		"프로파일 수정",
+		"프로파일 재스캔",
+		"수정 저장",
+		"카메라 삭제",
+		"scanRegisteredCamera",
+		"previewRegisteredCamera",
+		"updateCamera",
+		"deleteCamera",
 		"녹화 스트림",
 		"라이브 스트림",
 	} {

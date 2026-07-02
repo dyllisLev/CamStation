@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type CameraPreviewRequest, type CameraScanRequest, type CreateCamera, type LayoutProfile } from "./api";
+import { api, type CameraPreviewRequest, type CameraScanRequest, type CreateCamera, type LayoutProfile, type UpdateCamera } from "./api";
 
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000 });
@@ -100,6 +100,38 @@ export function useCreateCamera() {
         queryClient.invalidateQueries({ queryKey: ["cameras"] }),
         queryClient.invalidateQueries({ queryKey: ["events"] }),
         queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateCamera() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ streamName, camera }: { streamName: string; camera: UpdateCamera }) => api.updateCamera(streamName, camera),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
+        queryClient.invalidateQueries({ queryKey: ["events"] }),
+        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
+      ]);
+    },
+  });
+}
+
+export function useDeleteCamera() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (streamName: string) => api.deleteCamera(streamName),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
+        queryClient.invalidateQueries({ queryKey: ["events"] }),
+        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["timeline"] }),
       ]);
     },
   });
@@ -114,6 +146,20 @@ export function useScanCamera() {
 export function usePreviewCamera() {
   return useMutation({
     mutationFn: (camera: CameraPreviewRequest) => api.previewCamera(camera),
+  });
+}
+
+export function useScanRegisteredCamera() {
+  return useMutation({
+    mutationFn: ({ streamName, camera }: { streamName: string; camera: CameraScanRequest }) =>
+      api.scanRegisteredCamera(streamName, camera),
+  });
+}
+
+export function usePreviewRegisteredCamera() {
+  return useMutation({
+    mutationFn: ({ streamName, camera }: { streamName: string; camera: CameraPreviewRequest }) =>
+      api.previewRegisteredCamera(streamName, camera),
   });
 }
 

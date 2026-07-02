@@ -651,6 +651,25 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	return camera, nil
 }
 
+func (d *DB) DeleteCamera(ctx context.Context, streamName string) (Camera, error) {
+	camera, err := d.GetCameraByStream(ctx, streamName)
+	if err != nil {
+		return Camera{}, err
+	}
+	result, err := d.db.ExecContext(ctx, `DELETE FROM cameras WHERE id = ?`, camera.ID)
+	if err != nil {
+		return Camera{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Camera{}, err
+	}
+	if affected == 0 {
+		return Camera{}, sql.ErrNoRows
+	}
+	return camera, nil
+}
+
 func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams []CameraStream) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {

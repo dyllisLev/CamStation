@@ -222,6 +222,8 @@ export type CreateCamera = {
   streamSelections?: CameraStreamSelection[];
 };
 
+export type UpdateCamera = CreateCamera;
+
 export type CameraScanRequest = {
   name?: string;
   url?: string;
@@ -302,6 +304,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(camera),
     }),
+  scanRegisteredCamera: (streamName: string, camera: CameraScanRequest) =>
+    request<{ ok: boolean; profile: DeviceProfile }>(
+      `/api/cameras/${encodeURIComponent(streamName)}/scan`,
+      {
+        method: "POST",
+        body: JSON.stringify(camera),
+      },
+    ),
+  previewRegisteredCamera: (streamName: string, camera: CameraPreviewRequest) =>
+    request<CameraPreviewResponse>(
+      `/api/cameras/${encodeURIComponent(streamName)}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify(camera),
+      },
+    ),
   createCamera: (camera: CreateCamera) =>
     request<{ ok: boolean; camera: Camera; go2rtc: StreamStatus; warning?: string }>(
       "/api/cameras",
@@ -309,6 +327,19 @@ export const api = {
         method: "POST",
         body: JSON.stringify(camera),
       },
+    ),
+  updateCamera: (streamName: string, camera: UpdateCamera) =>
+    request<{ ok: boolean; camera: Camera; go2rtc: StreamStatus; warning?: string }>(
+      `/api/cameras/${encodeURIComponent(streamName)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(camera),
+      },
+    ),
+  deleteCamera: (streamName: string) =>
+    request<{ ok: boolean; camera: Camera; go2rtc: StreamStatus; warning?: string }>(
+      `/api/cameras/${encodeURIComponent(streamName)}`,
+      { method: "DELETE" },
     ),
   restartStreams: () => request<StreamStatus>("/api/streams/restart", { method: "POST" }),
 };
