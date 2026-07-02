@@ -3,7 +3,9 @@ package stream
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -26,10 +28,18 @@ type Go2RTC struct {
 }
 
 type Status struct {
-	Installed bool   `json:"installed"`
-	Running   bool   `json:"running"`
-	APIURL    string `json:"apiUrl"`
-	Error     string `json:"error,omitempty"`
+	Installed bool                     `json:"installed"`
+	Running   bool                     `json:"running"`
+	APIURL    string                   `json:"apiUrl"`
+	Error     string                   `json:"error,omitempty"`
+	Streams   map[string]StreamRuntime `json:"streams,omitempty"`
+}
+
+type StreamRuntime struct {
+	State         string `json:"state"`
+	ProducerCount int    `json:"producerCount"`
+	ConsumerCount int    `json:"consumerCount"`
+	ViewerCount   int    `json:"viewerCount"`
 }
 
 func NewGo2RTC(configPath string) *Go2RTC {
@@ -135,7 +145,81 @@ func (g *Go2RTC) Status(ctx context.Context) Status {
 	}
 	status.Installed = true
 	status.Running = healthy(ctx, g.apiURL)
+	if status.Running {
+		runtime, err := fetchStreamRuntime(ctx, g.apiURL)
+		if err != nil {
+			status.Error = err.Error()
+		} else {
+			status.Streams = runtime
+		}
+	}
 	return status
+}
+
+func fetchStreamRuntime(ctx context.Context, apiURL string) (map[string]StreamRuntime, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/streams", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 500 {
+		return nil, fmt.Errorf("go2rtc streams status returned %s", resp.Status)
+	}
+	return parseStreamRuntime(resp.Body)
+}
+
+func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
+	var payload map[string]struct {
+		Producers []struct {
+			ID int `json:"id"`
+		} `json:"producers"`
+		Consumers []struct {
+			ID         int    `json:"id"`
+			FormatName string `json:"format_name"`
+			Protocol   string `json:"protocol"`
+			UserAgent  string `json:"user_agent"`
+		} `json:"consumers"`
+	}
+	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	runtime := make(map[string]StreamRuntime, len(payload))
+	for streamName, stream := range payload {
+		item := StreamRuntime{
+			ProducerCount: len(stream.Producers),
+			ConsumerCount: len(stream.Consumers),
+		}
+		for _, consumer := range stream.Consumers {
+			if isViewerConsumer(consumer.FormatName, consumer.Protocol, consumer.UserAgent) {
+				item.ViewerCount++
+			}
+		}
+		switch {
+		case item.ProducerCount > 0:
+			item.State = "running"
+		case item.ConsumerCount > 0:
+			item.State = "starting"
+		default:
+			item.State = "idle"
+		}
+		runtime[streamName] = item
+	}
+	return runtime, nil
+}
+
+func isViewerConsumer(formatName, protocol, userAgent string) bool {
+	formatName = strings.ToLower(formatName)
+	protocol = strings.ToLower(protocol)
+	userAgent = strings.ToLower(userAgent)
+	if strings.Contains(userAgent, "lavf") || strings.Contains(userAgent, "ffmpeg") {
+		return false
+	}
+	return formatName == "mse/fmp4" || protocol == "ws" || strings.Contains(formatName, "webrtc")
 }
 
 func healthy(ctx context.Context, apiURL string) bool {

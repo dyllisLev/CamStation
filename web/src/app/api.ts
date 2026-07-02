@@ -11,6 +11,15 @@ export type StreamStatus = {
   running: boolean;
   apiUrl: string;
   error?: string;
+  streams?: Record<
+    string,
+    {
+      state: string;
+      producerCount: number;
+      consumerCount: number;
+      viewerCount: number;
+    }
+  >;
 };
 
 export type Camera = {

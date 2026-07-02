@@ -190,10 +190,6 @@ func main() {
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool) (http.Handler, error) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/new", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/new/", http.StatusMovedPermanently)
-	})
-	mux.Handle("/new/", http.StripPrefix("/new", mux))
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{

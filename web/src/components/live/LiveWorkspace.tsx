@@ -1,10 +1,11 @@
-import { Expand } from "lucide-react";
+import { Camera as CameraIcon, ChevronLeft, Expand, Eye, LayoutDashboard, PanelRightClose, PanelRightOpen, Save, SaveAll } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode, WheelEvent } from "react";
 import GridLayout from "react-grid-layout/legacy";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import type { Camera, TimelineData } from "../../app/api";
+import { withAppBase } from "../../app/basePath";
 import {
   useCameras,
   useCreateLayout,
@@ -198,12 +199,15 @@ export function LiveWorkspace() {
           ))}
         </select>
         <button className="new-primary" type="button" onClick={saveCurrentLayout}>
+          <Save size={14} />
           {savedFlash ? "저장됨" : "배치 저장"}
         </button>
         <button className="new-ghost" type="button" onClick={saveAsLayout}>
+          <SaveAll size={14} />
           새 이름 저장
         </button>
         <button className="new-ghost" type="button" onClick={() => setSideHidden((value) => !value)}>
+          {sideHidden ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
           {sideHidden ? "우측 패널 보기" : "우측 패널 숨기기"}
         </button>
         <button
@@ -252,7 +256,7 @@ export function LiveWorkspace() {
                   저장된 배치 <em>{Math.max(layouts.length, 1)} profiles</em>
                 </span>
                 <button className="new-icon-button" type="button" onClick={() => setSideHidden(true)} aria-label="우측 패널 숨기기">
-                  -
+                  <ChevronLeft size={14} />
                 </button>
               </div>
               <div className="new-layout-list">
@@ -277,7 +281,8 @@ export function LiveWorkspace() {
             </section>
             <section className="new-panel-card">
               <div className="new-section-title">
-                카메라 상태 <em>{onlineCount} / {rows.length} online</em>
+                <span className="new-title-with-icon"><CameraIcon size={14} /> 카메라 상태</span>
+                <em>{onlineCount} / {rows.length} online</em>
               </div>
               <div className="new-camera-list">
                 {rows.map((camera) => (
@@ -313,17 +318,17 @@ export function LiveWorkspace() {
 function MonitorHeader({ children }: { children: ReactNode }) {
   return (
     <header className="new-command">
-      <a className="new-brand" href="/" aria-label="CamStation 모니터링">
-        <div className="new-brand-mark">CS</div>
+      <a className="new-brand" href={withAppBase("/")} aria-label="CamStation 모니터링">
+        <div className="new-brand-mark"><LayoutDashboard size={16} /></div>
         <div>
           <div className="new-brand-title">CamStation</div>
           <div className="new-mini">HOME MONITOR</div>
         </div>
       </a>
       <nav className="new-nav" aria-label="주요 화면">
-        <a className="new-active" href="/live">라이브</a>
-        <a href="/recordings">녹화</a>
-        <a href="/settings">설정</a>
+        <a className="new-active" href={withAppBase("/live")}>라이브</a>
+        <a href={withAppBase("/recordings")}>녹화</a>
+        <a href={withAppBase("/settings")}>설정</a>
       </nav>
       {children}
     </header>
@@ -466,6 +471,7 @@ function CameraTile({
           onToggleZoom();
         }}
       >
+        <Eye size={13} />
         {zoomed ? "집중 보기 종료" : "집중 보기"}
       </button>
     </article>
