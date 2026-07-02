@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"camstation/internal/cameraprofile"
 	"camstation/internal/cleanup"
 	"camstation/internal/recorder"
 	"camstation/internal/store"
@@ -153,20 +154,34 @@ func TestConsolePagesKeepSeparateRoles(t *testing.T) {
 func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 	t.Parallel()
 
-	source, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "pages", "CamerasPage.tsx"))
-	if err != nil {
-		t.Fatalf("read cameras page: %v", err)
+	paths := []string{
+		filepath.Join("..", "..", "web", "src", "pages", "CamerasPage.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraProfileRegistration.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraSummary.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "ProfileSelectionPanel.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "model.ts"),
 	}
-	content := string(source)
+	var content strings.Builder
+	for _, path := range paths {
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read cameras source %s: %v", path, err)
+		}
+		content.Write(source)
+	}
 
 	for _, required := range []string{
 		"useScanCamera",
+		"usePreviewCamera",
 		"프로파일 스캔",
 		"장비 프로파일",
-		"역할별 스트림",
+		"녹화 프로필",
+		"라이브 프로필",
+		"미리보기",
+		"streamSelections",
 		"VStarcam",
 	} {
-		if !strings.Contains(content, required) {
+		if !strings.Contains(content.String(), required) {
 			t.Fatalf("CamerasPage missing profile registration requirement %q", required)
 		}
 	}
@@ -177,8 +192,37 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 		"Save and probe",
 		"Camera Operations",
 	} {
-		if strings.Contains(content, forbidden) {
+		if strings.Contains(content.String(), forbidden) {
 			t.Fatalf("CamerasPage still contains legacy UI marker %q", forbidden)
 		}
+	}
+}
+
+func TestSelectProfileCandidatesKeepsSelectedRoles(t *testing.T) {
+	t.Parallel()
+
+	profile := cameraprofile.DeviceProfile{
+		Channels: []cameraprofile.ChannelProfile{{
+			Index: 0,
+			Candidates: []cameraprofile.StreamCandidate{
+				{RoleHint: cameraprofile.StreamRoleRecording, Label: "main", URL: "rtsp://camera/main", ProfileToken: "main"},
+				{RoleHint: cameraprofile.StreamRoleLive, Label: "sub", URL: "rtsp://camera/sub", ProfileToken: "sub"},
+			},
+		}},
+	}
+
+	selected := selectProfileCandidates(profile, 0, []cameraStreamSelection{
+		{Role: cameraprofile.StreamRoleRecording, ProfileToken: "main"},
+		{Role: cameraprofile.StreamRoleLive, ProfileToken: "sub"},
+	})
+
+	if len(selected) != 2 {
+		t.Fatalf("selected candidates = %d, want 2", len(selected))
+	}
+	if selected[0].RoleHint != cameraprofile.StreamRoleRecording || selected[0].URL != "rtsp://camera/main" {
+		t.Fatalf("recording selection = %#v", selected[0])
+	}
+	if selected[1].RoleHint != cameraprofile.StreamRoleLive || selected[1].URL != "rtsp://camera/sub" {
+		t.Fatalf("live selection = %#v", selected[1])
 	}
 }

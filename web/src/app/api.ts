@@ -88,6 +88,11 @@ export type StreamCandidate = {
   profileToken?: string;
 };
 
+export type CameraStreamSelection = {
+  role: "recording" | "live" | "snapshot" | string;
+  profileToken: string;
+};
+
 export type DeviceProfile = {
   name?: string;
   host: string;
@@ -212,6 +217,8 @@ export type CreateCamera = {
   onvifPort?: number;
   adapter?: string;
   profile?: DeviceProfile;
+  channelIndex?: number;
+  streamSelections?: CameraStreamSelection[];
 };
 
 export type CameraScanRequest = {
@@ -224,6 +231,17 @@ export type CameraScanRequest = {
   httpPort?: number;
   onvifPort?: number;
   adapter?: string;
+};
+
+export type CameraPreviewRequest = CameraScanRequest & {
+  channelIndex?: number;
+  profileToken: string;
+  role?: "recording" | "live" | "snapshot" | string;
+};
+
+export type CameraPreviewResponse = {
+  streamName: string;
+  expiresAt: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -275,6 +293,11 @@ export const api = {
   streamStatus: () => request<StreamStatus>("/api/streams/status"),
   scanCamera: (camera: CameraScanRequest) =>
     request<{ ok: boolean; profile: DeviceProfile }>("/api/cameras/scan", {
+      method: "POST",
+      body: JSON.stringify(camera),
+    }),
+  previewCamera: (camera: CameraPreviewRequest) =>
+    request<CameraPreviewResponse>("/api/cameras/preview", {
       method: "POST",
       body: JSON.stringify(camera),
     }),

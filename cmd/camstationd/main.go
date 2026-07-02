@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -191,6 +194,7 @@ func main() {
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool) (http.Handler, error) {
 	mux := http.NewServeMux()
+	previews := newPreviewRegistry()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -407,21 +411,34 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "profile": redactDeviceProfile(profile)})
 	})
 
-	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Name      string                          `json:"name"`
-			URL       string                          `json:"url"`
-			Stream    string                          `json:"streamName"`
-			Host      string                          `json:"host"`
-			Username  string                          `json:"username"`
-			Password  string                          `json:"password"`
-			RTSPPort  int                             `json:"rtspPort"`
-			HTTPPort  int                             `json:"httpPort"`
-			ONVIFPort int                             `json:"onvifPort"`
-			Adapter   string                          `json:"adapter"`
-			Profile   cameraprofile.DeviceProfile     `json:"profile"`
-			Streams   []cameraprofile.StreamCandidate `json:"streams"`
+	mux.HandleFunc("POST /api/cameras/preview", func(w http.ResponseWriter, r *http.Request) {
+		var req cameraPreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
 		}
+		profile, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), req.ScanRequest)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		candidates := selectProfileCandidates(profile, req.ChannelIndexValue(), []cameraStreamSelection{{
+			Role:         req.Role,
+			ProfileToken: req.ProfileToken,
+		}})
+		if len(candidates) == 0 || candidates[0].URL == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("preview profile candidate not found"))
+			return
+		}
+		streamName, expiresAt := previews.Put(candidates[0].URL, 10*time.Minute)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"streamName": streamName,
+			"expiresAt":  expiresAt.UTC().Format(time.RFC3339),
+		})
+	})
+
+	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
+		var req cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -458,6 +475,13 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		if len(req.Streams) > 0 {
 			candidates = req.Streams
 		}
+		if len(req.StreamSelections) > 0 {
+			candidates = selectProfileCandidates(profile, req.ChannelIndexValue(), req.StreamSelections)
+			if len(candidates) == 0 {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("selected stream profiles were not found"))
+				return
+			}
+		}
 		primaryURL := req.URL
 		if primaryURL == "" {
 			primaryURL = primaryCandidateURL(candidates)
@@ -489,6 +513,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			RTSPPort:       firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
 			HTTPPort:       firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
 			ONVIFPort:      firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
+			ChannelIndex:   req.ChannelIndex,
 			LastProbeJSON:  toMap(result),
 			LastScanJSON:   profile.LastScan,
 		})
@@ -575,7 +600,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		writeJSON(w, http.StatusOK, streamer.Status(r.Context()))
 	})
 
-	liveProxy, err := go2RTCProxy()
+	liveProxy, err := go2RTCProxy(previews)
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +685,49 @@ func timelineSegments(segments []store.RecordingSegment) []map[string]any {
 	return out
 }
 
+type cameraStreamSelection struct {
+	Role         cameraprofile.StreamRole `json:"role"`
+	ProfileToken string                   `json:"profileToken"`
+}
+
+type cameraCreateRequest struct {
+	Name             string                          `json:"name"`
+	URL              string                          `json:"url"`
+	Stream           string                          `json:"streamName"`
+	Host             string                          `json:"host"`
+	Username         string                          `json:"username"`
+	Password         string                          `json:"password"`
+	RTSPPort         int                             `json:"rtspPort"`
+	HTTPPort         int                             `json:"httpPort"`
+	ONVIFPort        int                             `json:"onvifPort"`
+	Adapter          string                          `json:"adapter"`
+	ChannelIndex     *int                            `json:"channelIndex"`
+	Profile          cameraprofile.DeviceProfile     `json:"profile"`
+	Streams          []cameraprofile.StreamCandidate `json:"streams"`
+	StreamSelections []cameraStreamSelection         `json:"streamSelections"`
+}
+
+func (r cameraCreateRequest) ChannelIndexValue() int {
+	if r.ChannelIndex == nil {
+		return 0
+	}
+	return *r.ChannelIndex
+}
+
+type cameraPreviewRequest struct {
+	cameraprofile.ScanRequest
+	ChannelIndex *int                     `json:"channelIndex"`
+	ProfileToken string                   `json:"profileToken"`
+	Role         cameraprofile.StreamRole `json:"role"`
+}
+
+func (r cameraPreviewRequest) ChannelIndexValue() int {
+	if r.ChannelIndex == nil {
+		return 0
+	}
+	return *r.ChannelIndex
+}
+
 func scanReqHasTarget(req cameraprofile.ScanRequest) bool {
 	return req.Host != "" || req.URL != ""
 }
@@ -688,6 +756,49 @@ func primaryCandidateURL(candidates []cameraprofile.StreamCandidate) string {
 		}
 	}
 	return ""
+}
+
+func selectProfileCandidates(profile cameraprofile.DeviceProfile, channelIndex int, selections []cameraStreamSelection) []cameraprofile.StreamCandidate {
+	channel := profileChannel(profile, channelIndex)
+	if channel == nil {
+		return nil
+	}
+	selected := make([]cameraprofile.StreamCandidate, 0, len(selections))
+	for _, selection := range selections {
+		if selection.ProfileToken == "" {
+			continue
+		}
+		candidate, ok := candidateByProfileToken(channel.Candidates, selection.ProfileToken)
+		if !ok {
+			continue
+		}
+		if selection.Role != "" {
+			candidate.RoleHint = selection.Role
+		}
+		selected = append(selected, candidate)
+	}
+	return selected
+}
+
+func profileChannel(profile cameraprofile.DeviceProfile, channelIndex int) *cameraprofile.ChannelProfile {
+	for i := range profile.Channels {
+		if profile.Channels[i].Index == channelIndex {
+			return &profile.Channels[i]
+		}
+	}
+	if len(profile.Channels) == 0 {
+		return nil
+	}
+	return &profile.Channels[0]
+}
+
+func candidateByProfileToken(candidates []cameraprofile.StreamCandidate, token string) (cameraprofile.StreamCandidate, bool) {
+	for _, candidate := range candidates {
+		if candidate.ProfileToken == token {
+			return candidate, true
+		}
+	}
+	return cameraprofile.StreamCandidate{}, false
 }
 
 func toStoreStreams(base string, candidates []cameraprofile.StreamCandidate, state string) []store.CameraStream {
@@ -819,7 +930,59 @@ func filepathBase(path string) string {
 	return path
 }
 
-func go2RTCProxy() (http.Handler, error) {
+type previewRegistry struct {
+	mu      sync.Mutex
+	streams map[string]previewStream
+}
+
+type previewStream struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+func newPreviewRegistry() *previewRegistry {
+	return &previewRegistry{streams: make(map[string]previewStream)}
+}
+
+func (p *previewRegistry) Put(rawURL string, ttl time.Duration) (string, time.Time) {
+	expiresAt := time.Now().Add(ttl)
+	name := "camstation-preview-" + randomToken()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.streams[name] = previewStream{URL: rawURL, ExpiresAt: expiresAt}
+	p.cleanupLocked(time.Now())
+	return name, expiresAt
+}
+
+func (p *previewRegistry) Resolve(streamName string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	p.cleanupLocked(now)
+	stream, ok := p.streams[streamName]
+	if !ok || now.After(stream.ExpiresAt) {
+		return "", false
+	}
+	return stream.URL, true
+}
+
+func (p *previewRegistry) cleanupLocked(now time.Time) {
+	for name, stream := range p.streams {
+		if now.After(stream.ExpiresAt) {
+			delete(p.streams, name)
+		}
+	}
+}
+
+func randomToken() string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+func go2RTCProxy(previews *previewRegistry) (http.Handler, error) {
 	target, err := url.Parse("http://127.0.0.1:1984")
 	if err != nil {
 		return nil, err
@@ -831,6 +994,11 @@ func go2RTCProxy() (http.Handler, error) {
 		r.Host = target.Host
 		if r.URL.Path == "/api/ws" {
 			r.Header.Set("Origin", target.String())
+			query := r.URL.Query()
+			if rawURL, ok := previews.Resolve(query.Get("src")); ok {
+				query.Set("src", rawURL)
+				r.URL.RawQuery = query.Encode()
+			}
 		}
 	}
 

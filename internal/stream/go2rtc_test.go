@@ -46,3 +46,27 @@ func TestParseStreamRuntimeCountsViewersSeparatelyFromRecorderConsumers(t *testi
 		t.Fatalf("camera-2 state = %q, want idle", camera2.State)
 	}
 }
+
+func TestParseStreamRuntimeRedactsURLStreamNames(t *testing.T) {
+	t.Parallel()
+
+	raw := `{
+		"rtsp://admin:secret@192.168.0.55:10554/tcp/av0_1": {
+			"producers": [{"id": 1, "format_name": "rtsp"}],
+			"consumers": []
+		}
+	}`
+
+	runtime, err := parseStreamRuntime(strings.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse stream runtime: %v", err)
+	}
+	for streamName := range runtime {
+		if strings.Contains(streamName, "secret") || strings.Contains(streamName, "admin:") {
+			t.Fatalf("stream runtime exposed secret in key %q", streamName)
+		}
+		if !strings.Contains(streamName, "redacted:redacted") {
+			t.Fatalf("stream runtime key = %q, want redacted URL", streamName)
+		}
+	}
+}

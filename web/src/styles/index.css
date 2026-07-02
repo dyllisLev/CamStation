@@ -458,6 +458,70 @@ iframe {
   white-space: nowrap;
 }
 
+.new-role-selector {
+  display: grid;
+  grid-template-columns: 0.72fr 1fr 1fr;
+  gap: 10px;
+}
+
+.new-role-selector label {
+  display: grid;
+  gap: 7px;
+}
+
+.new-role-selector label > span,
+.new-inline-preview-head span {
+  color: var(--new-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.new-role-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.new-inline-preview {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #1d303d;
+  border-radius: 7px;
+  background: #071017;
+  padding: 10px;
+}
+
+.new-inline-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.new-inline-preview-head div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.new-inline-preview-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--new-fg);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-profile-preview-player {
+  aspect-ratio: 16 / 9;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #14222d;
+  border-radius: 6px;
+  background: #000;
+}
+
 .new-camera-table td {
   vertical-align: top;
 }
@@ -497,7 +561,8 @@ iframe {
   .new-form-row,
   .new-form-row-ports,
   .new-camera-actions,
-  .new-profile-identity {
+  .new-profile-identity,
+  .new-role-selector {
     grid-template-columns: 1fr;
   }
 

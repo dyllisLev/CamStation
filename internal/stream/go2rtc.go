@@ -211,17 +211,35 @@ func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 				item.ViewerCount++
 			}
 		}
-		switch {
-		case item.ProducerCount > 0:
-			item.State = "running"
-		case item.ConsumerCount > 0:
-			item.State = "starting"
-		default:
-			item.State = "idle"
+		item.State = runtimeState(item.ProducerCount, item.ConsumerCount)
+		publicName := publicStreamName(streamName)
+		if existing, ok := runtime[publicName]; ok {
+			item.ProducerCount += existing.ProducerCount
+			item.ConsumerCount += existing.ConsumerCount
+			item.ViewerCount += existing.ViewerCount
+			item.State = runtimeState(item.ProducerCount, item.ConsumerCount)
 		}
-		runtime[streamName] = item
+		runtime[publicName] = item
 	}
 	return runtime, nil
+}
+
+func publicStreamName(streamName string) string {
+	if strings.Contains(streamName, "://") {
+		return store.RedactURL(streamName)
+	}
+	return streamName
+}
+
+func runtimeState(producerCount int, consumerCount int) string {
+	switch {
+	case producerCount > 0:
+		return "running"
+	case consumerCount > 0:
+		return "starting"
+	default:
+		return "idle"
+	}
 }
 
 func isViewerConsumer(formatName, protocol, userAgent string) bool {

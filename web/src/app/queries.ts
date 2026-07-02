@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type CameraScanRequest, type CreateCamera, type LayoutProfile } from "./api";
+import { api, type CameraPreviewRequest, type CameraScanRequest, type CreateCamera, type LayoutProfile } from "./api";
 
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000 });
@@ -108,6 +108,12 @@ export function useCreateCamera() {
 export function useScanCamera() {
   return useMutation({
     mutationFn: (camera: CameraScanRequest) => api.scanCamera(camera),
+  });
+}
+
+export function usePreviewCamera() {
+  return useMutation({
+    mutationFn: (camera: CameraPreviewRequest) => api.previewCamera(camera),
   });
 }
 
