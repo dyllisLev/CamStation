@@ -526,6 +526,10 @@ iframe {
   vertical-align: top;
 }
 
+.new-camera-selected-row td {
+  background: color-mix(in oklch, var(--new-accent), transparent 93%);
+}
+
 .new-camera-streams {
   display: grid;
   gap: 5px;
@@ -547,6 +551,105 @@ iframe {
   white-space: nowrap;
 }
 
+.new-registered-profile {
+  display: grid;
+  gap: 12px;
+}
+
+.new-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.new-profile-fact {
+  min-height: 68px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid #1d303d;
+  border-radius: 7px;
+  background: #071017;
+  padding: 10px;
+}
+
+.new-profile-fact span,
+.new-registered-stream em {
+  color: var(--new-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.new-profile-fact strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--new-fg);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-registered-streams {
+  display: grid;
+  gap: 8px;
+}
+
+.new-registered-stream {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #1d303d;
+  border-radius: 7px;
+  background: #08131b;
+  padding: 10px;
+}
+
+.new-registered-stream > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.new-registered-stream-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-registered-stream strong {
+  color: var(--new-fg);
+  font-size: 12px;
+}
+
+.new-registered-stream span,
+.new-registered-stream code {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--new-font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-registered-stream span {
+  color: var(--new-fg);
+}
+
+.new-registered-stream code {
+  color: var(--new-muted);
+}
+
+.new-empty-inline {
+  border: 1px solid #1d303d;
+  border-radius: 7px;
+  background: #071017;
+  color: var(--new-muted);
+  padding: 18px;
+  text-align: center;
+  font-size: 12px;
+}
+
 @media (max-width: 1100px) {
   .new-control-grid {
     grid-template-columns: 1fr;
@@ -562,6 +665,7 @@ iframe {
   .new-form-row-ports,
   .new-camera-actions,
   .new-profile-identity,
+  .new-profile-facts,
   .new-role-selector {
     grid-template-columns: 1fr;
   }
@@ -618,6 +722,10 @@ iframe {
 
   .new-camera-table .new-status-pill {
     white-space: nowrap;
+  }
+
+  .new-registered-stream {
+    grid-template-columns: 1fr;
   }
 }
 

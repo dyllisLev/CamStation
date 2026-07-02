@@ -38,6 +38,7 @@ export type Camera = {
   rtspPort?: number;
   httpPort?: number;
   onvifPort?: number;
+  channelIndex?: number;
   lastScan?: Record<string, unknown>;
   streams?: CameraStream[];
   lastProbe?: {

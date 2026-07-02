@@ -157,6 +157,8 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 	paths := []string{
 		filepath.Join("..", "..", "web", "src", "pages", "CamerasPage.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraProfileRegistration.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraTable.tsx"),
+		filepath.Join("..", "..", "web", "src", "pages", "cameras", "RegisteredCameraProfile.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "CameraSummary.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "ProfileSelectionPanel.tsx"),
 		filepath.Join("..", "..", "web", "src", "pages", "cameras", "model.ts"),
@@ -180,6 +182,12 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 		"미리보기",
 		"streamSelections",
 		"VStarcam",
+		"selectedCameraId",
+		"onSelectCamera",
+		"등록된 카메라",
+		"프로파일 설정",
+		"녹화 스트림",
+		"라이브 스트림",
 	} {
 		if !strings.Contains(content.String(), required) {
 			t.Fatalf("CamerasPage missing profile registration requirement %q", required)
