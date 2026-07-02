@@ -71,6 +71,27 @@ func main() {
 	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
 	cleaner := cleanup.New(db, *recordingsDir)
 	maxStorageBytes := int64(*maxStorageGB * 1024 * 1024 * 1024)
+	recoveryResult, recoveryErr := recorder.RecoverInterruptedSegments(ctx, db, "./data/quarantine")
+	recoveryLevel := "info"
+	recoveryMessage := "interrupted recording recovery completed"
+	recoveryDetails := map[string]any{
+		"recovered":   recoveryResult.Recovered,
+		"quarantined": recoveryResult.Quarantined,
+		"failedMoves": recoveryResult.FailedMoves,
+	}
+	if recoveryErr != nil {
+		recoveryLevel = "error"
+		recoveryMessage = "interrupted recording recovery failed"
+		recoveryDetails["error"] = recoveryErr.Error()
+	}
+	if recoveryResult.Recovered > 0 || recoveryErr != nil {
+		_ = db.AppendEvent(ctx, store.Event{
+			Source:  "recorder.recovery",
+			Level:   recoveryLevel,
+			Message: recoveryMessage,
+			Details: recoveryDetails,
+		})
+	}
 	if maxStorageBytes > 0 {
 		runAutomaticCleanup := func() {
 			result, err := cleaner.EnforceMaxBytes(context.Background(), maxStorageBytes)

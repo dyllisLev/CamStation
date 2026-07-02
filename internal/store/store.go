@@ -514,6 +514,19 @@ func (d *DB) MarkRecordingSegmentStatus(ctx context.Context, streamName, filenam
 	return err
 }
 
+func (d *DB) MarkRecordingSegmentStatusByID(ctx context.Context, id int64, status, message string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE recording_segments
+		 SET status = ?, error = ?, updated_at = ?
+		 WHERE id = ?`,
+		status,
+		nullString(message),
+		time.Now().Unix(),
+		id,
+	)
+	return err
+}
+
 func (d *DB) GetRecordingSegment(ctx context.Context, streamName string, tsStart float64) (RecordingSegment, error) {
 	row := d.db.QueryRowContext(ctx,
 		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
@@ -542,6 +555,40 @@ func (d *DB) ListRecordingSegments(ctx context.Context, streamName string, from,
 		 FROM recording_segments
 		 WHERE stream_name = ? AND ts_start >= ? AND ts_start < ?`+statusClause+`
 		 ORDER BY ts_start`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	segments := make([]RecordingSegment, 0)
+	for rows.Next() {
+		segment, err := scanRecordingSegment(rows)
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, segment)
+	}
+	return segments, rows.Err()
+}
+
+func (d *DB) ListRecordingSegmentsByStatus(ctx context.Context, statuses ...string) ([]RecordingSegment, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(statuses))
+	placeholders := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		placeholders = append(placeholders, "?")
+		args = append(args, status)
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
+		        ts_end, file_size, status, error, created_at, updated_at
+		 FROM recording_segments
+		 WHERE status IN (`+strings.Join(placeholders, ",")+`)
+		 ORDER BY ts_start, id`,
 		args...,
 	)
 	if err != nil {

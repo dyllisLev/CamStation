@@ -83,6 +83,11 @@ This document records the current implementation state so the next session can c
   - only completed `ready` segments are deleted
   - active `recording` temp segments are not deletion candidates
   - deleted segments are marked `deleted` in SQLite so timeline queries exclude them
+- Interrupted recording recovery:
+  - startup recovery finds leftover `recording` / `finalizing` segment rows before workers start
+  - temp files from interrupted rows are moved to `data/quarantine/temp/{date}/{stream}/`
+  - interrupted rows are marked `failed` with `interrupted recorder recovered on startup`
+  - a `recorder.recovery` event records recovered/quarantined counts
 - Recordings page at `/recordings`:
   - shows recordings/temp/total storage usage
   - shows automatic cleanup threshold and usage bar
@@ -168,11 +173,10 @@ Browser/Playwright verification performed:
 ## Not Implemented Yet
 
 - Full recording worker supervision lifecycle
-- Recording segment recovery for stale temp/orphan files
 - Motion data API
 - Recording playback page
 - Clip download/export
-- Retention-by-days settings and stale-temp recovery
+- Retention-by-days settings
 - Motion event detection/storage
 - Camera edit/delete/sort/group management
 - ONVIF discovery/reboot/status management
@@ -209,9 +213,9 @@ Browser/Playwright verification performed:
 
 ## Suggested Next Tasks
 
-1. Add recorder recovery for stale temp files, orphaned DB rows, and final files already moved.
-2. Add recording segment list/playback/download APIs and connect the recordings page.
-3. Improve the live aggregate timeline so it loads all camera segments, not only the selected camera.
-4. Add recording settings UI for segment length, auto-start, storage path, and retention.
+1. Add recording segment list/playback/download APIs and connect the recordings page.
+2. Improve the live aggregate timeline so it loads all camera segments, not only the selected camera.
+3. Add recording settings UI for segment length, auto-start, storage path, and retention.
+4. Expand recovery to reconcile final files already moved but not reflected in SQLite.
 5. Expand camera management beyond initial registration.
 6. Add connection state machine and incident grouping before alert delivery.
