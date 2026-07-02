@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"camstation/internal/camera"
+	"camstation/internal/cameraprofile"
 	"camstation/internal/cleanup"
 	"camstation/internal/recorder"
 	"camstation/internal/store"
@@ -267,7 +268,13 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		segments, err := db.ListRecordingSegments(r.Context(), streamName, from, to, "ready", "recording")
+		segmentStreamName := streamName
+		if cameras, err := db.ListCameras(r.Context(), true); err == nil {
+			if camera, ok := cameraByStream(cameras, streamName); ok && camera.RecordingStreamName != "" {
+				segmentStreamName = camera.RecordingStreamName
+			}
+		}
+		segments, err := db.ListRecordingSegments(r.Context(), segmentStreamName, from, to, "ready", "recording")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -386,24 +393,81 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		writeJSON(w, http.StatusOK, result)
 	})
 
+	mux.HandleFunc("POST /api/cameras/scan", func(w http.ResponseWriter, r *http.Request) {
+		var req cameraprofile.ScanRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		profile, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "profile": redactDeviceProfile(profile)})
+	})
+
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
+			Name      string                          `json:"name"`
+			URL       string                          `json:"url"`
+			Stream    string                          `json:"streamName"`
+			Host      string                          `json:"host"`
+			Username  string                          `json:"username"`
+			Password  string                          `json:"password"`
+			RTSPPort  int                             `json:"rtspPort"`
+			HTTPPort  int                             `json:"httpPort"`
+			ONVIFPort int                             `json:"onvifPort"`
+			Adapter   string                          `json:"adapter"`
+			Profile   cameraprofile.DeviceProfile     `json:"profile"`
+			Streams   []cameraprofile.StreamCandidate `json:"streams"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if req.URL == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("url is required"))
-			return
-		}
 		if req.Name == "" {
 			req.Name = "Camera 1"
 		}
+		if req.Stream == "" {
+			req.Stream = streamName(req.Name, 1)
+		}
 
-		result, probeErr := prober.Probe(r.Context(), req.URL, 12*time.Second)
+		profile := req.Profile
+		scanReq := cameraprofile.ScanRequest{
+			Name:      req.Name,
+			URL:       req.URL,
+			Host:      req.Host,
+			Username:  req.Username,
+			Password:  req.Password,
+			RTSPPort:  req.RTSPPort,
+			HTTPPort:  req.HTTPPort,
+			ONVIFPort: req.ONVIFPort,
+			Adapter:   req.Adapter,
+		}
+		if !hasProfileCandidates(profile) && scanReqHasTarget(scanReq) {
+			scanned, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(r.Context(), scanReq)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			profile = scanned
+		}
+
+		candidates := profileCandidates(profile)
+		if len(req.Streams) > 0 {
+			candidates = req.Streams
+		}
+		primaryURL := req.URL
+		if primaryURL == "" {
+			primaryURL = primaryCandidateURL(candidates)
+		}
+		if primaryURL == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("url or stream candidates are required"))
+			return
+		}
+
+		result, probeErr := prober.Probe(r.Context(), primaryURL, 12*time.Second)
 		state := "streaming"
 		level := "info"
 		message := "camera registered"
@@ -414,28 +478,49 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		}
 
 		saved, err := db.UpsertCamera(r.Context(), store.Camera{
-			Name:          req.Name,
-			URL:           req.URL,
-			StreamName:    streamName(req.Name, 1),
-			State:         state,
-			LastProbeJSON: toMap(result),
+			Name:           req.Name,
+			URL:            primaryURL,
+			StreamName:     req.Stream,
+			State:          state,
+			Manufacturer:   profile.Manufacturer,
+			Model:          profile.Model,
+			ProfileAdapter: profile.Adapter,
+			Host:           firstNonEmpty(profile.Host, scanReq.Host),
+			RTSPPort:       firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
+			HTTPPort:       firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
+			ONVIFPort:      firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
+			LastProbeJSON:  toMap(result),
+			LastScanJSON:   profile.LastScan,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		saved.URL = ""
+		if len(candidates) > 0 {
+			if err := db.ReplaceCameraStreams(r.Context(), saved.ID, toStoreStreams(saved.StreamName, candidates, state)); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			saved, err = db.GetCameraByStream(r.Context(), saved.StreamName)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		publicSaved := saved
+		sanitizeCameraSecrets(&publicSaved)
 
 		_ = db.AppendEvent(r.Context(), store.Event{
 			Source:  "camera",
 			Level:   level,
 			Message: message,
 			Details: map[string]any{
-				"name":   saved.Name,
-				"stream": saved.StreamName,
-				"state":  saved.State,
-				"result": result,
-				"error":  errString(probeErr),
+				"name":    saved.Name,
+				"stream":  saved.StreamName,
+				"state":   saved.State,
+				"adapter": saved.ProfileAdapter,
+				"result":  result,
+				"error":   errString(probeErr),
 			},
 		})
 
@@ -453,7 +538,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			})
 			writeJSON(w, http.StatusAccepted, map[string]any{
 				"ok":      probeErr == nil,
-				"camera":  saved,
+				"camera":  publicSaved,
 				"go2rtc":  streamer.Status(r.Context()),
 				"warning": err.Error(),
 			})
@@ -467,7 +552,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		if probeErr != nil {
 			status = http.StatusAccepted
 		}
-		writeJSON(w, status, map[string]any{"ok": probeErr == nil, "camera": saved, "go2rtc": streamer.Status(r.Context())})
+		writeJSON(w, status, map[string]any{"ok": probeErr == nil, "camera": publicSaved, "go2rtc": streamer.Status(r.Context())})
 	})
 
 	mux.HandleFunc("GET /api/streams/status", func(w http.ResponseWriter, r *http.Request) {
@@ -575,10 +660,133 @@ func timelineSegments(segments []store.RecordingSegment) []map[string]any {
 	return out
 }
 
+func scanReqHasTarget(req cameraprofile.ScanRequest) bool {
+	return req.Host != "" || req.URL != ""
+}
+
+func hasProfileCandidates(profile cameraprofile.DeviceProfile) bool {
+	return len(profileCandidates(profile)) > 0
+}
+
+func profileCandidates(profile cameraprofile.DeviceProfile) []cameraprofile.StreamCandidate {
+	var candidates []cameraprofile.StreamCandidate
+	for _, channel := range profile.Channels {
+		candidates = append(candidates, channel.Candidates...)
+	}
+	return candidates
+}
+
+func primaryCandidateURL(candidates []cameraprofile.StreamCandidate) string {
+	for _, candidate := range candidates {
+		if candidate.RoleHint == cameraprofile.StreamRoleRecording && candidate.URL != "" {
+			return candidate.URL
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.URL != "" {
+			return candidate.URL
+		}
+	}
+	return ""
+}
+
+func toStoreStreams(base string, candidates []cameraprofile.StreamCandidate, state string) []store.CameraStream {
+	streams := make([]store.CameraStream, 0, len(candidates))
+	used := map[string]int{}
+	for _, candidate := range candidates {
+		if candidate.URL == "" {
+			continue
+		}
+		role := store.CameraStreamRole(candidate.RoleHint)
+		if role == "" {
+			role = store.CameraStreamRoleRecording
+		}
+		name := roleStreamName(base, role)
+		if used[name] > 0 {
+			used[name]++
+			name = fmt.Sprintf("%s-%d", name, used[name])
+		} else {
+			used[name] = 1
+		}
+		streams = append(streams, store.CameraStream{
+			Role:             role,
+			Label:            candidate.Label,
+			Source:           candidate.Source,
+			URL:              candidate.URL,
+			Go2RTCStreamName: name,
+			Codec:            candidate.Codec,
+			Width:            candidate.Width,
+			Height:           candidate.Height,
+			FPS:              candidate.FPS,
+			BitrateKbps:      candidate.BitrateKbps,
+			ProfileToken:     candidate.ProfileToken,
+			State:            state,
+		})
+	}
+	return streams
+}
+
+func roleStreamName(base string, role store.CameraStreamRole) string {
+	switch role {
+	case store.CameraStreamRoleLive:
+		return base + "-live"
+	case store.CameraStreamRoleSnapshot:
+		return base + "-snapshot"
+	default:
+		return base + "-recording"
+	}
+}
+
+func redactDeviceProfile(profile cameraprofile.DeviceProfile) cameraprofile.DeviceProfile {
+	for channelIndex := range profile.Channels {
+		for candidateIndex := range profile.Channels[channelIndex].Candidates {
+			candidate := &profile.Channels[channelIndex].Candidates[candidateIndex]
+			if candidate.RedactedURL == "" {
+				candidate.RedactedURL = store.RedactURL(candidate.URL)
+			}
+			candidate.URL = ""
+		}
+	}
+	return profile
+}
+
+func sanitizeCameraSecrets(camera *store.Camera) {
+	camera.URL = ""
+	for i := range camera.Streams {
+		if camera.Streams[i].RedactedURL == "" {
+			camera.Streams[i].RedactedURL = store.RedactURL(camera.Streams[i].URL)
+		}
+		camera.Streams[i].URL = ""
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 func cameraByStream(cameras []store.Camera, streamName string) (store.Camera, bool) {
 	for _, camera := range cameras {
-		if camera.StreamName == streamName {
+		if camera.StreamName == streamName || camera.RecordingStreamName == streamName || camera.LiveStreamName == streamName {
 			return camera, true
+		}
+		for _, stream := range camera.Streams {
+			if stream.Go2RTCStreamName == streamName {
+				return camera, true
+			}
 		}
 	}
 	return store.Camera{}, false

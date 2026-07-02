@@ -27,7 +27,19 @@ export type Camera = {
   name: string;
   redactedUrl: string;
   streamName: string;
+  layoutKey?: string;
+  recordingStreamName?: string;
+  liveStreamName?: string;
   state: "streaming" | "offline" | "degraded" | "unknown" | string;
+  manufacturer?: string;
+  model?: string;
+  profileAdapter?: string;
+  host?: string;
+  rtspPort?: number;
+  httpPort?: number;
+  onvifPort?: number;
+  lastScan?: Record<string, unknown>;
+  streams?: CameraStream[];
   lastProbe?: {
     reachable?: boolean;
     duration?: number;
@@ -44,6 +56,61 @@ export type Camera = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+export type CameraStream = {
+  id?: number;
+  camera_id?: number;
+  role: "recording" | "live" | "snapshot" | string;
+  label: string;
+  source: string;
+  redactedUrl?: string;
+  go2rtcStreamName: string;
+  codec?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrateKbps?: number;
+  profileToken?: string;
+  state?: string;
+};
+
+export type StreamCandidate = {
+  roleHint: "recording" | "live" | "snapshot" | string;
+  label: string;
+  source: string;
+  redactedUrl?: string;
+  codec?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrateKbps?: number;
+  profileToken?: string;
+};
+
+export type DeviceProfile = {
+  name?: string;
+  host: string;
+  manufacturer: string;
+  model: string;
+  adapter: string;
+  rtspPort?: number;
+  httpPort?: number;
+  onvifPort?: number;
+  capabilities: {
+    ptz: boolean;
+    audio: boolean;
+    microphone: boolean;
+    speaker: boolean;
+    siren: boolean;
+    maxPresets?: number;
+  };
+  channels: Array<{
+    index: number;
+    label: string;
+    candidates: StreamCandidate[];
+  }>;
+  lastScan?: Record<string, unknown>;
 };
 
 export type LayoutItem = {
@@ -135,7 +202,28 @@ export type CleanupResult = {
 
 export type CreateCamera = {
   name: string;
-  url: string;
+  url?: string;
+  streamName?: string;
+  host?: string;
+  username?: string;
+  password?: string;
+  rtspPort?: number;
+  httpPort?: number;
+  onvifPort?: number;
+  adapter?: string;
+  profile?: DeviceProfile;
+};
+
+export type CameraScanRequest = {
+  name?: string;
+  url?: string;
+  host: string;
+  username?: string;
+  password?: string;
+  rtspPort?: number;
+  httpPort?: number;
+  onvifPort?: number;
+  adapter?: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -185,6 +273,11 @@ export const api = {
       body: JSON.stringify({ maxBytes }),
     }),
   streamStatus: () => request<StreamStatus>("/api/streams/status"),
+  scanCamera: (camera: CameraScanRequest) =>
+    request<{ ok: boolean; profile: DeviceProfile }>("/api/cameras/scan", {
+      method: "POST",
+      body: JSON.stringify(camera),
+    }),
   createCamera: (camera: CreateCamera) =>
     request<{ ok: boolean; camera: Camera; go2rtc: StreamStatus; warning?: string }>(
       "/api/cameras",

@@ -97,6 +97,7 @@ func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int) *Manag
 func (m *Manager) Reconcile(cameras []store.Camera) {
 	wanted := map[string]store.Camera{}
 	for _, camera := range cameras {
+		camera = recordingCamera(camera)
 		if camera.StreamName == "" {
 			continue
 		}
@@ -122,6 +123,7 @@ func (m *Manager) Reconcile(cameras []store.Camera) {
 }
 
 func (m *Manager) Start(camera store.Camera) error {
+	camera = recordingCamera(camera)
 	if camera.StreamName == "" {
 		return fmt.Errorf("camera stream name is required")
 	}
@@ -142,6 +144,13 @@ func (m *Manager) Start(camera store.Camera) error {
 	m.workers[camera.StreamName] = w
 	go w.run()
 	return nil
+}
+
+func recordingCamera(camera store.Camera) store.Camera {
+	if camera.RecordingStreamName != "" {
+		camera.StreamName = camera.RecordingStreamName
+	}
+	return camera
 }
 
 func (m *Manager) Stop(streamName string) {

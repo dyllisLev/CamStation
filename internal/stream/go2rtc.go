@@ -81,6 +81,18 @@ func (g *Go2RTC) WriteConfig(cameras []store.Camera) error {
 		buf.WriteString("  {}\n")
 	} else {
 		for _, camera := range cameras {
+			wroteRoleStream := false
+			for _, stream := range camera.Streams {
+				if stream.URL == "" || stream.Go2RTCStreamName == "" {
+					continue
+				}
+				buf.WriteString(fmt.Sprintf("  %s:\n", yamlKey(stream.Go2RTCStreamName)))
+				buf.WriteString(fmt.Sprintf("    - %s\n", quoteYAML(stream.URL)))
+				wroteRoleStream = true
+			}
+			if wroteRoleStream {
+				continue
+			}
 			if camera.URL == "" || camera.StreamName == "" {
 				continue
 			}

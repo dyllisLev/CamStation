@@ -27,7 +27,7 @@ function ControlRoomDashboard() {
   const runningRecorders = recorderWorkers.filter((worker) => worker.state === "running").length;
   const storageBytes = (storage.data?.recordingsBytes ?? 0) + (storage.data?.tempBytes ?? 0);
   const streamRuntime = streams.data?.streams ?? {};
-  const runningStreams = cameraRows.filter((camera) => streamRuntime[camera.streamName]?.state === "running").length;
+  const runningStreams = cameraRows.filter((camera) => streamRuntime[liveStreamName(camera)]?.state === "running").length;
   const viewerConnections = Object.values(streamRuntime).reduce((sum, stream) => sum + stream.viewerCount, 0);
 
   const summary = [
@@ -82,8 +82,8 @@ function ControlRoomDashboard() {
                 </thead>
                 <tbody>
                   {cameraRows.map((camera) => {
-                    const worker = recorderWorkers.find((item) => item.streamName === camera.streamName);
-                    const runtime = streamRuntime[camera.streamName];
+                    const worker = recorderWorkers.find((item) => item.streamName === recordingStreamName(camera));
+                    const runtime = streamRuntime[liveStreamName(camera)];
                     const streamState = runtime?.state ?? (streams.data?.running ? "idle" : "offline");
                     const viewerCount = runtime?.viewerCount;
                     const recordingState = worker?.state ?? "stopped";
@@ -194,7 +194,7 @@ function ControlRoomDashboard() {
 }
 
 function CameraPreviewModal({ camera, onClose }: { camera: CameraModel; onClose: () => void }) {
-  const { videoRef } = useMseStream(camera.streamName);
+  const { videoRef } = useMseStream(liveStreamName(camera));
 
   return (
     <div className="new-preview-backdrop" role="dialog" aria-modal="true" aria-label={`${camera.name} 미리보기`}>
@@ -212,6 +212,14 @@ function CameraPreviewModal({ camera, onClose }: { camera: CameraModel; onClose:
       </div>
     </div>
   );
+}
+
+function liveStreamName(camera: CameraModel) {
+  return camera.liveStreamName || camera.streamName;
+}
+
+function recordingStreamName(camera: CameraModel) {
+  return camera.recordingStreamName || camera.streamName;
 }
 
 function formatBytes(value: number | undefined) {

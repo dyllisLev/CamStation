@@ -454,7 +454,7 @@ function CameraTile({
       }}
     >
       {camera.state === "streaming" ? (
-        <LiveVideo streamName={camera.streamName} viewport={videoViewport} onViewportChange={onVideoViewportChange} />
+        <LiveVideo streamName={playbackStreamName(camera)} viewport={videoViewport} onViewportChange={onVideoViewportChange} />
       ) : (
         <div className="new-offline-layer">연결 없음</div>
       )}
@@ -591,6 +591,10 @@ function LiveVideo({
       {zoomed && <div className="new-zoom-badge">{currentViewport.scale.toFixed(1)}x</div>}
     </div>
   );
+}
+
+function playbackStreamName(camera: Camera) {
+  return camera.liveStreamName || camera.streamName;
 }
 
 function TwoRowTimeline({
