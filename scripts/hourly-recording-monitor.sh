@@ -24,7 +24,7 @@ run_check() {
     echo
 
     echo "== process =="
-    ps -ef | grep -E 'camstationd|go2rtc|ffmpeg' | grep -v grep || true
+    ps -ef | grep -E '[c]amstationd|[g]o2rtc|[f]fmpeg' || true
     echo
 
     echo "== health =="
@@ -77,7 +77,12 @@ run_check() {
   local health_ok workers_running cleanup_errors stale_temp newest_temp newest_recording summary_status
   health_ok="$(grep -c '"ok":true' "$log_file" || true)"
   workers_running="$(grep -o '"state":"running"' "$log_file" | wc -l | tr -d ' ')"
-  cleanup_errors="$(grep -c 'cleanup failed' "$log_file" || true)"
+  cleanup_errors="$(awk '
+    /== recent recording cleanup events ==/{flag=1; next}
+    /== newest finalized recordings ==/{flag=0}
+    flag && /cleanup failed/{count++}
+    END{print count+0}
+  ' "$log_file")"
   stale_temp="$(awk '/== stale temp segments older than 15 minutes ==/{flag=1; next} /== local rtsp ffprobe ==/{flag=0} flag && /\\.mp4/{count++} END{print count+0}' "$log_file")"
   newest_temp="$(grep '/data/temp/.*\.mp4' "$log_file" | tail -1 | awk '{print $4, $5, $6}')"
   newest_recording="$(grep '/data/recordings/.*\.mp4' "$log_file" | tail -1 | awk '{print $4, $5, $6}')"
