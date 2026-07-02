@@ -220,6 +220,35 @@ func TestCamerasPageUsesProfileRegistrationFlow(t *testing.T) {
 	}
 }
 
+func TestAnnotateCameraRuntimeStatusPrefersRunningRoleStream(t *testing.T) {
+	t.Parallel()
+
+	cameras := []store.Camera{{
+		Name:                "염소장",
+		StreamName:          "goat-yard",
+		RecordingStreamName: "goat-yard-recording",
+		LiveStreamName:      "goat-yard-live",
+		State:               "offline",
+		Streams: []store.CameraStream{{
+			Role:             store.CameraStreamRoleRecording,
+			Go2RTCStreamName: "goat-yard-recording",
+			State:            "offline",
+		}},
+	}}
+
+	annotateCameraRuntimeStatus(cameras, stream.Status{Streams: map[string]stream.StreamRuntime{
+		"goat-yard-recording": {State: "running", ProducerCount: 1, ConsumerCount: 1},
+		"goat-yard-live":      {State: "running", ProducerCount: 1},
+	}})
+
+	if cameras[0].State != "streaming" {
+		t.Fatalf("camera state = %q, want streaming", cameras[0].State)
+	}
+	if cameras[0].Streams[0].State != "running" {
+		t.Fatalf("role stream state = %q, want running", cameras[0].Streams[0].State)
+	}
+}
+
 func TestSelectProfileCandidatesKeepsSelectedRoles(t *testing.T) {
 	t.Parallel()
 

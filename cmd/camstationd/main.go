@@ -219,6 +219,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		annotateCameraRuntimeStatus(cameras, streamer.Status(r.Context()))
 		writeJSON(w, http.StatusOK, cameras)
 	})
 
@@ -1130,6 +1131,35 @@ func sanitizeCameraSecrets(camera *store.Camera) {
 		}
 		camera.Streams[i].URL = ""
 	}
+}
+
+func annotateCameraRuntimeStatus(cameras []store.Camera, status stream.Status) {
+	if len(status.Streams) == 0 {
+		return
+	}
+	for i := range cameras {
+		running := false
+		for j := range cameras[i].Streams {
+			if runtime, ok := status.Streams[cameras[i].Streams[j].Go2RTCStreamName]; ok {
+				cameras[i].Streams[j].State = runtime.State
+				if streamRuntimeRunning(runtime) {
+					running = true
+				}
+			}
+		}
+		for _, streamName := range []string{cameras[i].RecordingStreamName, cameras[i].LiveStreamName, cameras[i].StreamName} {
+			if runtime, ok := status.Streams[streamName]; ok && streamRuntimeRunning(runtime) {
+				running = true
+			}
+		}
+		if running {
+			cameras[i].State = "streaming"
+		}
+	}
+}
+
+func streamRuntimeRunning(runtime stream.StreamRuntime) bool {
+	return runtime.State == "running" && runtime.ProducerCount > 0
 }
 
 func firstNonEmpty(values ...string) string {
