@@ -1,279 +1,94 @@
-# CamStation Agent Guide
+# PROJECT KNOWLEDGE BASE
 
-This file is the working index for future agents. It summarizes the project
-direction, session history, development rules, and verification habits learned
-from the previous Codex sessions in this workspace.
+**Generated:** 2026-07-01T07:32:40Z
+**Commit:** 588ad86
+**Branch:** camstation2-initial
 
-## Read First
+## OVERVIEW
+CamStation 2.0 is a single-daemon CCTV/NVR rewrite: Go `camstationd`, SQLite state, supervised go2rtc/ffmpeg workers, and an embedded React/Vite console. The product is an upgraded monitoring system, not a generic dashboard.
 
-Start every non-trivial task by checking these files:
-
-- `README.md` for the current build/run commands.
-- `docs/07-implementation-status.md` for implemented, partial, and missing work.
-- `docs/00-project-summary.md` for the product goal.
-- `docs/03-camstationd-architecture.md` for the single-daemon architecture.
-- `docs/04-cctv2-test-plan.md` for real-camera test safety rules.
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` for active feature specs/plans.
-
-Before editing, run `git status --short --branch`. This workspace often has
-active user/agent changes. Do not revert unrelated changes.
-
-## Session Index
-
-These are the relevant prior sessions that informed this guide:
-
-- `2026-06-30T01-15-17`, `/root/.ssh`, id `019f1618-47a5-76e1-bc20-2b6ee241d95e`: created SSH key material for the `cctv` host alias.
-- `2026-06-30T01-18-25`, `/root/camstation`, id `019f161b-2356-7cc1-bdf7-7df21e69ab30`: initial environment setup, docs review, Go/React skeleton, live monitoring, recording foundation, real-camera tests, cleanup tests, status documentation.
-- `2026-06-30T01-41-10`, `/root/camstation`, id `019f162f-f8fc-7451-b5c8-668ba9d42648`: GitHub secret review, repository cleanup/publication discussion, Codex OSS application text.
-- `2026-06-30T23-01-37`, `/root/camstation`, id `019f1ac4-40d5-7d11-b9e2-060a3bc55e65`: production/development server confusion, restore check, KST clarification.
-- `2026-06-30T23-15-20`, `/root/camstation`, id `019f1ad0-d0dc-7b72-aa0e-2f355fc42906`: server status check and Superpowers skill installation.
-- `2026-06-30T23-17-36`, `/root/camstation`, id `019f1ad2-e3c8-7401-be94-2c1b7c43e989`: server access debugging, `/new` confusion correction, control room versus live page separation, restart-control removal.
-- `2026-07-01T00-40-30`, `/root/camstation`, id `019f1b1e-c934-7df1-bd18-0463eb98096a`: camera display names versus internal stream names, recording folder/file naming concern.
-- `2026-07-01T00-42-58`, `/root/camstation`, id `019f1b21-0d53-70b1-b559-3c7568edae34`: creation of this guide.
-
-Raw sources live under `/root/.codex/session_index.jsonl` and
-`/root/.codex/sessions/2026/...`. `jq` is installed on this machine for
-structured session inspection.
-
-## Product Direction
-
-CamStation 2.0 is a new implementation, but not a new product category. The
-user wants an upgraded CCTV/NVR monitoring system, not a generic dashboard.
-
-Core direction:
-
-- One `camstationd` daemon controls the web UI, API, SQLite state, go2rtc,
-  ffmpeg recording workers, backup workers, logs, alerts, and diagnostics.
-- The database is the source of truth. go2rtc config, ffmpeg commands, and
-  runtime files are generated artifacts.
-- Operators should use the web UI, not manually edit scattered config files.
-- Real camera tests happen on `cctv2`; camera access is available from this
-  server. Do not disrupt the existing CCTV operation.
-
-## Server And Route Safety
-
-Be very careful with environment identity:
-
-- `cctv` is the legacy/production server and should continue serving the old
-  operating system unless the user explicitly says otherwise.
-- `cctv2` is the development/test target for CamStation 2.0.
-- The current test URL is usually `http://10.0.0.29:18080/`.
-- The current app does not use `/new`. Treat `/new` as a legacy CamStation 1.0
-  reference only when the user explicitly asks to inspect it.
-- Use KST when explaining times to the user if server timestamps matter.
-
-If restarting the development server, use `scripts/camstationctl.sh`; do not
-hand-roll `kill`, `nohup`, `setsid`, `pkill`, or `killall` commands during
-normal development. The control script scopes process management to this
-workspace and follows the fixed lifecycle: status, stop, cleanup managed
-leftovers, start, verify. Do not kill unrelated production services.
-
-## Architecture Map
-
-Important backend locations:
-
-- `cmd/camstationd/main.go`: daemon entrypoint, flags, routes, API wiring,
-  static web serving.
-- `internal/store`: SQLite schema, migrations, camera/layout/recording/event
-  persistence, redaction helpers.
-- `internal/stream`: managed go2rtc process/config/status adapter.
-- `internal/recorder`: ffmpeg recording manager, segment finalization, recovery.
-- `internal/cleanup`: capacity cleanup for finalized recordings.
-- `internal/camera`: ffprobe camera probing and redaction.
-- `scripts/hourly-recording-monitor.sh`: operational recording monitor.
-
-Important frontend locations:
-
-- `web/src/app`: routing, API client, query hooks, i18n, base path helpers.
-- `web/src/layouts/ConsoleLayout.tsx`: left console layout and shell behavior.
-- `web/src/pages/ControlRoomPage.tsx`: control room overview. It should not
-  render `LiveWorkspace` directly.
-- `web/src/pages/LivePage.tsx`: owns the live monitoring workspace.
-- `web/src/components/live/LiveWorkspace.tsx`: live grid, timeline shell,
-  layout persistence, focus view, wheel zoom.
-- `web/src/styles/index.css`: shared monitoring/console styling.
-- `cmd/camstationd/web`: embedded frontend build output generated by Vite.
-
-## UI Rules Learned From Review
-
-The user strongly prefers preserving the CCTV monitoring workflow:
-
-- `/live` is the main monitoring screen with camera tiles, timeline, saved
-  layouts, focus view, fullscreen, and wheel zoom.
-- `/` is the control room dashboard: status overview, recording state, stream
-  state, storage, events, and optional single-camera inner preview. It should
-  not auto-play the full live grid.
-- Keep the existing left sidebar console model. Do not accidentally replace it
-  with top-only navigation.
-- Default UI language is Korean.
-- The visual language should be operational and dense: dark monitoring palette,
-  matching panels/tables/buttons/forms, clear status indicators.
-- Native browser video controls/progress bars should not appear on live tiles.
-  Use the direct MSE video path already in the code.
-- The user's "video zoom" means mouse-wheel zoom on the video content with pan
-  and persisted `videoZoom`, not object-fit changes.
-- `focus view` is separate from video wheel zoom. It enlarges a camera tile
-  in-page and should not open a popup window.
-
-Use existing libraries instead of hand-rolling:
-
-- React 19, React Router 7, TanStack Query, lucide-react.
-- Radix UI components where already used.
-- `react-grid-layout` for live tile move/resize behavior.
-
-## Recording And Streaming Policy
-
-Default policy:
-
-- go2rtc is the local stream hub.
-- Recorder workers should read local go2rtc RTSP inputs:
-
+## STRUCTURE
 ```text
-rtsp://127.0.0.1:8554/{streamName}
+/root/camstation/
+|-- cmd/camstationd/      # daemon entrypoint, API routes, embedded web output
+|-- internal/             # store, stream, recorder, cleanup, camera packages
+|-- web/                  # React/Vite source package
+|-- docs/                 # product docs, status, specs, plans
+|-- scripts/              # dev lifecycle and operational monitoring scripts
+|-- data/                 # runtime DB, recordings, temp, logs; do not commit
+`-- cmd/camstationd/web/  # generated Vite build served by camstationd
 ```
 
-- Do not make direct camera recording the default. It can become a later
-  troubleshooting/special-camera option.
-- Active ffmpeg segments write under `data/temp`.
-- Completed segments move under `data/recordings`.
-- SQLite recording segment metadata drives timelines and cleanup decisions.
-- Capacity cleanup deletes only finalized `ready` segments; never delete active
-  temp recordings.
-- Recording workers do not auto-start unless
-  `CAMSTATION_RECORDING_ENABLED=true` or `-recording-enabled` is set.
+## WHERE TO LOOK
+| Task | Location | Notes |
+|------|----------|-------|
+| Current status | `docs/07-implementation-status.md` | Implemented, partial, verified, and next tasks. |
+| Product goal | `docs/00-project-summary.md` | Single control-center NVR direction. |
+| Architecture | `docs/03-camstationd-architecture.md` | Database source of truth and worker ownership. |
+| Real-camera safety | `docs/04-cctv2-test-plan.md` | `cctv2` only; do not disrupt legacy CCTV. |
+| Daemon/routes | `cmd/camstationd/main.go` | Startup, API wiring, static serving, proxy guard. |
+| Backend state | `internal/store/store.go` | SQLite schema and persistence contracts. |
+| Streaming | `internal/stream/go2rtc.go` | Local go2rtc config/process/status adapter. |
+| Recording | `internal/recorder/` | ffmpeg workers, finalization, recovery, names. |
+| Cleanup | `internal/cleanup/` | Capacity cleanup for finalized recordings only. |
+| Frontend API | `web/src/app/api.ts`, `web/src/app/queries.ts` | Typed fetches and TanStack Query hooks. |
+| Live UI | `web/src/components/live/LiveWorkspace.tsx` | Grid, timeline, focus view, wheel zoom. |
+| Console shell | `web/src/layouts/ConsoleLayout.tsx` | Left sidebar shell and `/live` bypass. |
+| Active specs/plans | `docs/superpowers/specs/`, `docs/superpowers/plans/` | Required for larger feature work. |
+| Runtime lifecycle | `scripts/camstationctl.sh` | Use this for status/start/stop/restart/verify. |
 
-Camera identity rule:
+## CODE MAP
+LSP servers were unavailable and no codegraph tool was exposed during generation; refs are static hotspots from source and ast-grep inspection.
 
-- `streamName` is an internal stable key for go2rtc, workers, API lookup, and
-  layout IDs.
-- `name` is the human-facing camera name.
-- Do not expose `streamName` as the primary user-facing camera label when
-  `name` is available.
-- Per the latest user correction, recording folder/file naming should preserve
-  a recognizable camera name so files remain understandable outside the app.
+| Symbol | Type | Location | Refs | Role |
+|--------|------|----------|------|------|
+| `main` | Go func | `cmd/camstationd/main.go` | hotspot | Flags, DB, recovery, workers, server lifecycle. |
+| `routes` | Go func | `cmd/camstationd/main.go` | hotspot | HTTP API and SPA route registration. |
+| `go2RTCProxy` | Go func | `cmd/camstationd/main.go` | hotspot | Allows only safe `/player/` go2rtc paths. |
+| `store.DB` | Go type | `internal/store/store.go` | hotspot | SQLite source of truth. |
+| `Go2RTC` | Go type | `internal/stream/go2rtc.go` | hotspot | go2rtc config, process, runtime status. |
+| `recorder.Manager` | Go type | `internal/recorder/recorder.go` | hotspot | ffmpeg worker and segment lifecycle. |
+| `cleanup.Cleaner` | Go type | `internal/cleanup/cleanup.go` | focused | Deletes old ready segments within recordings dir. |
+| `api` | TS object | `web/src/app/api.ts` | hotspot | Frontend API contract. |
+| `use*` query hooks | TS funcs | `web/src/app/queries.ts` | hotspot | Cache refresh and mutation invalidation. |
+| `ConsoleLayout` | React component | `web/src/layouts/ConsoleLayout.tsx` | hotspot | Console navigation and `/live` shell behavior. |
+| `LiveWorkspace` | React component | `web/src/components/live/LiveWorkspace.tsx` | hotspot | Main monitoring surface and persisted layout state. |
+| `useMseStream` | React hook | `web/src/components/live/useMseStream.ts` | focused | Direct MSE playback path without native controls. |
 
-## Security Rules
+## CONVENTIONS
+- Before editing, run `git status --short --branch`; this worktree often has active user/agent changes.
+- Database rows are canonical. Generated go2rtc config, ffmpeg commands, embedded assets, and runtime files are derived.
+- Default UI language is Korean. Preserve the dense dark monitoring console and left sidebar model outside `/live`.
+- `/` is the control room dashboard. `/live` is the main monitoring workspace.
+- `streamName` is the stable internal key; `name` is the human-facing camera label.
+- Recorder workers read `rtsp://127.0.0.1:8554/{streamName}` by default.
+- Frontend source changes must be built into `cmd/camstationd/web` when the embedded daemon should serve them.
+- Larger features follow `docs/superpowers/specs/` then `docs/superpowers/plans/`, then implementation and applied verification.
 
-This project handles camera credentials, RTSP URLs, webhook secrets, local
-network details, and recordings. Treat secret hygiene as a product feature.
+## ANTI-PATTERNS
+- Do not expose raw go2rtc APIs or camera URLs through public UI/API responses.
+- Do not bind go2rtc API/RTSP listeners outside `127.0.0.1` without an explicit reviewed reason.
+- Do not edit or commit `.env`, `*.secret`, DB files, `data/`, logs, recordings, or generated `config/go2rtc.yaml`.
+- Do not manage the dev daemon with ad hoc `kill`, `pkill`, `killall`, `nohup`, or manual `setsid`; use `scripts/camstationctl.sh`.
+- Do not treat `/new` as a current route; it is legacy CamStation 1.0 context only.
+- Do not merge the full live grid into the control room page.
+- Do not replace video wheel zoom with `object-fit` changes; wheel zoom is transform + pan + persisted `videoZoom`.
+- Do not delete active temp/recording segments during cleanup.
 
-- Never commit `.env`, `*.secret`, DB files, generated `config/go2rtc.yaml`,
-  runtime logs, or recording data.
-- Redact RTSP credentials in logs, API responses, events, docs, and examples.
-- Never expose raw go2rtc API output to the public web UI/API; it can include
-  camera URLs.
-- CamStation should proxy only the minimal safe player paths under `/player/`.
-- Keep go2rtc API/RTSP listeners bound to `127.0.0.1` unless there is an
-  explicit, reviewed reason to change that.
-- Before making a public release or pushing sensitive changes, inspect GitHub
-  history and tracked files for secrets, not just local ignored files.
-
-## Development Workflow
-
-For larger features, follow the documented spec-plan pattern already used in
-`docs/superpowers/`:
-
-- Follow the user's required development sequence: analysis, design,
-  development, then testing. Testing means real applied-behavior verification,
-  not only "build passes".
-- Clarify the product behavior first.
-- Write or update a design spec in `docs/superpowers/specs/`.
-- Write or update an implementation plan in `docs/superpowers/plans/`.
-- Prefer TDD for behavior changes and regression tests for user corrections.
-- Keep changes scoped to the relevant backend/frontend modules.
-- Update `docs/07-implementation-status.md` when implemented state or next
-  tasks change.
-
-For small fixes, still inspect the surrounding code and add a focused
-regression test when the bug is likely to recur.
-
-## Build And Verification
-
-Common commands:
-
+## COMMANDS
 ```bash
 make test
+go test ./...
 cd web && npm run lint
 cd web && npm run build
-go test ./...
 go build -o camstationd ./cmd/camstationd
-```
-
-Code edits are not complete until they are applied to the artifact/runtime the
-user is using. After backend changes, run `go build -o camstationd
-./cmd/camstationd`; if a development daemon is already running, restart that
-daemon with the same flags and verify the live API/process state reflects the
-new behavior. After frontend changes, run the Vite build and verify the
-embedded `cmd/camstationd/web` assets are the ones being served. Do not claim a
-runtime behavior was tested from source-level tests alone.
-
-Build tests are not a substitute for actual applied confirmation. For every
-behavior change, define and run at least one verification that proves the
-changed behavior in the running system or an equivalent executable environment:
-API response, process command line, generated file/path, database row, UI smoke
-check, log line, or another concrete observable. Report that evidence to the
-user.
-
-When frontend source changes, run `cd web && npm run build` and include the
-updated `cmd/camstationd/web` assets if the change is meant to run in the
-embedded daemon.
-
-Local/dev run command:
-
-```bash
-scripts/camstationctl.sh start
-```
-
-Recording test run commonly uses:
-
-```bash
-scripts/camstationctl.sh restart
-```
-
-Development daemon lifecycle:
-
-```bash
 scripts/camstationctl.sh status
-scripts/camstationctl.sh stop
-scripts/camstationctl.sh start
 scripts/camstationctl.sh restart
 scripts/camstationctl.sh verify
 ```
 
-The script starts `camstationd` with recording enabled, 5-minute segments, and
-the current test storage cap unless overridden through environment variables.
-It treats `go2rtc` and `ffmpeg` as `camstationd`-managed children and only
-cleans up leftovers that match this workspace's config, local RTSP input, and
-recording paths.
-
-Operational smoke checks:
-
-```bash
-curl http://127.0.0.1:18080/api/health
-curl http://127.0.0.1:18080/api/events
-curl http://127.0.0.1:18080/api/recorders/status
-curl http://127.0.0.1:18080/api/recordings/storage
-```
-
-Real-camera verification should go beyond "build passes":
-
-- Confirm `/live` plays camera video.
-- Confirm native video controls do not appear.
-- Confirm recording segments are written to temp, finalized into recordings,
-  and are playable with `ffprobe`.
-- Confirm live streaming stays healthy during 5-minute segment rollover tests.
-- Confirm all intended recorder workers stay running.
-- Confirm cleanup thresholds delete oldest ready segments without touching
-  active temp segments.
-- Check logs after runtime tests and separate old restart noise from new errors.
-
-## Current Runtime Notes
-
-- The branch is `camstation2-initial`.
-- The repository has had active uncommitted work during recent sessions; inspect
-  before editing and avoid overwriting it.
-- The latest documented runtime monitoring page is
-  `http://10.0.0.29:18080/live`.
-- Use `scripts/hourly-recording-monitor.sh` and files under
-  `data/runtime-logs` or `data/monitoring` only as runtime diagnostics; do not
-  commit runtime output.
+## NOTES
+- `cctv` is legacy/production. `cctv2` is the development/test target, usually at `http://10.0.0.29:18080/`.
+- Use KST when explaining server/runtime timestamps that matter to the user.
+- Source-only success is not enough for behavior changes. Verify through the matching surface: API response, process command line, generated file, DB row, UI smoke check, or log evidence.
+- Runtime diagnostics live under `data/runtime-logs` and `data/monitoring`; inspect them, do not commit them.
