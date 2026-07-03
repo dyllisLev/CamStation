@@ -101,6 +101,9 @@ export function RecordingsPage() {
                     <span>{seg.filename}</span>
                     {duration && <span>{formatDuration(duration)}</span>}
                     {seg.file_size && <span>{formatSize(seg.file_size)}</span>}
+                    {seg.backed_up === 1 && (
+                      <span style={{ color: '#a78bfa', fontSize: 10 }}>☁️ Drive</span>
+                    )}
                   </div>
                 </div>
                 <a

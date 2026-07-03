@@ -75,6 +75,7 @@ export interface RecordingSegment {
   ts_start: number;
   ts_end: number | null;
   file_size: number | null;
+  backed_up?: number;
 }
 
 export interface MotionEvent {

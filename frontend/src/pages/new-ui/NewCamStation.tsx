@@ -720,7 +720,7 @@ function NewRecordingsPage({ cameras, page, onNavigate }: { cameras: Camera[]; p
                   className={`new-segment ${segment.filename === activeFilename ? 'new-active-row' : ''}`}
                   onClick={() => setSelectedFilename(segment.filename)}
                 >
-                  <span className="new-seg-top"><strong>{formatClock(segment.ts_start)}{segment.ts_end ? ` - ${formatClock(segment.ts_end)}` : ''}</strong><em>{formatStorageSize(segment.file_size)}</em></span>
+                  <span className="new-seg-top"><strong>{formatClock(segment.ts_start)}{segment.ts_end ? ` - ${formatClock(segment.ts_end)}` : ''}</strong><em>{formatStorageSize(segment.file_size)}{segment.backed_up === 1 ? ' · ☁️' : ''}</em></span>
                   <span className="new-seg-meta"><span>{duration > 0 ? formatDuration(duration) : '진행 중'}</span><span>{segment.filename}</span></span>
                 </button>
               )
@@ -739,6 +739,9 @@ function NewRecordingsPage({ cameras, page, onNavigate }: { cameras: Camera[]; p
             <div className="new-player-meta">
               <strong>{selectedCamera?.name ?? '카메라 없음'}</strong>
               <span>{selectedSegment ? `${formatClock(selectedSegment.ts_start)} · ${selectedSegment.filename}` : '선택된 세그먼트 없음'}</span>
+              {selectedSegment?.backed_up === 1 && (
+                <span style={{ color: '#a78bfa', fontSize: 12 }}>☁️ Drive에서 불러오는 중...</span>
+              )}
             </div>
           </div>
           <section className="new-timeline-card">
