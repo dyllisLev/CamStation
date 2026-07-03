@@ -1,44 +1,49 @@
 # BACKEND PACKAGE GUIDE
 
 ## OVERVIEW
-`internal/` owns the reusable backend packages behind CamStation state, streaming, recording, cleanup, and probing.
+`internal/` owns the reusable backend packages behind CamStation state, go2rtc, ffmpeg recording, cleanup, backup, camera probing, and profile matching.
 
 ## STRUCTURE
 ```text
 internal/
-|-- store/     # SQLite schema, migrations, persistence, redaction on rows
-|-- stream/    # go2rtc config/process/status adapter
-|-- recorder/  # ffmpeg workers, segment lifecycle, recovery
-|-- cleanup/   # safe capacity cleanup for finalized recordings
-`-- camera/    # ffprobe adapter and credential redaction helpers
+|-- store/          # SQLite schema, migrations, persistence, jobs, redaction
+|-- backup/         # rclone job runner, validation, cancel/retry, scheduling logic
+|-- recorder/       # ffmpeg workers, segment lifecycle, interrupted recovery
+|-- cleanup/        # safe capacity cleanup for finalized recordings
+|-- stream/         # go2rtc config/process/status adapter
+|-- camera/         # ffprobe adapter and credential redaction helpers
+`-- cameraprofile/  # profile parsing and camera-type matching
 ```
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Schema or API data shape | `store/store.go` | Update migrations and scan helpers together. |
-| Camera list redaction | `store/store.go`, `camera/probe.go` | `includeSecrets` boundaries matter. |
-| go2rtc config/status | `stream/go2rtc.go` | Keeps API/RTSP local and parses runtime consumers. |
-| Recorder input/segments | `recorder/recorder.go` | Uses local go2rtc RTSP and moves temp to final. |
-| Interrupted recording repair | `recorder/recovery.go` | Quarantines leftover temp files on startup. |
-| Retention/capacity | `cleanup/cleanup.go` | Deletes only safe finalized segment paths. |
+| Schema or data shape | `store/` | Update schema, models, scans, and tests together. |
+| Job/settings state | `store/jobs*.go`, `store/settings*.go` | Public settings mask secrets; delivery helpers may load private values. |
+| Backup execution | `backup/runner.go`, `backup/request.go`, `backup/scheduler.go` | rclone copy, target/prefix validation, due calculation. |
+| Backup deletion safety | `backup/runner.go`, `cleanup/cleanup.go` | Successful backup marks ready segments `backed_up`; cleanup can require it. |
+| Recorder workers | `recorder/recorder.go` | Local go2rtc RTSP input, temp/final paths, segment close hook. |
+| Recovery/quarantine | `recorder/recovery.go` | Startup repair of interrupted temp files. |
+| Stream runtime | `stream/go2rtc.go` | Local listeners, generated config, runtime consumers. |
+| Camera probing | `camera/probe.go`, `cameraprofile/profile.go` | Never leak credentials in public output. |
 
 ## CONVENTIONS
-- `store.DB` is the package boundary for SQLite; keep SQL schema and Go structs aligned.
-- Raw camera URLs may be loaded for internal process setup, but public responses should use redacted URLs.
-- Recorder status and worker keys use `streamName`; archive/final file names should prefer the camera `name` when available.
-- Segment rows move through `recording`, `finalizing`, `ready`, `failed`, or `deleted`; cleanup should only target `ready`.
-- `recorder.Manager.SetAfterSegmentClosed` is the hook for cleanup after finalization.
-- Prefer table-driven Go tests with `t.TempDir()` and real SQLite migrations for persistence/filesystem behavior.
+- `store.DB` is the persistence boundary; tests should use real SQLite migrations and `t.TempDir()`.
+- Raw camera URLs are for internal process setup only. Public responses should expose redacted or derived values.
+- Segment states are meaningful: `recording`, `finalizing`, `ready`, `failed`, `deleted`; backup state is separate.
+- Cleanup should only consider finalized safe paths and must respect unbacked protection when enabled.
+- Async jobs should use fakes and explicit wait helpers in tests, not blind sleeps.
+- Prefer small domain files over rebuilding monolithic package files.
 
 ## ANTI-PATTERNS
-- Do not add a second credential-redaction implementation without a strong reason.
-- Do not record directly from camera URLs as the default path.
-- Do not delete paths unless they pass cleanup safety checks against the recordings root.
-- Do not silently change segment status semantics; timeline and cleanup depend on them.
+- Do not add another credential-redaction path without tests proving no leakage.
+- Do not record directly from raw camera URLs as the default path.
+- Do not delete paths outside the recordings root or active temp/finalizing files.
+- Do not silently change segment or job state semantics; UI and cleanup depend on them.
+- Do not put HTTP handler logic into `internal/`; keep it transport-agnostic.
 
 ## TESTS
 ```bash
 go test ./internal/...
-go test ./internal/recorder ./internal/cleanup ./internal/stream ./internal/camera
+go test ./internal/backup ./internal/cleanup ./internal/recorder ./internal/store
 ```
