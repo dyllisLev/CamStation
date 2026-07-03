@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type CameraPreviewRequest, type CameraScanRequest, type CreateCamera, type LayoutProfile, type UpdateCamera } from "./api";
 
+export * from "./backupQueries";
+export * from "./eventsIncidentsQueries";
+export * from "./recordingsQueries";
+export * from "./settingsJobsQueries";
+export * from "./streamsViewersSystemQueries";
+
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000 });
 }
@@ -168,7 +174,11 @@ export function useRestartStreams() {
   return useMutation({
     mutationFn: api.restartStreams,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["stream-status"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["streams", "status"] }),
+        queryClient.invalidateQueries({ queryKey: ["events"] }),
+      ]);
     },
   });
 }

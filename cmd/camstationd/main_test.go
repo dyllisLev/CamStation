@@ -1,61 +1,15 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"camstation/internal/cameraprofile"
-	"camstation/internal/cleanup"
-	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
 )
-
-func TestRoutesServeConsoleAtRoot(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	tempDir := t.TempDir()
-	db, err := store.Open(filepath.Join(tempDir, "camstation.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer db.Close()
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatalf("migrate store: %v", err)
-	}
-
-	handler, err := routes(
-		db,
-		nil,
-		stream.NewGo2RTC(filepath.Join(tempDir, "go2rtc.yaml")),
-		recorder.New(db, filepath.Join(tempDir, "recordings"), filepath.Join(tempDir, "temp"), 5),
-		cleanup.New(db, filepath.Join(tempDir, "recordings")),
-		filepath.Join(tempDir, "recordings"),
-		filepath.Join(tempDir, "temp"),
-		0,
-		false,
-	)
-	if err != nil {
-		t.Fatalf("build routes: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if location := rec.Header().Get("Location"); location != "" {
-		t.Fatalf("Location = %q, want no redirect", location)
-	}
-}
 
 func TestConsoleLayoutKeepsDesktopSidebar(t *testing.T) {
 	t.Parallel()

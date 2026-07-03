@@ -29,10 +29,11 @@ function ControlRoomDashboard() {
   const streamRuntime = streams.data?.streams ?? {};
   const runningStreams = cameraRows.filter((camera) => streamRuntime[liveStreamName(camera)]?.state === "running").length;
   const viewerConnections = Object.values(streamRuntime).reduce((sum, stream) => sum + stream.viewerCount, 0);
+  const streamManagerState = streams.data?.running ? "go2rtc running" : "go2rtc offline";
 
   const summary = [
     { label: "카메라", value: `${online}/${cameraRows.length}`, detail: "온라인 / 전체", icon: Camera },
-    { label: "스트림 상태", value: `${runningStreams}/${cameraRows.length}`, detail: streams.data?.apiUrl ?? "-", icon: RadioTower },
+    { label: "스트림 상태", value: `${runningStreams}/${cameraRows.length}`, detail: streamManagerState, icon: RadioTower },
     { label: "녹화", value: `${runningRecorders}/${recorderWorkers.length}`, detail: "실행 워커", icon: Video },
     { label: "시청 연결", value: String(viewerConnections), detail: "브라우저/뷰어 연결", icon: Users },
     {
@@ -164,8 +165,8 @@ function ControlRoomDashboard() {
                 <em>{streams.data?.running ? "running" : "offline"}</em>
               </div>
               <div className="new-control-row">
-                <span>API</span>
-                <em>{streams.data?.apiUrl ?? "-"}</em>
+                <span>Streams</span>
+                <em>{Object.keys(streamRuntime).length}</em>
               </div>
             </div>
           </section>

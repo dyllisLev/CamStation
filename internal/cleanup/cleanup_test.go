@@ -15,6 +15,7 @@ func TestEnforceMaxBytesDeletesOldestReadySegments(t *testing.T) {
 	root := t.TempDir()
 	db := openTestDB(t, root)
 	recordingsDir := filepath.Join(root, "recordings")
+	disableUnbackedProtection(t, ctx, db)
 
 	oldPath := addReadySegment(t, ctx, db, recordingsDir, "cam1", "2026-06-30_10-00.mp4", 100, []byte("aaaa"))
 	newPath := addReadySegment(t, ctx, db, recordingsDir, "cam1", "2026-06-30_10-05.mp4", 200, []byte("bbbb"))
@@ -52,6 +53,7 @@ func TestEnforceMaxBytesDoesNotDeleteRecordingSegments(t *testing.T) {
 	root := t.TempDir()
 	db := openTestDB(t, root)
 	recordingsDir := filepath.Join(root, "recordings")
+	disableUnbackedProtection(t, ctx, db)
 
 	_ = addReadySegment(t, ctx, db, recordingsDir, "cam1", "2026-06-30_10-00.mp4", 100, []byte("aaaa"))
 	activePath := filepath.Join(recordingsDir, "cam1", "2026-06-30", "2026-06-30_10-05.mp4")
@@ -76,6 +78,38 @@ func TestEnforceMaxBytesDoesNotDeleteRecordingSegments(t *testing.T) {
 	}
 	if _, err := os.Stat(activePath); err != nil {
 		t.Fatalf("recording segment should remain: %v", err)
+	}
+}
+
+func TestEnforceMaxBytesProtectsUnbackedSegmentsWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	db := openTestDB(t, root)
+	recordingsDir := filepath.Join(root, "recordings")
+	if err := db.UpdateBackupSettings(ctx, store.BackupSettings{
+		Enabled:                 true,
+		Target:                  "gdrive:/cctvTest",
+		RetentionDays:           30,
+		ScheduleIntervalMinutes: 1440,
+		ProtectUnbacked:         true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	segmentPath := addReadySegment(t, ctx, db, recordingsDir, "cam1", "2026-06-30_10-00.mp4", 100, []byte("aaaa"))
+
+	result, err := New(db, recordingsDir).EnforceMaxBytes(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Deleted) != 0 {
+		t.Fatalf("deleted = %#v, want no deletion before backup", result.Deleted)
+	}
+	if result.AfterBytes != result.BeforeBytes {
+		t.Fatalf("bytes changed before backup: %d -> %d", result.BeforeBytes, result.AfterBytes)
+	}
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("unbacked segment should remain: %v", err)
 	}
 }
 
@@ -119,6 +153,19 @@ func writeFile(t *testing.T, path string, data []byte) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func disableUnbackedProtection(t *testing.T, ctx context.Context, db *store.DB) {
+	t.Helper()
+	if err := db.UpdateBackupSettings(ctx, store.BackupSettings{
+		Enabled:                 true,
+		Target:                  "gdrive:/cctvTest",
+		RetentionDays:           30,
+		ScheduleIntervalMinutes: 1440,
+		ProtectUnbacked:         false,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

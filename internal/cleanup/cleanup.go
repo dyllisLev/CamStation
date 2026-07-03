@@ -13,7 +13,8 @@ import (
 )
 
 type Store interface {
-	ListDeletableRecordingSegments(ctx context.Context) ([]store.RecordingSegment, error)
+	GetSettings(ctx context.Context) (store.Settings, error)
+	ListDeletableRecordingSegments(ctx context.Context, requireBackedUp bool) ([]store.RecordingSegment, error)
 	MarkRecordingSegmentDeleted(ctx context.Context, id int64, reason string) error
 }
 
@@ -60,7 +61,11 @@ func (c *Cleaner) EnforceMaxBytes(ctx context.Context, maxBytes int64) (Result, 
 		return result, nil
 	}
 
-	segments, err := c.db.ListDeletableRecordingSegments(ctx)
+	settings, err := c.db.GetSettings(ctx)
+	if err != nil {
+		return result, err
+	}
+	segments, err := c.db.ListDeletableRecordingSegments(ctx, settings.Backup.ProtectUnbacked)
 	if err != nil {
 		return result, err
 	}
