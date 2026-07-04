@@ -76,7 +76,7 @@ OLD_GO2RTC_HASH=$(md5sum config/go2rtc.yaml 2>/dev/null | cut -d' ' -f1)
 GO2RTC_PRESERVE=$(mktemp)
 cp config/go2rtc.yaml "$GO2RTC_PRESERVE" 2>/dev/null || true
 
-git checkout origin/main -- backend/ config/ deploy/ 2>&1 | tee -a "$LOG_FILE"
+git checkout origin/main -- backend/ deploy/ 2>&1 | tee -a "$LOG_FILE"
 if [ -s "$GO2RTC_PRESERVE" ]; then
   cp "$GO2RTC_PRESERVE" config/go2rtc.yaml
   log "Preserved local go2rtc camera config"
