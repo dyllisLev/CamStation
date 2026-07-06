@@ -50,10 +50,11 @@ func profileWithCandidates(profile cameraprofile.DeviceProfile, candidates []cam
 }
 
 func profileWithTemplateChannels(profile cameraprofile.DeviceProfile, template store.CameraProfileTemplate, req cameraCreateRequest) cameraprofile.DeviceProfile {
-	if len(profile.Channels) > 0 {
+	channels := templateChannels(template, req)
+	if len(channels) == 0 {
 		return profile
 	}
-	profile.Channels = templateChannels(template, req)
+	profile.Channels = channels
 	return profile
 }
 

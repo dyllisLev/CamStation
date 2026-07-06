@@ -18,6 +18,10 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		if err := validateCameraMutationTargets(r.Context(), req); err != nil {
+			writeSafeError(w, http.StatusBadRequest, err)
+			return
+		}
 		saved, result, probeErr, err := persistCameraProfile(r.Context(), d.db, d.prober, req, "")
 		if err != nil {
 			if errors.Is(err, errBadCameraProfileRequest) {
@@ -89,6 +93,10 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 		var req cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := validateCameraMutationTargets(r.Context(), req); err != nil {
+			writeSafeError(w, http.StatusBadRequest, err)
 			return
 		}
 		req = cameraUpdateRequest(existing, req)

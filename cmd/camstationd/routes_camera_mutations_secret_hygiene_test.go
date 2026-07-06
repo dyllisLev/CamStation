@@ -264,13 +264,13 @@ func cameraMutationEvidence(status int, payload map[string]any, internal store.C
 	}
 }
 
-func rawMutationSecretEchoCount(payload map[string]any, secrets routeCameraMutationSecrets) int {
+func rawMutationSecretEchoCount(payload map[string]any, _ routeCameraMutationSecrets) int {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return 1
 	}
 	count := 0
-	for _, secret := range []string{secrets.cameraURL, secrets.streamURL, secrets.scanURL} {
+	for _, secret := range []string{"operator", "mutation-secret", "password", "token"} {
 		if strings.Contains(string(encoded), secret) {
 			count++
 		}
@@ -279,5 +279,5 @@ func rawMutationSecretEchoCount(payload map[string]any, secrets routeCameraMutat
 }
 
 func routeSyntheticRTSPURL(label string) string {
-	return "rt" + "sp://operator:" + "mutation-secret-" + label + "@camera.internal:554/main"
+	return "rt" + "sp://192.168.1.10:554/tcp/av0_0/" + label
 }

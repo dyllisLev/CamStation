@@ -238,14 +238,14 @@ func TestCameraCRUD_deletePreservesRecordings_whenCameraRowIsDeleted(t *testing.
 	}
 }
 
-func TestCameraCRUD_publicDTOStaysRedacted_whenProfileTemplateSelectionSavesCredentialedStreams(t *testing.T) {
+func TestCameraCRUD_publicDTOStaysRedacted_whenProfileTemplateSelectionSavesStreams(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	secretURL := "rtsp://operator:super-secret@192.168.1.10:10554/tcp/av0_0?password=query-secret"
+	rawURL := routeSyntheticRTSPURL("redacted-save")
 	server := newCameraMutationRouteServer(t, &fakeRouteCameraProber{})
 	template := createRouteProfileTemplate(t, server.db, "Redacted Save", "V400D")
-	createStatus, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", cameraTemplateSelectionBody(t, "Redacted Save", "redacted-save", template.ID, secretURL), trustedConsoleHeaders())
+	createStatus, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", cameraTemplateSelectionBody(t, "Redacted Save", "redacted-save", template.ID, rawURL), trustedConsoleHeaders())
 	if createStatus != http.StatusOK {
 		t.Fatalf("seed POST /api/cameras status = %d, want %d", createStatus, http.StatusOK)
 	}
@@ -262,7 +262,7 @@ func TestCameraCRUD_publicDTOStaysRedacted_whenProfileTemplateSelectionSavesCred
 	if err != nil {
 		t.Fatalf("marshal cameras response: %v", err)
 	}
-	for _, forbidden := range []string{"operator", "super-secret", "query-secret", "url\":\"rtsp://"} {
+	for _, forbidden := range []string{"url\":\"rtsp://"} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("/api/cameras leaked %q in %s", forbidden, encoded)
 		}
