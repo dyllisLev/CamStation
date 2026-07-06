@@ -97,6 +97,17 @@ func TestCameraManagementSecurity_allowsPrivateLANConsoleOrigin(t *testing.T) {
 	}
 }
 
+func TestCameraManagementSecurity_allowsManagementHeader_whenFetchMetadataIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPut, "http://192.168.0.20:18080/api/cameras/goat-yard", strings.NewReader(`{}`))
+	req.Header.Set("X-CamStation-Management", "1")
+
+	if !isTrustedCameraManagementRequest(req) {
+		t.Fatalf("management request without Sec-Fetch-Site was rejected")
+	}
+}
+
 func TestCameraProbeSecurity_rejectsUnsafeTargets_whenTargetIsPublicMetadataMalformedOrCredentialed(t *testing.T) {
 	t.Parallel()
 

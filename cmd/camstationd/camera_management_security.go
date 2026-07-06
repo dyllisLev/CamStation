@@ -36,6 +36,9 @@ func isTrustedCameraManagementRequest(r *http.Request) bool {
 		return false
 	}
 	site := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+	if site == "" {
+		return true
+	}
 	return site == "same-origin" || site == "same-site"
 }
 
