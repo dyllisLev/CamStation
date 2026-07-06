@@ -79,6 +79,7 @@ export function RegisteredCameraEditForm({
         <span>어댑터</span>
         <select className="new-form-control" value={form.adapter} onChange={(event) => onFieldChange("adapter", event.target.value)}>
           <option value="auto">자동 감지</option>
+          <option value="reolink">Reolink Clear 메인</option>
           <option value="vstarcam">VStarcam</option>
           <option value="onvif">ONVIF 일반</option>
         </select>

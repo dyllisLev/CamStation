@@ -3,6 +3,7 @@ package recorder
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,7 @@ type Manager struct {
 	segmentMinutes int
 	rtspBase       string
 	afterSegment   func()
+	diskGuard      diskGuard
 
 	mu      sync.Mutex
 	workers map[string]*worker
@@ -74,7 +76,7 @@ type segmentRef struct {
 	tsStart  float64
 }
 
-func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int) *Manager {
+func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int, opts ...Option) *Manager {
 	if recordingsDir == "" {
 		recordingsDir = "./data/recordings"
 	}
@@ -84,14 +86,19 @@ func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int) *Manag
 	if segmentMinutes <= 0 {
 		segmentMinutes = 30
 	}
-	return &Manager{
+	manager := &Manager{
 		db:             db,
 		recordingsDir:  recordingsDir,
 		tempDir:        tempDir,
 		segmentMinutes: segmentMinutes,
 		rtspBase:       "rtsp://127.0.0.1:8554",
+		diskGuard:      defaultDiskGuard(),
 		workers:        map[string]*worker{},
 	}
+	for _, opt := range opts {
+		opt(manager)
+	}
+	return manager
 }
 
 func (m *Manager) Reconcile(cameras []store.Camera) {
@@ -224,7 +231,10 @@ func (w *worker) run() {
 		}
 
 		err := w.runOnce()
-		if err != nil {
+		if errors.Is(err, ErrRecordingDiskFull) {
+			w.setState(statusPaused, "", err.Error())
+			log.Printf("recorder %s paused: %v", w.camera.StreamName, err)
+		} else if err != nil {
 			w.setState(statusRunning, "", err.Error())
 			log.Printf("recorder %s exited: %v", w.camera.StreamName, err)
 		}
@@ -251,6 +261,9 @@ func (w *worker) runOnce() error {
 	if err := os.MkdirAll(w.manager.recordingsDir, 0o755); err != nil {
 		return err
 	}
+	if err := w.manager.checkDiskCapacity(); err != nil {
+		return err
+	}
 
 	cmdArgs := BuildFFmpegArgsForCamera(w.input, outputDir, w.manager.segmentMinutes, archiveName)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -266,6 +279,7 @@ func (w *worker) runOnce() error {
 	w.mu.Lock()
 	w.proc = cmd
 	w.mu.Unlock()
+	w.setState(statusRunning, outputDir, "")
 	log.Printf("recorder started stream=%s pid=%d input=%s output=%s", w.camera.StreamName, cmd.Process.Pid, w.input, outputDir)
 
 	scanDone := make(chan struct{})
@@ -277,11 +291,10 @@ func (w *worker) runOnce() error {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
-	select {
-	case <-w.stop:
-		terminate(cmd, 10*time.Second)
-		<-waitDone
-	case err = <-waitDone:
+	if err = w.waitForProcess(cmd, waitDone); err != nil {
+		if errors.Is(err, ErrRecordingDiskFull) {
+			w.setState(statusPaused, "", err.Error())
+		}
 	}
 	<-scanDone
 
@@ -421,10 +434,11 @@ func BuildFFmpegArgsForCamera(input, outputDir string, segmentMinutes int, archi
 	return []string{
 		"ffmpeg", "-y",
 		"-nostats",
-		"-use_wallclock_as_timestamps", "1",
+		"-fflags", "+genpts",
 		"-rtsp_transport", "tcp",
 		"-i", input,
 		"-c:v", "copy",
+		"-af", "asetpts=PTS-STARTPTS",
 		"-c:a", "aac",
 		"-f", "segment",
 		"-segment_time", strconv.Itoa(segmentMinutes * 60),

@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,26 @@ func TestCameraStreamsPersistAndRedactWithMetadata(t *testing.T) {
 	}
 	if private[0].Streams[0].URL == "" {
 		t.Fatalf("private stream URL should be present")
+	}
+}
+
+func TestRedactURLMasksQueryCredentials(t *testing.T) {
+	t.Parallel()
+
+	rawURL := "http://192.168.0.12/flv?port=1935&app=bcs&stream=channel0_main.bcs&user=admin&password=camera-pass&token=session-token"
+
+	redacted := RedactURL(rawURL)
+
+	if redacted == rawURL {
+		t.Fatalf("redacted URL did not change")
+	}
+	for _, secret := range []string{"admin", "camera-pass", "session-token"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("redacted URL %q leaked %q", redacted, secret)
+		}
+	}
+	if !strings.Contains(redacted, "stream=channel0_main.bcs") {
+		t.Fatalf("redacted URL removed non-secret stream query: %s", redacted)
 	}
 }
 

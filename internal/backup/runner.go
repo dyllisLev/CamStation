@@ -152,13 +152,52 @@ func (r *Runner) run(ctx context.Context, id int64, cancel context.CancelFunc, d
 	defer r.clearActive(id)
 	err := commands.Run(ctx, "rclone", rcloneCopyArgs(source, destination)...)
 	if err == nil {
-		backedUp, markErr := r.db.MarkReadyRecordingSegmentsBackedUp(context.Background(), id, backupCutoff)
+		backedUp, markErr := r.db.MarkReadyRecordingSegmentsBackedUp(context.Background(), store.RecordingSegmentsBackupMark{
+			JobID:         id,
+			UpdatedBefore: backupCutoff,
+			SourceDir:     source,
+		})
 		if markErr != nil {
 			_, _ = r.db.FailJob(context.Background(), id, "backup marker update failed", map[string]any{"operation": "copy"})
 			_ = r.db.AppendEvent(context.Background(), failedBackupEvent(id, "backup marker update failed"))
 			return
 		}
-		_, _ = r.db.SucceedJob(context.Background(), id, map[string]any{"operation": "copy", "target": destination, "segmentsBackedUp": backedUp})
+		cleanupSegments, listErr := r.db.ListReadyBackedUpRecordingSegments(context.Background(), source)
+		if listErr != nil {
+			_, _ = r.db.FailJob(context.Background(), id, "backup local delete failed", map[string]any{
+				"operation":        "copy",
+				"segmentsBackedUp": len(backedUp),
+				"segmentsDeleted":  0,
+			})
+			_ = r.db.AppendEvent(context.Background(), failedBackupEvent(id, "backup local delete failed"))
+			return
+		}
+		auditBatch := recordingAuditBatch{JobID: id, Source: source, Segments: cleanupSegments}
+		if auditErr := r.appendBackedUpAuditEvents(context.Background(), auditBatch); auditErr != nil {
+			_, _ = r.db.FailJob(context.Background(), id, "backup audit update failed", map[string]any{
+				"operation":        "copy",
+				"segmentsBackedUp": len(backedUp),
+				"segmentsDeleted":  0,
+			})
+			_ = r.db.AppendEvent(context.Background(), failedBackupEvent(id, "backup audit update failed"))
+			return
+		}
+		deleted, deleteErr := r.deleteBackedUpSegments(context.Background(), auditBatch)
+		if deleteErr != nil {
+			_, _ = r.db.FailJob(context.Background(), id, "backup local delete failed", map[string]any{
+				"operation":        "copy",
+				"segmentsBackedUp": len(backedUp),
+				"segmentsDeleted":  deleted,
+			})
+			_ = r.db.AppendEvent(context.Background(), failedBackupEvent(id, "backup local delete failed"))
+			return
+		}
+		_, _ = r.db.SucceedJob(context.Background(), id, map[string]any{
+			"operation":        "copy",
+			"target":           destination,
+			"segmentsBackedUp": len(backedUp),
+			"segmentsDeleted":  deleted,
+		})
 		return
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {

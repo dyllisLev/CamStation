@@ -2,9 +2,7 @@ package backup
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,11 +106,11 @@ func TestRunner_Start_whenConfiguredRemote_preservesRecordingTreeAndMarksSegment
 		t.Fatalf("create backup fixture: %v", err)
 	}
 	if err := db.UpdateBackupSettings(t.Context(), store.BackupSettings{
-		Enabled:                 true,
-		Target:                  "gdrive:/cctv-sample",
-		RetentionDays:           7,
-		ScheduleIntervalMinutes: 1440,
-		ProtectUnbacked:         true,
+		Enabled:         true,
+		Target:          "gdrive:/cctv-sample",
+		RetentionDays:   7,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: true,
 	}); err != nil {
 		t.Fatalf("update backup settings: %v", err)
 	}
@@ -291,43 +289,4 @@ func TestRunner_Start_whenSourceMissing_recordsFailedJob(t *testing.T) {
 	if strings.Contains(mustMarshalString(t, job), "qa/missing-source") {
 		t.Fatalf("failed job leaked raw prefix: %#v", job)
 	}
-}
-
-func waitForBackupState(t *testing.T, db *store.DB, id int64, want store.JobState) store.Job {
-	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		job, err := db.GetJob(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get job: %v", err)
-		}
-		if job.State == want {
-			return job
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	job, err := db.GetJob(t.Context(), id)
-	if err != nil {
-		t.Fatalf("get final job: %v", err)
-	}
-	t.Fatalf("job %d state = %s, want %s", id, job.State, want)
-	return store.Job{}
-}
-
-func mustMarshalString(t *testing.T, value any) string {
-	t.Helper()
-
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("marshal value: %v", err)
-	}
-	return string(encoded)
-}
-
-func createBackupFixture(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
 }

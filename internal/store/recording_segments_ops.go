@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -127,69 +126,6 @@ func (d *DB) OpenReadyRecordingSegmentFile(ctx context.Context, id int64, record
 		return RecordingSegment{}, nil, nil, fmt.Errorf("open segment file %d: %w", id, err)
 	}
 	return segment, file, info, nil
-}
-
-func (d *DB) DeleteReadyRecordingSegmentFile(ctx context.Context, id int64, recordingsDir string) (RecordingSegment, error) {
-	segment, path, _, err := d.readyRecordingSegmentPath(ctx, id, recordingsDir)
-	if err != nil {
-		return RecordingSegment{}, err
-	}
-	stagedPath := path + ".deleting-" + strconv.FormatInt(id, 10)
-	if _, err := os.Stat(stagedPath); err == nil {
-		return RecordingSegment{}, fmt.Errorf("stage recording segment delete: %w", ErrRecordingSegmentDeleteConflict)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return RecordingSegment{}, fmt.Errorf("stat staged recording segment delete path: %w", err)
-	}
-	if err := os.Rename(path, stagedPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return RecordingSegment{}, fmt.Errorf("delete segment file %d: %w", id, ErrRecordingSegmentFileMissing)
-		}
-		return RecordingSegment{}, fmt.Errorf("stage segment file %d for delete: %w", id, err)
-	}
-	if err := d.MarkRecordingSegmentDeleted(ctx, id, "operator delete"); err != nil {
-		if restoreErr := os.Rename(stagedPath, path); restoreErr != nil {
-			return RecordingSegment{}, errors.Join(
-				fmt.Errorf("mark recording segment %d deleted: %w", id, err),
-				fmt.Errorf("restore recording segment file %d: %w", id, restoreErr),
-			)
-		}
-		return RecordingSegment{}, fmt.Errorf("mark recording segment %d deleted: %w", id, err)
-	}
-	if err := os.Remove(stagedPath); err != nil {
-		restoreErr := os.Rename(stagedPath, path)
-		statusErr := d.MarkRecordingSegmentStatusByID(ctx, id, "ready", "operator delete failed")
-		return RecordingSegment{}, errors.Join(
-			fmt.Errorf("remove staged recording segment file %d: %w", id, err),
-			restoreErr,
-			statusErr,
-		)
-	}
-	segment.Status = "deleted"
-	segment.Error = "operator delete"
-	segment.UpdatedAt = time.Now().Unix()
-	return segment, nil
-}
-
-func (d *DB) MarkRecordingSegmentDeleted(ctx context.Context, id int64, reason string) error {
-	result, err := d.db.ExecContext(ctx,
-		`UPDATE recording_segments
-		 SET status = 'deleted', error = ?, updated_at = ?
-		 WHERE id = ? AND status = 'ready'`,
-		nullString(reason),
-		time.Now().Unix(),
-		id,
-	)
-	if err != nil {
-		return fmt.Errorf("mark recording segment %d deleted: %w", id, err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read recording segment %d delete result: %w", id, err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("recording segment %d was not ready for delete: %w", id, ErrRecordingSegmentNotReady)
-	}
-	return nil
 }
 
 func (d *DB) readyRecordingSegmentPath(ctx context.Context, id int64, recordingsDir string) (RecordingSegment, string, os.FileInfo, error) {

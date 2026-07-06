@@ -11,6 +11,7 @@ ADDR="${CAMSTATION_ADDR:-0.0.0.0:18080}"
 DB_PATH="${CAMSTATION_DB:-./data/camstation.db}"
 SEGMENT_MINUTES="${CAMSTATION_SEGMENT_MINUTES:-5}"
 MAX_STORAGE_GB="${CAMSTATION_MAX_STORAGE_GB:-0.30}"
+RECORDING_ENABLED="${CAMSTATION_RECORDING_ENABLED:-false}"
 HEALTH_URL="${CAMSTATION_HEALTH_URL:-http://127.0.0.1:18080/api/health}"
 RECORDER_URL="${CAMSTATION_RECORDER_URL:-http://127.0.0.1:18080/api/recorders/status}"
 
@@ -23,6 +24,7 @@ Environment overrides:
   CAMSTATION_DB=$DB_PATH
   CAMSTATION_SEGMENT_MINUTES=$SEGMENT_MINUTES
   CAMSTATION_MAX_STORAGE_GB=$MAX_STORAGE_GB
+  CAMSTATION_RECORDING_ENABLED=$RECORDING_ENABLED
 EOF
 }
 
@@ -127,12 +129,25 @@ start() {
     return 1
   fi
 
+  local recording_args=()
+  case "$RECORDING_ENABLED" in
+    1|true|TRUE|yes|YES|on|ON)
+      recording_args=(-recording-enabled)
+      ;;
+    0|false|FALSE|no|NO|off|OFF)
+      ;;
+    *)
+      echo "Invalid CAMSTATION_RECORDING_ENABLED=$RECORDING_ENABLED; use true or false" >&2
+      return 1
+      ;;
+  esac
+
   (
     cd "$ROOT_DIR"
     exec setsid "$BIN" \
       -addr "$ADDR" \
       -db "$DB_PATH" \
-      -recording-enabled \
+      "${recording_args[@]}" \
       -segment-minutes "$SEGMENT_MINUTES" \
       -max-storage-gb "$MAX_STORAGE_GB" \
       >"$LOG_FILE" 2>&1 < /dev/null

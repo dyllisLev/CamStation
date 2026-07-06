@@ -7,10 +7,11 @@ export type BackupStatus = {
   readonly history: readonly Job[];
   readonly schedule?: {
     readonly enabled: boolean;
-    readonly intervalMinutes: number;
+    readonly cron: string;
     readonly due: boolean;
     readonly blockedReason?: string;
     readonly lastSucceededAt?: string;
+    readonly lastJobUpdatedAt?: string;
     readonly nextRunAt?: string;
   };
 };

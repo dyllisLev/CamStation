@@ -18,7 +18,7 @@ export type BackupSettings = {
   readonly target: string;
   readonly retentionDays: number;
   readonly scheduleEnabled: boolean;
-  readonly scheduleIntervalMinutes: number;
+  readonly scheduleCron: string;
   readonly protectUnbacked: boolean;
 };
 

@@ -17,7 +17,7 @@ type SettingsForm = {
   readonly backupTarget: string;
   readonly backupRetentionDays: string;
   readonly backupScheduleEnabled: boolean;
-  readonly backupScheduleIntervalMinutes: string;
+  readonly backupScheduleCron: string;
   readonly protectUnbacked: boolean;
   readonly discordEnabled: boolean;
   readonly webhook: string;
@@ -31,7 +31,7 @@ const emptyForm: SettingsForm = {
   backupTarget: "",
   backupRetentionDays: "14",
   backupScheduleEnabled: false,
-  backupScheduleIntervalMinutes: "1440",
+  backupScheduleCron: "0 3 * * *",
   protectUnbacked: true,
   discordEnabled: false,
   webhook: "",
@@ -60,7 +60,7 @@ export function SettingsConsole() {
       backupTarget: data.backup.target,
       backupRetentionDays: String(data.backup.retentionDays),
       backupScheduleEnabled: data.backup.scheduleEnabled,
-      backupScheduleIntervalMinutes: String(data.backup.scheduleIntervalMinutes),
+      backupScheduleCron: data.backup.scheduleCron,
       protectUnbacked: data.backup.protectUnbacked,
       discordEnabled: data.alerts.discordEnabled,
       webhook: "",
@@ -146,9 +146,8 @@ export function SettingsConsole() {
             <Toggle label={labels.enabled} checked={form.backupEnabled} onChange={(checked) => setForm({ ...form, backupEnabled: checked })} />
             <Field label={labels.target} value={form.backupTarget} onChange={(value) => setForm({ ...form, backupTarget: value })} />
             <Toggle label={labels.scheduleEnabled} checked={form.backupScheduleEnabled} onChange={(checked) => setForm({ ...form, backupScheduleEnabled: checked })} />
-            <Field label={labels.scheduleIntervalMinutes} type="number" value={form.backupScheduleIntervalMinutes} onChange={(value) => setForm({ ...form, backupScheduleIntervalMinutes: value })} />
+            <Field label={labels.scheduleCron} value={form.backupScheduleCron} onChange={(value) => setForm({ ...form, backupScheduleCron: value })} />
             <Toggle label={labels.protectUnbacked} checked={form.protectUnbacked} onChange={(checked) => setForm({ ...form, protectUnbacked: checked })} />
-            <Field label={labels.retentionDays} type="number" value={form.backupRetentionDays} onChange={(value) => setForm({ ...form, backupRetentionDays: value })} />
           </PanelBody>
         </Panel>
 
@@ -209,7 +208,7 @@ function formToUpdate(form: SettingsForm): SettingsUpdate {
       target: form.backupTarget.trim(),
       retentionDays: Number(form.backupRetentionDays),
       scheduleEnabled: form.backupScheduleEnabled,
-      scheduleIntervalMinutes: Number(form.backupScheduleIntervalMinutes),
+      scheduleCron: form.backupScheduleCron.trim(),
       protectUnbacked: form.protectUnbacked,
     },
     alerts: {

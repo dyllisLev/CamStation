@@ -13,7 +13,7 @@ type SettingsLabels = {
   readonly enabled: string;
   readonly target: string;
   readonly scheduleEnabled: string;
-  readonly scheduleIntervalMinutes: string;
+  readonly scheduleCron: string;
   readonly protectUnbacked: string;
   readonly discordEnabled: string;
   readonly webhook: string;
@@ -47,7 +47,7 @@ export const settingsLabels: Record<Language, SettingsLabels> = {
     enabled: "사용",
     target: "대상",
     scheduleEnabled: "스케줄 실행",
-    scheduleIntervalMinutes: "스케줄 주기(분)",
+    scheduleCron: "스케줄 cron (KST)",
     protectUnbacked: "미백업 영상 보호",
     discordEnabled: "Discord 알림",
     webhook: "새 웹훅",
@@ -79,7 +79,7 @@ export const settingsLabels: Record<Language, SettingsLabels> = {
     enabled: "Enabled",
     target: "Target",
     scheduleEnabled: "Scheduled backup",
-    scheduleIntervalMinutes: "Schedule interval minutes",
+    scheduleCron: "Schedule cron (KST)",
     protectUnbacked: "Protect unbacked recordings",
     discordEnabled: "Discord alerts",
     webhook: "New webhook",

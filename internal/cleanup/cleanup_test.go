@@ -87,11 +87,11 @@ func TestEnforceMaxBytesProtectsUnbackedSegmentsWhenConfigured(t *testing.T) {
 	db := openTestDB(t, root)
 	recordingsDir := filepath.Join(root, "recordings")
 	if err := db.UpdateBackupSettings(ctx, store.BackupSettings{
-		Enabled:                 true,
-		Target:                  "gdrive:/cctvTest",
-		RetentionDays:           30,
-		ScheduleIntervalMinutes: 1440,
-		ProtectUnbacked:         true,
+		Enabled:         true,
+		Target:          "gdrive:/cctvTest",
+		RetentionDays:   30,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +107,15 @@ func TestEnforceMaxBytesProtectsUnbackedSegmentsWhenConfigured(t *testing.T) {
 	}
 	if result.AfterBytes != result.BeforeBytes {
 		t.Fatalf("bytes changed before backup: %d -> %d", result.BeforeBytes, result.AfterBytes)
+	}
+	if !result.BackupProtectionActive {
+		t.Fatalf("BackupProtectionActive = false, want true")
+	}
+	if result.ProtectedUnbackedCount != 1 {
+		t.Fatalf("ProtectedUnbackedCount = %d, want 1", result.ProtectedUnbackedCount)
+	}
+	if result.ProtectedUnbackedBytes != 4 {
+		t.Fatalf("ProtectedUnbackedBytes = %d, want 4", result.ProtectedUnbackedBytes)
 	}
 	if _, err := os.Stat(segmentPath); err != nil {
 		t.Fatalf("unbacked segment should remain: %v", err)
@@ -160,11 +169,11 @@ func writeFile(t *testing.T, path string, data []byte) {
 func disableUnbackedProtection(t *testing.T, ctx context.Context, db *store.DB) {
 	t.Helper()
 	if err := db.UpdateBackupSettings(ctx, store.BackupSettings{
-		Enabled:                 true,
-		Target:                  "gdrive:/cctvTest",
-		RetentionDays:           30,
-		ScheduleIntervalMinutes: 1440,
-		ProtectUnbacked:         false,
+		Enabled:         true,
+		Target:          "gdrive:/cctvTest",
+		RetentionDays:   30,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: false,
 	}); err != nil {
 		t.Fatal(err)
 	}

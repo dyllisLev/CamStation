@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"camstation/internal/cronexpr"
 )
 
 func validateRecordingSettings(settings RecordingSettings) error {
@@ -29,8 +31,8 @@ func validateBackupSettings(settings BackupSettings) error {
 	if settings.RetentionDays < 0 {
 		return fmt.Errorf("%w: backup retention days cannot be negative", ErrValidation)
 	}
-	if settings.ScheduleIntervalMinutes <= 0 {
-		return fmt.Errorf("%w: backup schedule interval must be positive", ErrValidation)
+	if !validCronExpression(settings.ScheduleCron) {
+		return fmt.Errorf("%w: backup schedule cron is invalid", ErrValidation)
 	}
 	if settings.ScheduleEnabled && !settings.Enabled {
 		return fmt.Errorf("%w: backup schedule requires backup to be enabled", ErrValidation)
@@ -46,13 +48,18 @@ func normalizeSettingsPayload(payload settingsPayload, rawJSON string) settingsP
 	if payload.Backup.Target == "" {
 		payload.Backup.Target = defaults.Backup.Target
 	}
-	if payload.Backup.ScheduleIntervalMinutes == 0 {
-		payload.Backup.ScheduleIntervalMinutes = defaults.Backup.ScheduleIntervalMinutes
+	if strings.TrimSpace(payload.Backup.ScheduleCron) == "" {
+		payload.Backup.ScheduleCron = defaults.Backup.ScheduleCron
 	}
 	if !strings.Contains(rawJSON, `"protectUnbacked"`) {
 		payload.Backup.ProtectUnbacked = defaults.Backup.ProtectUnbacked
 	}
 	return payload
+}
+
+func validCronExpression(expression string) bool {
+	_, err := cronexpr.Parse(expression)
+	return err == nil
 }
 
 func validateDiscordWebhookURL(raw string) error {

@@ -25,10 +25,13 @@ type Cleaner struct {
 }
 
 type Result struct {
-	MaxBytes    int64            `json:"maxBytes"`
-	BeforeBytes int64            `json:"beforeBytes"`
-	AfterBytes  int64            `json:"afterBytes"`
-	Deleted     []DeletedSegment `json:"deleted"`
+	MaxBytes               int64            `json:"maxBytes"`
+	BeforeBytes            int64            `json:"beforeBytes"`
+	AfterBytes             int64            `json:"afterBytes"`
+	BackupProtectionActive bool             `json:"backupProtectionActive"`
+	ProtectedUnbackedCount int              `json:"protectedUnbackedCount"`
+	ProtectedUnbackedBytes int64            `json:"protectedUnbackedBytes"`
+	Deleted                []DeletedSegment `json:"deleted"`
 }
 
 type DeletedSegment struct {
@@ -106,11 +109,39 @@ func (c *Cleaner) EnforceMaxBytes(ctx context.Context, maxBytes int64) (Result, 
 		})
 		removeEmptyParents(c.recordingsDir, filepath.Dir(segment.FinalPath))
 	}
+	if result.AfterBytes > maxBytes && settings.Backup.ProtectUnbacked {
+		if err := c.addProtectedUnbackedSummary(ctx, &result); err != nil {
+			return result, err
+		}
+	}
 
 	if result.AfterBytes < 0 {
 		result.AfterBytes = 0
 	}
 	return result, nil
+}
+
+func (c *Cleaner) addProtectedUnbackedSummary(ctx context.Context, result *Result) error {
+	segments, err := c.db.ListDeletableRecordingSegments(ctx, false)
+	if err != nil {
+		return err
+	}
+	for _, segment := range segments {
+		if segment.BackupState == "backed_up" {
+			continue
+		}
+		result.ProtectedUnbackedCount++
+		if segment.FileSize != nil {
+			result.ProtectedUnbackedBytes += *segment.FileSize
+			continue
+		}
+		info, err := os.Stat(segment.FinalPath)
+		if err == nil && !info.IsDir() {
+			result.ProtectedUnbackedBytes += info.Size()
+		}
+	}
+	result.BackupProtectionActive = result.ProtectedUnbackedCount > 0
+	return nil
 }
 
 func DirSize(root string) (int64, error) {

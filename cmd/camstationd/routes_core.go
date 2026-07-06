@@ -156,13 +156,18 @@ func (d routeDeps) registerCoreRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		maxBytes, err := recordingStorageLimitBytes(r.Context(), d.db, d.maxStorageBytes)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, publicRecordingStorage{
 			RecordingsDir:      publicManagedRecordingsDir,
 			TempDir:            publicManagedTempDir,
 			RecordingsBytes:    recordingsBytes,
 			TempBytes:          tempBytes,
-			MaxBytes:           d.maxStorageBytes,
-			AutoCleanupEnabled: d.maxStorageBytes > 0,
+			MaxBytes:           maxBytes,
+			AutoCleanupEnabled: maxBytes > 0,
 		})
 	})
 
@@ -178,7 +183,7 @@ func (d routeDeps) registerCoreRoutes(mux *http.ServeMux) {
 			}
 		}
 		if req.MaxBytes <= 0 && req.MaxStorageGB > 0 {
-			req.MaxBytes = int64(req.MaxStorageGB * 1024 * 1024 * 1024)
+			req.MaxBytes = gbToBytes(req.MaxStorageGB)
 		}
 		if req.MaxBytes <= 0 {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("maxBytes or maxStorageGB is required"))

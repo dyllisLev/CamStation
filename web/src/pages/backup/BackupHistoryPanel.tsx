@@ -1,6 +1,6 @@
 import { Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
-import type { Job } from "../../app/api";
+import type { Job, JobEvent } from "../../app/api";
 import { useBackupJob, useBackupJobs, useCancelBackupJob, useDeleteBackupJob, useRetryBackupJob } from "../../app/backupQueries";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -169,10 +169,66 @@ function JobDetail({ job, loading }: { readonly job?: Job; readonly loading: boo
           <div key={event.id} className="rounded-[7px] border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
             <div className="font-mono text-slate-500">{formatDate(event.createdAt)} · {event.type}</div>
             <div className="mt-1 text-slate-300">{event.message}</div>
+            <JobEventDetails event={event} />
           </div>
         ))}
         {!job.events?.length && <div className="text-xs text-slate-500">이벤트가 없습니다.</div>}
       </div>
     </div>
   );
+}
+
+function JobEventDetails({ event }: { readonly event: JobEvent }) {
+  const rows = jobEventDetailRows(event);
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="mt-2 grid gap-1 border-t border-slate-800 pt-2">
+      {rows.map((row) => (
+        <div key={row.label} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
+          <dt className="text-slate-500">{row.label}</dt>
+          <dd className="break-words font-mono text-slate-300">{row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+type EventDetailRow = {
+  readonly label: string;
+  readonly value: string;
+};
+
+function jobEventDetailRows(event: JobEvent): readonly EventDetailRow[] {
+  const rows: EventDetailRow[] = [];
+  appendDetailRow(rows, "파일", event.details?.archivePath);
+  appendDetailRow(rows, "스트림", event.details?.streamName);
+  appendDetailRow(rows, "파일명", event.details?.filename);
+  appendDetailRow(rows, "크기", formatDetailBytes(event.details?.sizeBytes));
+  appendDetailRow(rows, "세그먼트", event.details?.segmentId);
+  return rows;
+}
+
+function appendDetailRow(rows: EventDetailRow[], label: string, value: unknown) {
+  if (typeof value === "string" && value.trim() !== "") {
+    rows.push({ label, value });
+    return;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    rows.push({ label, value: String(value) });
+  }
+}
+
+function formatDetailBytes(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }

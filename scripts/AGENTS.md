@@ -12,8 +12,8 @@
 
 ## CONVENTIONS
 - `camstationctl.sh` scopes process handling to this workspace's `camstationd`, generated go2rtc config, local RTSP inputs, and temp paths.
-- Defaults are `0.0.0.0:18080`, `./data/camstation.db`, 5-minute segments, and `CAMSTATION_MAX_STORAGE_GB=0.30`.
-- The control script starts recording-enabled dev runs; mention this when interpreting recorder state.
+- Defaults are `0.0.0.0:18080`, `./data/camstation.db`, 5-minute segments, `CAMSTATION_MAX_STORAGE_GB=0.30`, and recording disabled.
+- Set `CAMSTATION_RECORDING_ENABLED=true` for recorder-enabled dev runs; mention this when interpreting recorder state.
 - Monitoring output belongs under `data/monitoring` and `data/runtime-logs`, not in git.
 - Use KST when reporting operational monitor timestamps that matter to the user.
 

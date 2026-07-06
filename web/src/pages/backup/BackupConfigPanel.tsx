@@ -11,7 +11,7 @@ const emptyConfig: BackupSettings = {
   target: "",
   retentionDays: 30,
   scheduleEnabled: false,
-  scheduleIntervalMinutes: 1440,
+  scheduleCron: "0 3 * * *",
   protectUnbacked: true,
 };
 
@@ -60,7 +60,7 @@ export function BackupConfigPanel() {
           <label className="flex items-center justify-between gap-3 rounded-[7px] border border-slate-800 bg-slate-950/40 px-3 py-2">
             <span>
               <span className="block text-xs font-medium text-slate-300">스케줄 실행</span>
-              <span className="mt-1 block text-xs text-slate-500">주기마다 관리 녹화 저장소를 백업합니다.</span>
+              <span className="mt-1 block text-xs text-slate-500">cron 시각에 관리 녹화 저장소를 백업합니다.</span>
             </span>
             <input
               aria-label="스케줄 실행"
@@ -96,30 +96,14 @@ export function BackupConfigPanel() {
             />
           </label>
           <label className="block space-y-2">
-            <span className="text-xs font-medium text-slate-400">스케줄 주기(분)</span>
+            <span className="text-xs font-medium text-slate-400">스케줄 cron (KST)</span>
             <input
-              className="new-form-control"
-              inputMode="numeric"
-              min="1"
-              type="number"
-              value={draft.scheduleIntervalMinutes}
+              className="new-form-control font-mono"
+              placeholder="0 3 * * *"
+              value={draft.scheduleCron}
               onChange={(event) => {
                 setConfirmSave(false);
-                setDraft((current) => ({ ...current, scheduleIntervalMinutes: Number(event.target.value) }));
-              }}
-            />
-          </label>
-          <label className="block space-y-2">
-            <span className="text-xs font-medium text-slate-400">보관일</span>
-            <input
-              className="new-form-control"
-              inputMode="numeric"
-              min="1"
-              type="number"
-              value={draft.retentionDays}
-              onChange={(event) => {
-                setConfirmSave(false);
-                setDraft((current) => ({ ...current, retentionDays: Number(event.target.value) }));
+                setDraft((current) => ({ ...current, scheduleCron: event.target.value }));
               }}
             />
           </label>

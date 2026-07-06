@@ -64,7 +64,7 @@ func main() {
 	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
 	cleaner := cleanup.New(db, *recordingsDir)
 	backupRunner := backup.NewRunner(db)
-	maxStorageBytes := int64(*maxStorageGB * 1024 * 1024 * 1024)
+	maxStorageBytes := gbToBytes(*maxStorageGB)
 	recoveryResult, recoveryErr := recorder.RecoverInterruptedSegments(ctx, db, "./data/quarantine")
 	recoveryLevel := "info"
 	recoveryMessage := "interrupted recording recovery completed"
@@ -86,27 +86,38 @@ func main() {
 			Details: recoveryDetails,
 		})
 	}
-	if maxStorageBytes > 0 {
-		runAutomaticCleanup := func() {
-			result, err := cleaner.EnforceMaxBytes(context.Background(), maxStorageBytes)
-			level := "info"
-			message := "automatic recording cleanup completed"
-			details := map[string]any{"maxBytes": result.MaxBytes, "beforeBytes": result.BeforeBytes, "afterBytes": result.AfterBytes, "deleted": len(result.Deleted)}
-			if err != nil {
-				level = "error"
-				message = "automatic recording cleanup failed"
-				details = map[string]any{"maxBytes": maxStorageBytes, "error": err.Error()}
-			}
+	runAutomaticCleanup := func() {
+		limitBytes, limitErr := recordingStorageLimitBytes(context.Background(), db, maxStorageBytes)
+		if limitErr != nil {
 			_ = db.AppendEvent(context.Background(), store.Event{
 				Source:  "recording.cleanup",
-				Level:   level,
-				Message: message,
-				Details: details,
+				Level:   "error",
+				Message: "automatic recording cleanup failed",
+				Details: map[string]any{"error": limitErr.Error()},
 			})
+			return
 		}
-		recorderManager.SetAfterSegmentClosed(runAutomaticCleanup)
-		go runAutomaticCleanup()
+		if limitBytes <= 0 {
+			return
+		}
+		result, err := cleaner.EnforceMaxBytes(context.Background(), limitBytes)
+		level := "info"
+		message := "automatic recording cleanup completed"
+		details := map[string]any{"maxBytes": result.MaxBytes, "beforeBytes": result.BeforeBytes, "afterBytes": result.AfterBytes, "deleted": len(result.Deleted)}
+		if err != nil {
+			level = "error"
+			message = "automatic recording cleanup failed"
+			details = map[string]any{"maxBytes": limitBytes, "error": err.Error()}
+		}
+		_ = db.AppendEvent(context.Background(), store.Event{
+			Source:  "recording.cleanup",
+			Level:   level,
+			Message: message,
+			Details: details,
+		})
 	}
+	recorderManager.SetAfterSegmentClosed(runAutomaticCleanup)
+	go runAutomaticCleanup()
 	if cameras, err := db.ListCameras(ctx, true); err == nil && len(cameras) > 0 {
 		if err := streamer.Ensure(ctx, cameras); err != nil {
 			_ = db.AppendEvent(ctx, store.Event{

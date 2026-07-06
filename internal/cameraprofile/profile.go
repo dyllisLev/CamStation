@@ -173,6 +173,9 @@ func (s Scanner) Scan(ctx context.Context, req ScanRequest) (DeviceProfile, erro
 			ProfileToken: profile.Token,
 		})
 	}
+	if isReolinkAdapter(adapter) {
+		candidates = appendReolinkClearHTTPFLVCandidate(req, candidates)
+	}
 	if len(candidates) == 0 {
 		return DeviceProfile{}, fmt.Errorf("no playable stream candidates detected")
 	}
@@ -426,6 +429,9 @@ func detectAdapter(requested, manufacturer, model, hostname string, streamURIs m
 	for _, uri := range streamURIs {
 		fingerprint += " " + strings.ToLower(uri)
 	}
+	if strings.Contains(fingerprint, "reolink") {
+		return "reolink"
+	}
 	if strings.Contains(fingerprint, "vstarcam") ||
 		strings.Contains(fingerprint, "veepai") ||
 		strings.Contains(fingerprint, "/tcp/av0_") {
@@ -550,6 +556,7 @@ func redactURL(rawURL string) string {
 	if parsed.User != nil {
 		parsed.User = url.UserPassword("redacted", "redacted")
 	}
+	redactQueryCredentials(parsed)
 	return parsed.String()
 }
 

@@ -30,6 +30,9 @@ export type CleanupResult = {
   readonly maxBytes: number;
   readonly beforeBytes: number;
   readonly afterBytes: number;
+  readonly backupProtectionActive: boolean;
+  readonly protectedUnbackedCount: number;
+  readonly protectedUnbackedBytes: number;
   readonly deleted: readonly {
     readonly id: number;
     readonly streamName: string;

@@ -1,5 +1,5 @@
 import { ArchiveX, HardDrive, Loader2, Radio, RotateCcw, ScissorsLineDashed, Settings } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type { CleanupResult, RecordingStorage } from "../../app/api";
 import { withAppBase } from "../../app/basePath";
@@ -15,7 +15,9 @@ type RecordingStoragePanelProps = {
 
 export function RecordingStoragePanel({ storage, cleanup }: RecordingStoragePanelProps) {
   const currentMaxGB = bytesToGB(storage.data?.maxBytes);
-  const [manualGB, setManualGB] = useState(currentMaxGB > 0 ? currentMaxGB.toFixed(2) : "0.30");
+  const defaultManualGB = currentMaxGB > 0 ? currentMaxGB.toFixed(2) : "0.30";
+  const lastSyncedManualGB = useRef(defaultManualGB);
+  const [manualGB, setManualGB] = useState(defaultManualGB);
   const [cleanupArmed, setCleanupArmed] = useState(false);
   const maxBytes = storage.data?.maxBytes ?? 0;
   const recordingsBytes = storage.data?.recordingsBytes ?? 0;
@@ -23,6 +25,17 @@ export function RecordingStoragePanel({ storage, cleanup }: RecordingStoragePane
   const usageRatio = maxBytes > 0 ? Math.min(100, (recordingsBytes / maxBytes) * 100) : 0;
   const totalBytes = recordingsBytes + tempBytes;
   const manualBytes = useMemo(() => Math.max(0, Number(manualGB) * 1024 * 1024 * 1024), [manualGB]);
+  useEffect(() => {
+    if (defaultManualGB === lastSyncedManualGB.current) {
+      return;
+    }
+    const previousManualGB = lastSyncedManualGB.current;
+    lastSyncedManualGB.current = defaultManualGB;
+    if (manualGB === previousManualGB) {
+      setManualGB(defaultManualGB);
+    }
+  }, [defaultManualGB, manualGB]);
+
   const runCleanup = () => {
     if (!cleanupArmed) {
       setCleanupArmed(true);
@@ -77,7 +90,7 @@ export function RecordingStoragePanel({ storage, cleanup }: RecordingStoragePane
           <MetricCard label="세그먼트 길이" value="설정 페이지 기준" />
           <MetricCard label="삭제 대상" value="완료 ready 파일" />
           <label className="block space-y-2">
-            <span className="text-xs font-medium text-slate-400">수동 정리 기준 GB</span>
+            <span className="text-xs font-medium text-slate-400">이번 정리 목표 GB</span>
             <input className="new-form-control" inputMode="decimal" min="0.01" step="0.01" value={manualGB} onChange={(event) => setManualGB(event.target.value)} />
           </label>
           <Button className="w-full" variant={cleanupArmed ? "danger" : "primary"} disabled={cleanup.isPending || manualBytes <= 0} onClick={runCleanup}>
@@ -95,7 +108,18 @@ export function RecordingStoragePanel({ storage, cleanup }: RecordingStoragePane
               녹화 설정 열기
             </a>
           </Button>
-          {cleanup.data && <div className="text-xs text-emerald-300">정리 완료: 삭제 {cleanup.data.deleted.length}개, {formatBytes(cleanup.data.beforeBytes)}에서 {formatBytes(cleanup.data.afterBytes)}</div>}
+          {cleanup.data && (
+            <div className="space-y-1 text-xs">
+              <div className={cleanup.data.afterBytes > cleanup.data.maxBytes ? "text-amber-300" : "text-emerald-300"}>
+                정리 결과: 삭제 {cleanup.data.deleted.length}개, {formatBytes(cleanup.data.beforeBytes)}에서 {formatBytes(cleanup.data.afterBytes)}
+              </div>
+              {cleanup.data.afterBytes > cleanup.data.maxBytes && cleanup.data.backupProtectionActive && (
+                <div className="text-amber-300">
+                  미백업 영상 보호로 {formatBytes(cleanup.data.protectedUnbackedBytes)} ({cleanup.data.protectedUnbackedCount}개)를 보존했습니다.
+                </div>
+              )}
+            </div>
+          )}
           {cleanup.error && <div className="text-xs text-red-300">정리에 실패했습니다: {cleanup.error.message}</div>}
         </PanelBody>
       </Panel>

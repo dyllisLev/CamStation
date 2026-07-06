@@ -21,6 +21,25 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	}
 }
 
+func TestBuildFFmpegArgsGeneratesPtsForMp4Playback(t *testing.T) {
+	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 30)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-fflags +genpts") {
+		t.Fatalf("expected generated PTS for stable MP4 playback, got %s", joined)
+	}
+	if strings.Contains(joined, "-use_wallclock_as_timestamps") {
+		t.Fatalf("expected not to force wallclock timestamps, got %s", joined)
+	}
+}
+
+func TestBuildFFmpegArgsResetsAudioPtsForSegmentPlayback(t *testing.T) {
+	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 5)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-af asetpts=PTS-STARTPTS") {
+		t.Fatalf("expected audio PTS reset for stable MP4 duration, got %s", joined)
+	}
+}
+
 func TestParseSegmentPath(t *testing.T) {
 	line := "[segment @ 0xabc] Opening '/data/temp/cam1/2026-06-30/2026-06-30_16-30.mp4' for writing"
 	got := ParseSegmentPath(line)

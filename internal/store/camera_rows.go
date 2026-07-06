@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -121,18 +123,28 @@ func applyRoleStreamNames(camera *Camera) {
 }
 
 func RedactURL(rawURL string) string {
-	for i := 0; i < len(rawURL); i++ {
-		if rawURL[i] != '@' {
-			continue
-		}
-		start := 0
-		for j := 0; j+3 <= i; j++ {
-			if rawURL[j:j+3] == "://" {
-				start = j + 3
-				break
-			}
-		}
-		return rawURL[:start] + "redacted:redacted" + rawURL[i:]
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
 	}
-	return rawURL
+	if parsed.User != nil {
+		parsed.User = url.UserPassword("redacted", "redacted")
+	}
+	query := parsed.Query()
+	for key := range query {
+		if isCredentialQueryKey(key) {
+			query.Set(key, "redacted")
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func isCredentialQueryKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "user", "username", "password", "passwd", "pwd", "token":
+		return true
+	default:
+		return false
+	}
 }

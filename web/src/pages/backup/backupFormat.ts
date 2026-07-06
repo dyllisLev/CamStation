@@ -18,20 +18,22 @@ export function formatDuration(job: Job): string {
 }
 
 export function jobBadgeState(state?: string): string {
-  switch (state) {
-    case "running":
-    case "succeeded":
-      return "running";
-    case "queued":
-      return "info";
-    case "failed":
-      return "error";
-    case "cancelled":
-    case "deleted":
-      return "warning";
-    case undefined:
-      return "offline";
-    default:
+	switch (state) {
+	case "running":
+		return "running";
+	case "queued":
+		return "queued";
+	case "succeeded":
+		return "succeeded";
+	case "failed":
+		return "failed";
+	case "cancelled":
+		return "cancelled";
+	case "deleted":
+		return "deleted";
+	case undefined:
+		return "offline";
+	default:
       return state;
   }
 }

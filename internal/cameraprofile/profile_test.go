@@ -2,6 +2,8 @@ package cameraprofile
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +84,131 @@ func TestScannerDetectsVStarcamWhenONVIFIdentityIsGeneric(t *testing.T) {
 	}
 	if !profile.Capabilities.PTZ || profile.Capabilities.MaxPresets != 100 {
 		t.Fatalf("capabilities = %#v", profile.Capabilities)
+	}
+}
+
+func TestScannerAddsReolinkClearHTTPFLVCandidate(t *testing.T) {
+	t.Parallel()
+
+	client := fakeScannerClient{
+		deviceInformation: `<tds:GetDeviceInformationResponse>
+			<tds:Manufacturer>Reolink</tds:Manufacturer>
+			<tds:Model>Reolink Duo WiFi</tds:Model>
+			<tds:FirmwareVersion>v3.0</tds:FirmwareVersion>
+			<tds:SerialNumber>00000000000000</tds:SerialNumber>
+			<tds:HardwareId>IPC</tds:HardwareId>
+		</tds:GetDeviceInformationResponse>`,
+		hostname: "reolink-duo",
+		profiles: `<trt:Profiles token="mainStream">
+			<tt:Name>mainStream</tt:Name>
+			<tt:VideoEncoderConfiguration token="V_MAIN">
+				<tt:Encoding>H264</tt:Encoding>
+				<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>
+				<tt:RateControl><tt:FrameRateLimit>22</tt:FrameRateLimit><tt:BitrateLimit>2048</tt:BitrateLimit></tt:RateControl>
+			</tt:VideoEncoderConfiguration>
+		</trt:Profiles>
+		<trt:Profiles token="subStream">
+			<tt:Name>subStream</tt:Name>
+			<tt:VideoEncoderConfiguration token="V_SUB">
+				<tt:Encoding>H264</tt:Encoding>
+				<tt:Resolution><tt:Width>640</tt:Width><tt:Height>360</tt:Height></tt:Resolution>
+				<tt:RateControl><tt:FrameRateLimit>10</tt:FrameRateLimit><tt:BitrateLimit>256</tt:BitrateLimit></tt:RateControl>
+			</tt:VideoEncoderConfiguration>
+		</trt:Profiles>`,
+		streamURIs: map[string]string{
+			"mainStream": "rtsp://192.168.0.12:554/h264Preview_01_main",
+			"subStream":  "rtsp://192.168.0.12:554/h264Preview_01_sub",
+		},
+	}
+
+	profile, err := NewScanner(client).Scan(t.Context(), ScanRequest{
+		Host:      "192.168.0.12",
+		Username:  "admin",
+		Password:  "camera-pass",
+		RTSPPort:  554,
+		HTTPPort:  80,
+		ONVIFPort: 8000,
+		Adapter:   "auto",
+	})
+	if err != nil {
+		t.Fatalf("scan reolink: %v", err)
+	}
+
+	if profile.Adapter != "reolink" {
+		t.Fatalf("adapter = %q, want reolink", profile.Adapter)
+	}
+	candidates := profile.Channels[0].Candidates
+	if len(candidates) != 3 {
+		t.Fatalf("candidates = %d, want 3", len(candidates))
+	}
+	clear := candidates[0]
+	if clear.RoleHint != StreamRoleRecording || clear.Source != "reolink-http-flv" {
+		t.Fatalf("clear candidate = %#v", clear)
+	}
+	if clear.ProfileToken != "reolink-clear-main" || clear.Width != 1920 || clear.Height != 1080 || clear.BitrateKbps != 2048 {
+		t.Fatalf("clear candidate metadata = %#v", clear)
+	}
+	parsed, err := url.Parse(clear.URL)
+	if err != nil {
+		t.Fatalf("parse clear URL: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "http" || parsed.Host != "192.168.0.12" || parsed.Path != "/flv" {
+		t.Fatalf("clear URL endpoint = %s", clear.URL)
+	}
+	if query.Get("port") != "1935" || query.Get("app") != "bcs" || query.Get("stream") != "channel0_main.bcs" {
+		t.Fatalf("clear URL query = %s", parsed.RawQuery)
+	}
+	if query.Get("user") != "admin" || query.Get("password") != "camera-pass" {
+		t.Fatalf("clear URL credentials were not embedded for go2rtc")
+	}
+	if strings.Contains(clear.RedactedURL, "camera-pass") || strings.Contains(clear.RedactedURL, "admin") {
+		t.Fatalf("redacted clear URL leaked credentials: %s", clear.RedactedURL)
+	}
+	if candidates[1].Source != "onvif" || candidates[2].RoleHint != StreamRoleLive {
+		t.Fatalf("original ONVIF candidates should remain available: %#v", candidates)
+	}
+}
+
+func TestScannerUsesReolinkSecondLensForClearHTTPFLVCandidate(t *testing.T) {
+	t.Parallel()
+
+	client := fakeScannerClient{
+		deviceInformation: `<tds:GetDeviceInformationResponse>
+			<tds:Manufacturer>Reolink</tds:Manufacturer>
+			<tds:Model>Reolink Duo WiFi</tds:Model>
+		</tds:GetDeviceInformationResponse>`,
+		hostname: "reolink-duo",
+		profiles: `<trt:Profiles token="mainStream">
+			<tt:Name>mainStream</tt:Name>
+			<tt:VideoEncoderConfiguration token="V_MAIN">
+				<tt:Encoding>H264</tt:Encoding>
+				<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>
+				<tt:RateControl><tt:FrameRateLimit>22</tt:FrameRateLimit><tt:BitrateLimit>2048</tt:BitrateLimit></tt:RateControl>
+			</tt:VideoEncoderConfiguration>
+		</trt:Profiles>`,
+		streamURIs: map[string]string{
+			"mainStream": "rtsp://192.168.0.12:554/h264Preview_02_main",
+		},
+	}
+
+	profile, err := NewScanner(client).Scan(t.Context(), ScanRequest{
+		URL:       "rtsp://admin:camera-pass@192.168.0.12:554/h264Preview_02_main",
+		HTTPPort:  80,
+		ONVIFPort: 8000,
+		Adapter:   "reolink",
+	})
+	if err != nil {
+		t.Fatalf("scan reolink second lens: %v", err)
+	}
+
+	clear := profile.Channels[0].Candidates[0]
+	parsed, err := url.Parse(clear.URL)
+	if err != nil {
+		t.Fatalf("parse clear URL: %v", err)
+	}
+	if got := parsed.Query().Get("stream"); got != "channel1_main.bcs" {
+		t.Fatalf("clear FLV stream = %q, want channel1_main.bcs", got)
 	}
 }
 

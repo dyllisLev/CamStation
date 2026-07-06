@@ -19,12 +19,12 @@ type RecordingSettings struct {
 }
 
 type BackupSettings struct {
-	Enabled                 bool   `json:"enabled"`
-	Target                  string `json:"target"`
-	RetentionDays           int    `json:"retentionDays"`
-	ScheduleEnabled         bool   `json:"scheduleEnabled"`
-	ScheduleIntervalMinutes int    `json:"scheduleIntervalMinutes"`
-	ProtectUnbacked         bool   `json:"protectUnbacked"`
+	Enabled         bool   `json:"enabled"`
+	Target          string `json:"target"`
+	RetentionDays   int    `json:"retentionDays"`
+	ScheduleEnabled bool   `json:"scheduleEnabled"`
+	ScheduleCron    string `json:"scheduleCron"`
+	ProtectUnbacked bool   `json:"protectUnbacked"`
 }
 
 type SecretDisplay struct {
@@ -81,12 +81,12 @@ func defaultSettingsPayload() settingsPayload {
 			MaxStorageGB:   0,
 		},
 		Backup: BackupSettings{
-			Enabled:                 false,
-			Target:                  "gdrive:/cctvTest",
-			RetentionDays:           30,
-			ScheduleEnabled:         false,
-			ScheduleIntervalMinutes: 1440,
-			ProtectUnbacked:         true,
+			Enabled:         false,
+			Target:          "gdrive:/cctvTest",
+			RetentionDays:   30,
+			ScheduleEnabled: false,
+			ScheduleCron:    "0 3 * * *",
+			ProtectUnbacked: true,
 		},
 		Alerts: alertSettingsStored{},
 	}
@@ -125,8 +125,8 @@ func (d *DB) UpdateSettings(ctx context.Context, update SettingsUpdate) (Setting
 	}
 	if update.Backup != nil {
 		backup := *update.Backup
-		if backup.ScheduleIntervalMinutes == 0 {
-			backup.ScheduleIntervalMinutes = defaultSettingsPayload().Backup.ScheduleIntervalMinutes
+		if strings.TrimSpace(backup.ScheduleCron) == "" {
+			backup.ScheduleCron = defaultSettingsPayload().Backup.ScheduleCron
 		}
 		if err := validateBackupSettings(backup); err != nil {
 			return Settings{}, err
