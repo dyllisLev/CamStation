@@ -79,6 +79,42 @@ func TestCameraProfileCreate_persistsProfileTemplateID_whenMatchedTemplateSelect
 	}
 }
 
+func TestCameraProfileCreate_preservesSelectedTemplateChannel_whenDualLensTemplateSelected(t *testing.T) {
+	t.Parallel()
+
+	// Given
+	server := newCameraMutationRouteServer(t, &fakeRouteCameraProber{})
+	template, err := server.db.CreateCameraProfileTemplate(t.Context(), routeDualLensProfileTemplate("V400D Dual Lens", "V400D"))
+	if err != nil {
+		t.Fatalf("create dual-lens profile template: %v", err)
+	}
+	body := cameraDualTemplateSelectionBody(t, "Template Save Lens 2", "template-save-lens-2", template.ID)
+
+	// When
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", body, trustedConsoleHeaders())
+
+	// Then
+	if status != http.StatusOK {
+		t.Fatalf("POST /api/cameras status = %d, want %d; body=%#v", status, http.StatusOK, payload)
+	}
+	stored, err := server.db.GetCameraByStream(t.Context(), "template-save-lens-2")
+	if err != nil {
+		t.Fatalf("read stored camera: %v", err)
+	}
+	if stored.ChannelIndex == nil || *stored.ChannelIndex != 1 {
+		t.Fatalf("stored channelIndex = %v, want 1", stored.ChannelIndex)
+	}
+	if len(stored.Streams) != 2 {
+		t.Fatalf("stored streams = %d, want 2: %#v", len(stored.Streams), stored.Streams)
+	}
+	if stored.Streams[0].ProfileToken != "PROFILE_100" || stored.Streams[1].ProfileToken != "PROFILE_101" {
+		t.Fatalf("stored profile tokens = %q/%q, want PROFILE_100/PROFILE_101", stored.Streams[0].ProfileToken, stored.Streams[1].ProfileToken)
+	}
+	if !strings.Contains(stored.Streams[0].RedactedURL, "/tcp/av1_0") || !strings.Contains(stored.Streams[1].RedactedURL, "/tcp/av1_1") {
+		t.Fatalf("stored lens-2 URLs = %q/%q, want av1 paths", stored.Streams[0].RedactedURL, stored.Streams[1].RedactedURL)
+	}
+}
+
 func TestCameraProfileCreate_leavesProfileTemplateIDNil_whenManualStreamsSelected(t *testing.T) {
 	t.Parallel()
 

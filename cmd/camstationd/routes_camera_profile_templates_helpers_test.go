@@ -81,6 +81,19 @@ func cameraProfileTemplateBody(profileName string, model string) string {
 }
 
 func routeTestProfileTemplate(profileName string, model string) store.CameraProfileTemplate {
+	return routeTestProfileTemplateWithChannels(profileName, model, []store.CameraProfileTemplateChannel{
+		routeTemplateChannel(0, "lens-1", "/tcp/av0_0", "/tcp/av0_1", "PROFILE_000", "PROFILE_001"),
+	})
+}
+
+func routeDualLensProfileTemplate(profileName string, model string) store.CameraProfileTemplate {
+	return routeTestProfileTemplateWithChannels(profileName, model, []store.CameraProfileTemplateChannel{
+		routeTemplateChannel(0, "lens-1", "/tcp/av0_0", "/tcp/av0_1", "PROFILE_000", "PROFILE_001"),
+		routeTemplateChannel(1, "lens-2", "/tcp/av1_0", "/tcp/av1_1", "PROFILE_100", "PROFILE_101"),
+	})
+}
+
+func routeTestProfileTemplateWithChannels(profileName string, model string, channels []store.CameraProfileTemplateChannel) store.CameraProfileTemplate {
 	return store.CameraProfileTemplate{
 		ProfileName:  profileName,
 		Manufacturer: "VStarcam",
@@ -91,40 +104,44 @@ func routeTestProfileTemplate(profileName string, model string) store.CameraProf
 			{Field: "manufacturer", Operator: "equals", Value: "VStarcam"},
 			{Field: "model", Operator: "contains", Value: model},
 		},
-		Channels: []store.CameraProfileTemplateChannel{{
-			Index: 0,
-			Name:  "lens-1",
-			Streams: []store.CameraProfileTemplateStream{
-				{
-					Role:         store.CameraStreamRoleRecording,
-					Label:        "main",
-					Source:       "onvif",
-					Path:         "/tcp/av0_0",
-					ProfileToken: "PROFILE_000",
-					Codec:        "h264",
-					Width:        2304,
-					Height:       1296,
-					FPS:          12,
-					BitrateKbps:  1024,
-				},
-				{
-					Role:         store.CameraStreamRoleLive,
-					Label:        "sub",
-					Source:       "onvif",
-					Path:         "/tcp/av0_1",
-					ProfileToken: "PROFILE_001",
-					Codec:        "h264",
-					Width:        448,
-					Height:       256,
-					FPS:          12,
-					BitrateKbps:  512,
-				},
-			},
-		}},
+		Channels: channels,
 		Capabilities: store.CameraProfileCapabilities{
 			ONVIF:        true,
 			RTSP:         true,
-			MultiChannel: true,
+			MultiChannel: len(channels) > 1,
+		},
+	}
+}
+
+func routeTemplateChannel(index int, name string, recordingPath string, livePath string, recordingToken string, liveToken string) store.CameraProfileTemplateChannel {
+	return store.CameraProfileTemplateChannel{
+		Index: index,
+		Name:  name,
+		Streams: []store.CameraProfileTemplateStream{
+			{
+				Role:         store.CameraStreamRoleRecording,
+				Label:        "main",
+				Source:       "onvif",
+				Path:         recordingPath,
+				ProfileToken: recordingToken,
+				Codec:        "h264",
+				Width:        2304,
+				Height:       1296,
+				FPS:          12,
+				BitrateKbps:  1024,
+			},
+			{
+				Role:         store.CameraStreamRoleLive,
+				Label:        "sub",
+				Source:       "onvif",
+				Path:         livePath,
+				ProfileToken: liveToken,
+				Codec:        "h264",
+				Width:        448,
+				Height:       256,
+				FPS:          12,
+				BitrateKbps:  512,
+			},
 		},
 	}
 }

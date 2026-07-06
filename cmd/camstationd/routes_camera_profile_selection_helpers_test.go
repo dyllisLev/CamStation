@@ -103,6 +103,30 @@ func cameraTemplateSelectionBody(t *testing.T, name string, streamName string, t
 	return string(encoded)
 }
 
+func cameraDualTemplateSelectionBody(t *testing.T, name string, streamName string, templateID int64) string {
+	t.Helper()
+
+	body := map[string]any{
+		"name":              name,
+		"streamName":        streamName,
+		"profileTemplateId": templateID,
+		"host":              "192.168.1.10",
+		"rtspPort":          554,
+		"httpPort":          80,
+		"onvifPort":         80,
+		"channelIndex":      1,
+		"streamSelections": []map[string]any{
+			{"role": "recording", "profileToken": "PROFILE_100"},
+			{"role": "live", "profileToken": "PROFILE_101"},
+		},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal dual template selection body: %v", err)
+	}
+	return string(encoded)
+}
+
 func cameraManualSelectionBody(t *testing.T, name string, streamName string, rawURL string) string {
 	t.Helper()
 

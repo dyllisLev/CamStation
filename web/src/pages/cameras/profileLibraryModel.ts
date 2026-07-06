@@ -73,7 +73,7 @@ export function formFromDraftSource(source: ProfileTemplateDraftSource): Profile
     mappingText: streams || defaultMappingText,
     onvif: source.profile.adapter === "onvif",
     rtsp: true,
-    snapshot: source.profile.capabilities.siren || false,
+    snapshot: source.profile.channels.some((channel) => channel.candidates.some((candidate) => candidate.roleHint === "snapshot")),
     multiChannel: source.profile.channels.length > 1,
   };
 }

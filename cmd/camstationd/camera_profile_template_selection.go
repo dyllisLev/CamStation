@@ -31,7 +31,7 @@ func mergeTemplateIntoDeviceProfile(profile cameraprofile.DeviceProfile, templat
 	if profile.ONVIFPort == 0 {
 		profile.ONVIFPort = req.ONVIFPort
 	}
-	return profileWithCandidates(profile, profileTemplateCandidates(template, req))
+	return profileWithTemplateChannels(profile, template, req)
 }
 
 func profileWithCandidates(profile cameraprofile.DeviceProfile, candidates []cameraprofile.StreamCandidate) cameraprofile.DeviceProfile {
@@ -49,28 +49,62 @@ func profileWithCandidates(profile cameraprofile.DeviceProfile, candidates []cam
 	return profile
 }
 
+func profileWithTemplateChannels(profile cameraprofile.DeviceProfile, template store.CameraProfileTemplate, req cameraCreateRequest) cameraprofile.DeviceProfile {
+	if len(profile.Channels) > 0 {
+		return profile
+	}
+	profile.Channels = templateChannels(template, req)
+	return profile
+}
+
+func templateChannels(template store.CameraProfileTemplate, req cameraCreateRequest) []cameraprofile.ChannelProfile {
+	channels := make([]cameraprofile.ChannelProfile, 0, len(template.Channels))
+	for _, channel := range template.Channels {
+		candidates := profileTemplateChannelCandidates(channel, req)
+		if len(candidates) == 0 {
+			continue
+		}
+		label := channel.Name
+		if label == "" {
+			label = fmt.Sprintf("channel %d", channel.Index)
+		}
+		channels = append(channels, cameraprofile.ChannelProfile{
+			Index:      channel.Index,
+			Label:      label,
+			Candidates: candidates,
+		})
+	}
+	return channels
+}
+
 func profileTemplateCandidates(template store.CameraProfileTemplate, req cameraCreateRequest) []cameraprofile.StreamCandidate {
 	candidates := make([]cameraprofile.StreamCandidate, 0)
 	for _, channel := range template.Channels {
-		for _, stream := range channel.Streams {
-			rawURL := profileTemplateStreamURL(req, stream)
-			if rawURL == "" {
-				continue
-			}
-			candidates = append(candidates, cameraprofile.StreamCandidate{
-				RoleHint:     cameraprofile.StreamRole(stream.Role),
-				Label:        stream.Label,
-				Source:       stream.Source,
-				URL:          rawURL,
-				RedactedURL:  store.RedactURL(rawURL),
-				Codec:        stream.Codec,
-				Width:        stream.Width,
-				Height:       stream.Height,
-				FPS:          stream.FPS,
-				BitrateKbps:  stream.BitrateKbps,
-				ProfileToken: stream.ProfileToken,
-			})
+		candidates = append(candidates, profileTemplateChannelCandidates(channel, req)...)
+	}
+	return candidates
+}
+
+func profileTemplateChannelCandidates(channel store.CameraProfileTemplateChannel, req cameraCreateRequest) []cameraprofile.StreamCandidate {
+	candidates := make([]cameraprofile.StreamCandidate, 0, len(channel.Streams))
+	for _, stream := range channel.Streams {
+		rawURL := profileTemplateStreamURL(req, stream)
+		if rawURL == "" {
+			continue
 		}
+		candidates = append(candidates, cameraprofile.StreamCandidate{
+			RoleHint:     cameraprofile.StreamRole(stream.Role),
+			Label:        stream.Label,
+			Source:       stream.Source,
+			URL:          rawURL,
+			RedactedURL:  store.RedactURL(rawURL),
+			Codec:        stream.Codec,
+			Width:        stream.Width,
+			Height:       stream.Height,
+			FPS:          stream.FPS,
+			BitrateKbps:  stream.BitrateKbps,
+			ProfileToken: stream.ProfileToken,
+		})
 	}
 	return candidates
 }
