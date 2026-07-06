@@ -62,16 +62,20 @@ function CameraRow({ camera, selected, onSelect }: { camera: Camera; selected: b
   const streams = camera.streams ?? [];
   return (
     <tr className={selected ? "new-camera-selected-row" : undefined}>
-      <td className="max-w-72 px-3 py-3" data-label="카메라">
-        <div className="font-semibold text-slate-100">{camera.name}</div>
-        <div className="mt-1 font-mono text-xs text-slate-500">{camera.streamName}</div>
+      <td className="px-3 py-3" data-label="카메라">
+        <div className="new-table-value max-w-72">
+          <div className="font-semibold text-slate-100">{camera.name}</div>
+          <div className="mt-1 font-mono text-xs text-slate-500">{camera.streamName}</div>
+        </div>
       </td>
       <td className="px-3 py-3" data-label="프로파일">
-        <div className="text-slate-300">{camera.manufacturer || "-"}</div>
-        <div className="mt-1 text-xs text-slate-500">{camera.model || camera.profileAdapter || "-"}</div>
+        <div className="new-table-value">
+          <div className="text-slate-300">{camera.manufacturer || "-"}</div>
+          <div className="mt-1 text-xs text-slate-500">{camera.model || camera.profileAdapter || "-"}</div>
+        </div>
       </td>
       <td className="px-3 py-3" data-label="스트림">
-        <div className="new-camera-streams">
+        <div className="new-table-value new-camera-streams">
           {streams.map((stream) => (
             <span key={stream.go2rtcStreamName}>
               {roleLabel(stream.role)} <em>{stream.go2rtcStreamName}</em>
@@ -81,17 +85,23 @@ function CameraRow({ camera, selected, onSelect }: { camera: Camera; selected: b
         </div>
       </td>
       <td className="px-3 py-3" data-label="상태">
-        <span className="inline-flex items-center gap-2">
-          <StatusDot status={camera.state} />
-          <Badge value={camera.state} />
-        </span>
-        <div className="mt-1 text-xs text-slate-500">{formatDurationNanos(camera.lastProbe?.duration)}</div>
+        <div className="new-table-value">
+          <span className="inline-flex items-center gap-2">
+            <StatusDot status={camera.state} />
+            <Badge value={camera.state} />
+          </span>
+          <div className="mt-1 text-xs text-slate-500">{formatDurationNanos(camera.lastProbe?.duration)}</div>
+        </div>
       </td>
-      <td className="px-3 py-3 text-slate-500" data-label="업데이트">{formatDate(camera.updatedAt)}</td>
+      <td className="px-3 py-3 text-slate-500" data-label="업데이트">
+        <span className="new-table-value">{formatDate(camera.updatedAt)}</span>
+      </td>
       <td className="px-3 py-3" data-label="작업">
-        <button className="new-ghost" type="button" onClick={onSelect} aria-pressed={selected}>
-          프로파일 수정
-        </button>
+        <div className="new-table-value">
+          <button className="new-ghost" type="button" onClick={onSelect} aria-pressed={selected}>
+            카메라 수정
+          </button>
+        </div>
       </td>
     </tr>
   );

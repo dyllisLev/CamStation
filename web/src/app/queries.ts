@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type CameraPreviewRequest, type CameraScanRequest, type CreateCamera, type LayoutProfile, type UpdateCamera } from "./api";
+import {
+  api,
+  type CameraPreviewRequest,
+  type CameraProfileTemplateInput,
+  type CameraScanRequest,
+  type CreateCamera,
+  type LayoutProfile,
+  type UpdateCamera,
+} from "./api";
 
 export * from "./backupQueries";
 export * from "./eventsIncidentsQueries";
@@ -13,6 +21,44 @@ export function useHealth() {
 
 export function useCameras() {
   return useQuery({ queryKey: ["cameras"], queryFn: api.cameras, refetchInterval: 10000 });
+}
+
+export function useCameraProfileTemplates() {
+  return useQuery({ queryKey: ["camera-profiles"], queryFn: api.cameraProfiles });
+}
+
+export function useCreateCameraProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (profile: CameraProfileTemplateInput) => api.createCameraProfile(profile),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["camera-profiles"] });
+    },
+  });
+}
+
+export function useUpdateCameraProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, profile }: { readonly id: number; readonly profile: CameraProfileTemplateInput }) =>
+      api.updateCameraProfile(id, profile),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["camera-profiles"] });
+    },
+  });
+}
+
+export function useDeleteCameraProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteCameraProfile(id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["camera-profiles"] }),
+        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
+      ]);
+    },
+  });
 }
 
 export function useLayouts() {

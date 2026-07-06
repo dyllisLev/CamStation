@@ -21,6 +21,7 @@ type Camera struct {
 	RecordingStreamName string         `json:"recordingStreamName,omitempty"`
 	LiveStreamName      string         `json:"liveStreamName,omitempty"`
 	State               string         `json:"state"`
+	ProfileTemplateID   *int64         `json:"profileTemplateId,omitempty"`
 	Manufacturer        string         `json:"manufacturer,omitempty"`
 	Model               string         `json:"model,omitempty"`
 	ProfileAdapter      string         `json:"profileAdapter,omitempty"`

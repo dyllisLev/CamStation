@@ -45,14 +45,18 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 	if camera.ChannelIndex != nil {
 		channelIndex = *camera.ChannelIndex
 	}
+	var profileTemplateID any
+	if camera.ProfileTemplateID != nil {
+		profileTemplateID = *camera.ProfileTemplateID
+	}
 
 	_, err = d.db.ExecContext(ctx,
 		`INSERT INTO cameras(
 			name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
-			manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
+			profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 			last_probe_json, last_scan_json, created_at, updated_at
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(stream_name) DO UPDATE SET
 			name=excluded.name,
 			url=excluded.url,
@@ -60,6 +64,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 			recording_stream_name=excluded.recording_stream_name,
 			live_stream_name=excluded.live_stream_name,
 			state=excluded.state,
+			profile_template_id=excluded.profile_template_id,
 			manufacturer=excluded.manufacturer,
 			model=excluded.model,
 			profile_adapter=excluded.profile_adapter,
@@ -78,6 +83,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 		camera.RecordingStreamName,
 		camera.LiveStreamName,
 		camera.State,
+		profileTemplateID,
 		camera.Manufacturer,
 		camera.Model,
 		camera.ProfileAdapter,
@@ -100,7 +106,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
-		        manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
+		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, created_at, updated_at
 		 FROM cameras ORDER BY id`,
 	)
@@ -134,7 +140,7 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, error) {
 	row := d.db.QueryRowContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
-		        manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
+		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, created_at, updated_at
 		 FROM cameras
 		 WHERE stream_name = ? OR recording_stream_name = ? OR live_stream_name = ?`,

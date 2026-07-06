@@ -12,6 +12,7 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	var camera Camera
 	var createdAt, updatedAt, probeJSON, scanJSON string
 	var channelIndex sql.NullInt64
+	var profileTemplateID sql.NullInt64
 	if err := row.Scan(
 		&camera.ID,
 		&camera.Name,
@@ -21,6 +22,7 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 		&camera.RecordingStreamName,
 		&camera.LiveStreamName,
 		&camera.State,
+		&profileTemplateID,
 		&camera.Manufacturer,
 		&camera.Model,
 		&camera.ProfileAdapter,
@@ -48,6 +50,10 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	if channelIndex.Valid {
 		value := int(channelIndex.Int64)
 		camera.ChannelIndex = &value
+	}
+	if profileTemplateID.Valid {
+		value := profileTemplateID.Int64
+		camera.ProfileTemplateID = &value
 	}
 	camera.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	camera.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)

@@ -15,7 +15,7 @@ func TestScannerDetectsVStarcamWhenONVIFIdentityIsGeneric(t *testing.T) {
 			<tds:Manufacturer>IP camera</tds:Manufacturer>
 			<tds:Model>IP Camera</tds:Model>
 			<tds:FirmwareVersion>2.4</tds:FirmwareVersion>
-			<tds:SerialNumber>AAC2362423PHIH</tds:SerialNumber>
+			<tds:SerialNumber>VSTAR-DUMMY-0001</tds:SerialNumber>
 			<tds:HardwareId>1.0</tds:HardwareId>
 		</tds:GetDeviceInformationResponse>`,
 		hostname: "veepai",

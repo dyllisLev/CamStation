@@ -11,16 +11,23 @@ import (
 
 func (d routeDeps) registerProbeRoute(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/camera/probe", func(w http.ResponseWriter, r *http.Request) {
+		if !requireCameraManagementRequest(w, r) {
+			return
+		}
 		var req struct {
 			URL     string `json:"url"`
 			Timeout int    `json:"timeoutSeconds"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			writeSafeError(w, http.StatusBadRequest, err)
 			return
 		}
 		if req.URL == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("url is required"))
+			writeSafeError(w, http.StatusBadRequest, fmt.Errorf("url is required"))
+			return
+		}
+		if err := validateProbeTarget(r.Context(), req.URL); err != nil {
+			writeSafeError(w, http.StatusBadRequest, err)
 			return
 		}
 		timeout := time.Duration(req.Timeout) * time.Second
@@ -28,7 +35,14 @@ func (d routeDeps) registerProbeRoute(mux *http.ServeMux) {
 			timeout = 12 * time.Second
 		}
 
+		release, err := withCameraNetworkSlot(r.Context())
+		if err != nil {
+			writeSafeError(w, http.StatusTooManyRequests, err)
+			return
+		}
+		defer release()
 		result, err := d.prober.Probe(r.Context(), req.URL, timeout)
+		publicResult := safeProbeResult(result, req.URL, err != nil)
 		level := "info"
 		message := "camera probe succeeded"
 		status := http.StatusOK
@@ -41,12 +55,12 @@ func (d routeDeps) registerProbeRoute(mux *http.ServeMux) {
 			Source:  "camera.probe",
 			Level:   level,
 			Message: message,
-			Details: map[string]any{"result": result, "error": errString(err)},
+			Details: map[string]any{"result": publicResult, "error": safeCameraError(err)},
 		})
 		if err != nil {
-			writeJSON(w, status, map[string]any{"ok": false, "error": err.Error(), "result": result})
+			writeJSON(w, status, map[string]any{"ok": false, "error": safeCameraError(err), "result": publicResult})
 			return
 		}
-		writeJSON(w, status, map[string]any{"ok": true, "result": result})
+		writeJSON(w, status, map[string]any{"ok": true, "result": publicResult})
 	})
 }

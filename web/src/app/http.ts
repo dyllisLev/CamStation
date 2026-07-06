@@ -7,12 +7,16 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 type QueryValue = string | number | boolean | readonly string[] | undefined;
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (isCameraManagementMutation(path, init?.method)) {
+    headers.set("X-CamStation-Management", "1");
+  }
   const response = await fetch(withAppBase(path), {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -23,6 +27,14 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+function isCameraManagementMutation(path: string, method = "GET"): boolean {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod === "GET" || normalizedMethod === "HEAD") {
+    return false;
+  }
+  return path.startsWith("/api/cameras") || path.startsWith("/api/camera-profiles");
 }
 
 export function queryString(params: Readonly<Record<string, QueryValue>>): string {

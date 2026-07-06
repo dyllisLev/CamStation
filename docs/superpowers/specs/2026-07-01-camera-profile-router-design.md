@@ -3,7 +3,10 @@
 ## Goal
 
 Replace one-URL camera registration with a camera-aware registration and stream
-routing layer.
+routing layer. A camera profile template is not a camera. A template is a
+reusable, credential-free manufacturer/model stream mapping; a camera is a
+registered physical or logical instance with connection details and saved role
+streams.
 
 CamStation should no longer treat a camera as only an RTSP URL. Operators should
 register a camera by entering connection details, let CamStation scan the device,
@@ -127,7 +130,9 @@ read-only discovery:
 - Vendor API queries for supported adapters.
 - RTSP probes for candidate streams.
 
-Scanner output is normalized into a device profile report:
+Scanner output is normalized into a device scan report. The report can be
+matched against stored profile templates, but it is not itself a reusable
+template until the operator saves it as one:
 
 ```json
 {
@@ -215,6 +220,33 @@ Conceptual tables:
 - `last_scan_json`
 - `last_probe_json`
 - timestamps
+
+### `camera_profile_templates`
+
+- `id`
+- `profile_name`
+- `manufacturer`
+- `model`
+- `adapter`
+- `version`
+- `match_rules_json`
+- `channels_json`
+- `capabilities_json`
+- timestamps
+
+Profile templates must not contain a camera host, username, password, or raw
+credentialed URL. They only describe how a known manufacturer/model maps
+channels and stream roles.
+
+Template lifecycle:
+
+- templates can be created, listed, updated, and deleted from the profile library
+- a camera can reference a template through `profile_template_id`
+- when a camera is saved, the selected role streams are copied into
+  `camera_streams` as a snapshot
+- later template edits do not silently mutate existing cameras
+- deleting a referenced template is blocked until cameras are detached or
+  rematched
 
 ### `camera_streams`
 

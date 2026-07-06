@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-06-30
+Last updated: 2026-07-06
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -17,7 +17,21 @@ This document records the current implementation state so the next session can c
 - Go backend skeleton under `cmd/camstationd`
 - Embedded React/Vite frontend served by the Go daemon
 - SQLite store and migrations under `internal/store`
-- Camera registration/listing API
+- Camera registration/listing/edit/delete API
+- Camera profile-template CRUD API:
+  - `GET /api/camera-profiles`
+  - `POST /api/camera-profiles`
+  - `GET /api/camera-profiles/{id}`
+  - `PUT /api/camera-profiles/{id}`
+  - `DELETE /api/camera-profiles/{id}`
+- Reusable camera profile templates are separate from camera instances:
+  - templates store manufacturer/model/adapter match rules and credential-free channel mappings
+  - cameras can store `profileTemplateId` provenance
+  - camera role streams are saved as a snapshot when the camera is registered or updated
+  - deleting a profile template is blocked while a camera references it
+- Camera scan now returns device discovery data plus profile-template matches, not a camera-as-profile object.
+- Camera management mutations require the trusted console management header/origin/fetch-site guard.
+- Camera scan/probe/preview targets are bounded to safe private camera targets and redacted public errors.
 - Camera URL redaction in API responses and events
 - ffprobe-based camera probe helper
 - go2rtc managed as a child process by `camstationd`
@@ -94,6 +108,14 @@ This document records the current implementation state so the next session can c
   - runs manual capacity cleanup from the UI
   - lists recorder workers, current temp segment, and local go2rtc RTSP input
   - shows segment length and temp-to-recordings policy
+- Camera administration page at `/cameras`:
+  - shows registered cameras and their role streams
+  - uses one active camera workflow for registration or editing
+  - scans a device and shows saved profile-template matches
+  - lets an operator save a camera from selected recording/live streams
+  - exposes camera-focused update/delete actions
+  - provides a separate profile library for reusable manufacturer/model templates
+  - profile-template editing never asks for camera IP, username, or password
 
 ## Stream And Recording Policy
 
@@ -149,6 +171,20 @@ Browser/Playwright verification performed:
   - automatic segment-complete cleanup after the next 5-minute rollover reduced recordings from `337207565` to `282317129` bytes
   - all three recorders stayed `running`
   - local RTSP ffprobe stayed healthy for streams `camera-1`, `1`, and `2`
+- Camera/profile redesign verification on 2026-07-06:
+  - `go test ./internal/store ./internal/cameraprofile ./cmd/camstationd -count=1`
+  - `go test ./...`
+  - `cd web && npm run lint`
+  - `cd web && npm run build`
+  - `go build -o camstationd ./cmd/camstationd`
+  - `scripts/camstationctl.sh restart`
+  - `scripts/camstationctl.sh verify`
+  - `/api/camera-profiles` returns JSON instead of SPA HTML
+  - runtime CRUD QA used the currently registered `염소장/goat-yard` camera with DB backup/restore:
+    - update changed only the camera registration metadata
+    - delete removed the camera from the public listing
+    - re-register restored `goat-yard-recording` and `goat-yard-live`
+    - the original DB was restored afterward so `염소장` returned to id `6`
 
 ## Important Corrections Learned
 
@@ -167,7 +203,7 @@ Browser/Playwright verification performed:
 - Recordings page shows storage/cleanup/recorder state, but does not yet include playback or segment browsing.
 - Settings page includes language settings, but does not yet cover all legacy settings.
 - System/Streams/Logs/Viewers pages are early status surfaces and feature matrices.
-- Camera management is basic registration/listing; edit/delete/group/ONVIF are not complete.
+- Camera grouping and advanced ONVIF management are not complete.
 - Event log is basic and still needs operational filtering and incident grouping.
 
 ## Not Implemented Yet
@@ -178,7 +214,7 @@ Browser/Playwright verification performed:
 - Clip download/export
 - Retention-by-days settings
 - Motion event detection/storage
-- Camera edit/delete/sort/group management
+- Camera sort/group management
 - ONVIF discovery/reboot/status management
 - Connection engine state machine:
   - connecting

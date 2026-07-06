@@ -16,6 +16,7 @@ export type Camera = {
   manufacturer?: string;
   model?: string;
   profileAdapter?: string;
+  profileTemplateId?: number;
   host?: string;
   rtspPort?: number;
   httpPort?: number;
@@ -101,6 +102,69 @@ export type DeviceProfile = {
   lastScan?: Record<string, unknown>;
 };
 
+export type CameraProfileCapabilities = {
+  readonly onvif?: boolean;
+  readonly rtsp?: boolean;
+  readonly snapshot?: boolean;
+  readonly multiChannel?: boolean;
+};
+
+export type CameraProfileMatchRule = {
+  readonly field: string;
+  readonly operator: string;
+  readonly value: string;
+};
+
+export type CameraProfileTemplateStream = {
+  readonly role: "recording" | "live" | "snapshot" | string;
+  readonly label: string;
+  readonly source: string;
+  readonly path: string;
+  readonly profileToken?: string;
+  readonly codec?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly fps?: number;
+  readonly bitrateKbps?: number;
+};
+
+export type CameraProfileTemplateChannel = {
+  readonly index: number;
+  readonly name: string;
+  readonly streams: readonly CameraProfileTemplateStream[];
+};
+
+export type CameraProfileTemplateInput = {
+  readonly profileName: string;
+  readonly manufacturer: string;
+  readonly model: string;
+  readonly adapter: string;
+  readonly version: number;
+  readonly matchRules: readonly CameraProfileMatchRule[];
+  readonly channels: readonly CameraProfileTemplateChannel[];
+  readonly capabilities: CameraProfileCapabilities;
+};
+
+export type CameraProfileTemplate = CameraProfileTemplateInput & {
+  readonly id: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type CameraProfileMatch = {
+  readonly templateId: number;
+  readonly name: string;
+  readonly confidence: number;
+  readonly reasons: readonly string[];
+};
+
+export type CameraScanResponse = {
+  readonly ok: boolean;
+  readonly scan: DeviceProfile;
+  readonly matches: readonly CameraProfileMatch[];
+  readonly recommendation?: CameraProfileMatch | null;
+};
+
 export type LayoutItem = {
   i: string;
   x: number;
@@ -153,6 +217,7 @@ export type CreateCamera = {
   httpPort?: number;
   onvifPort?: number;
   adapter?: string;
+  profileTemplateId?: number;
   profile?: DeviceProfile;
   channelIndex?: number;
   streamSelections?: CameraStreamSelection[];

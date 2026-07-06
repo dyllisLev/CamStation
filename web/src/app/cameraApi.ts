@@ -1,11 +1,13 @@
 import { queryString, request } from "./http";
 import type {
   Camera,
+  CameraProfileTemplate,
+  CameraProfileTemplateInput,
+  CameraScanResponse,
   CameraPreviewRequest,
   CameraPreviewResponse,
   CameraScanRequest,
   CreateCamera,
-  DeviceProfile,
   Health,
   LayoutProfile,
   TimelineData,
@@ -36,7 +38,7 @@ export const cameraApi = {
   timeline: (camera: string, date: string) =>
     request<TimelineData>(`/api/timeline${queryString({ cam: camera, date })}`),
   scanCamera: (camera: CameraScanRequest) =>
-    request<{ readonly ok: boolean; readonly profile: DeviceProfile }>("/api/cameras/scan", {
+    request<CameraScanResponse>("/api/cameras/scan", {
       method: "POST",
       body: JSON.stringify(camera),
     }),
@@ -46,7 +48,7 @@ export const cameraApi = {
       body: JSON.stringify(camera),
     }),
   scanRegisteredCamera: (streamName: string, camera: CameraScanRequest) =>
-    request<{ readonly ok: boolean; readonly profile: DeviceProfile }>(
+    request<CameraScanResponse>(
       `/api/cameras/${encodeURIComponent(streamName)}/scan`,
       { method: "POST", body: JSON.stringify(camera) },
     ),
@@ -64,4 +66,17 @@ export const cameraApi = {
     }),
   deleteCamera: (streamName: string) =>
     request<CameraMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, { method: "DELETE" }),
+  cameraProfiles: () => request<CameraProfileTemplate[]>("/api/camera-profiles"),
+  cameraProfile: (id: number) => request<CameraProfileTemplate>(`/api/camera-profiles/${encodeURIComponent(String(id))}`),
+  createCameraProfile: (profile: CameraProfileTemplateInput) =>
+    request<CameraProfileTemplate>("/api/camera-profiles", { method: "POST", body: JSON.stringify(profile) }),
+  updateCameraProfile: (id: number, profile: CameraProfileTemplateInput) =>
+    request<CameraProfileTemplate>(`/api/camera-profiles/${encodeURIComponent(String(id))}`, {
+      method: "PUT",
+      body: JSON.stringify(profile),
+    }),
+  deleteCameraProfile: (id: number) =>
+    request<{ readonly ok: boolean; readonly id: number }>(`/api/camera-profiles/${encodeURIComponent(String(id))}`, {
+      method: "DELETE",
+    }),
 } as const;

@@ -17,6 +17,11 @@ func requestJSON(t *testing.T, handler http.Handler, method, target, body string
 
 	req := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	for key, values := range trustedConsoleHeaders() {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -227,7 +232,6 @@ func TestJobsAPI_RejectsSecretLikeKind(t *testing.T) {
 
 func writeAPIEvidence(t *testing.T, name string, payload map[string]any) {
 	t.Helper()
-
 	dir := os.Getenv("CAMSTATION_EVIDENCE_DIR")
 	if dir == "" {
 		return

@@ -17,6 +17,7 @@ type publicCamera struct {
 	RecordingStreamName string               `json:"recordingStreamName,omitempty"`
 	LiveStreamName      string               `json:"liveStreamName,omitempty"`
 	State               string               `json:"state"`
+	ProfileTemplateID   *int64               `json:"profileTemplateId,omitempty"`
 	Manufacturer        string               `json:"manufacturer,omitempty"`
 	Model               string               `json:"model,omitempty"`
 	ProfileAdapter      string               `json:"profileAdapter,omitempty"`
@@ -90,6 +91,7 @@ func publicCameraFromStore(camera store.Camera) publicCamera {
 		RecordingStreamName: camera.RecordingStreamName,
 		LiveStreamName:      camera.LiveStreamName,
 		State:               camera.State,
+		ProfileTemplateID:   camera.ProfileTemplateID,
 		Manufacturer:        camera.Manufacturer,
 		Model:               camera.Model,
 		ProfileAdapter:      camera.ProfileAdapter,
@@ -134,7 +136,7 @@ func publicJSONValue(value any) any {
 		}
 		return out
 	case string:
-		if strings.Contains(typed, "://") && strings.Contains(typed, "@") {
+		if strings.Contains(typed, "://") {
 			return store.RedactURL(typed)
 		}
 		return typed

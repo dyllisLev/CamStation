@@ -76,13 +76,13 @@ export function ProfileSelectionPanel({
           </select>
         </label>
         <RoleSelect
-          label="녹화 프로필"
+          label="녹화 스트림"
           value={selection.recordingProfileToken}
           candidates={candidates}
           onChange={(profileToken) => onSelectionChange({ ...selection, recordingProfileToken: profileToken })}
         />
         <RoleSelect
-          label="라이브 프로필"
+          label="라이브 스트림"
           value={selection.liveProfileToken}
           candidates={candidates}
           onChange={(profileToken) => onSelectionChange({ ...selection, liveProfileToken: profileToken })}

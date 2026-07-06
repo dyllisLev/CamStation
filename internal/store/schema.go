@@ -79,29 +79,56 @@ func (d *DB) Migrate(ctx context.Context) error {
 			FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_events_job_id
-			ON job_events(job_id, id)`,
+				ON job_events(job_id, id)`,
+		`CREATE TABLE IF NOT EXISTS camera_profile_templates (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					profile_name TEXT NOT NULL,
+					normalized_profile_name TEXT NOT NULL,
+					manufacturer TEXT NOT NULL,
+					normalized_manufacturer TEXT NOT NULL,
+					model TEXT NOT NULL,
+					normalized_model TEXT NOT NULL,
+					adapter TEXT NOT NULL,
+					normalized_adapter TEXT NOT NULL,
+					version INTEGER NOT NULL DEFAULT 1,
+					match_rules_json TEXT NOT NULL DEFAULT '[]',
+					channels_json TEXT NOT NULL DEFAULT '[]',
+					capabilities_json TEXT NOT NULL DEFAULT '{}',
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_profile_templates_unique_key
+				ON camera_profile_templates(
+					normalized_adapter,
+					normalized_manufacturer,
+					normalized_model,
+					normalized_profile_name,
+					version
+				)`,
 		`CREATE TABLE IF NOT EXISTS cameras (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				name TEXT NOT NULL,
-				url TEXT NOT NULL,
-				stream_name TEXT NOT NULL UNIQUE,
-				layout_key TEXT NOT NULL DEFAULT '',
-				recording_stream_name TEXT NOT NULL DEFAULT '',
-				live_stream_name TEXT NOT NULL DEFAULT '',
-				state TEXT NOT NULL,
-				manufacturer TEXT NOT NULL DEFAULT '',
-				model TEXT NOT NULL DEFAULT '',
-				profile_adapter TEXT NOT NULL DEFAULT '',
-				host TEXT NOT NULL DEFAULT '',
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL,
+					url TEXT NOT NULL,
+					stream_name TEXT NOT NULL UNIQUE,
+					layout_key TEXT NOT NULL DEFAULT '',
+					recording_stream_name TEXT NOT NULL DEFAULT '',
+					live_stream_name TEXT NOT NULL DEFAULT '',
+					state TEXT NOT NULL,
+					profile_template_id INTEGER,
+					manufacturer TEXT NOT NULL DEFAULT '',
+					model TEXT NOT NULL DEFAULT '',
+					profile_adapter TEXT NOT NULL DEFAULT '',
+					host TEXT NOT NULL DEFAULT '',
 				rtsp_port INTEGER NOT NULL DEFAULT 0,
 				http_port INTEGER NOT NULL DEFAULT 0,
 				onvif_port INTEGER NOT NULL DEFAULT 0,
 				channel_index INTEGER,
-				last_probe_json TEXT NOT NULL DEFAULT '{}',
-				last_scan_json TEXT NOT NULL DEFAULT '{}',
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)`,
+					last_probe_json TEXT NOT NULL DEFAULT '{}',
+					last_scan_json TEXT NOT NULL DEFAULT '{}',
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					FOREIGN KEY(profile_template_id) REFERENCES camera_profile_templates(id) ON DELETE RESTRICT
+				)`,
 		`CREATE TABLE IF NOT EXISTS camera_streams (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				camera_id INTEGER NOT NULL,
@@ -171,32 +198,6 @@ func (d *DB) Migrate(ctx context.Context) error {
 	}
 	if err := d.ensureRecordingBackupSchema(ctx); err != nil {
 		return err
-	}
-	return nil
-}
-
-func (d *DB) ensureCameraProfileSchema(ctx context.Context) error {
-	columns := []struct {
-		name       string
-		definition string
-	}{
-		{"layout_key", "TEXT NOT NULL DEFAULT ''"},
-		{"recording_stream_name", "TEXT NOT NULL DEFAULT ''"},
-		{"live_stream_name", "TEXT NOT NULL DEFAULT ''"},
-		{"manufacturer", "TEXT NOT NULL DEFAULT ''"},
-		{"model", "TEXT NOT NULL DEFAULT ''"},
-		{"profile_adapter", "TEXT NOT NULL DEFAULT ''"},
-		{"host", "TEXT NOT NULL DEFAULT ''"},
-		{"rtsp_port", "INTEGER NOT NULL DEFAULT 0"},
-		{"http_port", "INTEGER NOT NULL DEFAULT 0"},
-		{"onvif_port", "INTEGER NOT NULL DEFAULT 0"},
-		{"channel_index", "INTEGER"},
-		{"last_scan_json", "TEXT NOT NULL DEFAULT '{}'"},
-	}
-	for _, column := range columns {
-		if err := d.addColumnIfMissing(ctx, "cameras", column.name, column.definition); err != nil {
-			return err
-		}
 	}
 	return nil
 }

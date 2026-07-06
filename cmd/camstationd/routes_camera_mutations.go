@@ -10,6 +10,9 @@ import (
 
 func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/cameras", func(w http.ResponseWriter, r *http.Request) {
+		if !requireCameraManagementRequest(w, r) {
+			return
+		}
 		var req cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -75,6 +78,9 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("PUT /api/cameras/{streamName}", func(w http.ResponseWriter, r *http.Request) {
+		if !requireCameraManagementRequest(w, r) {
+			return
+		}
 		existing, err := d.db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
@@ -149,6 +155,9 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("DELETE /api/cameras/{streamName}", func(w http.ResponseWriter, r *http.Request) {
+		if !requireCameraManagementRequest(w, r) {
+			return
+		}
 		deleted, err := d.db.DeleteCamera(r.Context(), r.PathValue("streamName"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)

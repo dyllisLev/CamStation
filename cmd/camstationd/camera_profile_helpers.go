@@ -17,20 +17,22 @@ type cameraStreamSelection struct {
 }
 
 type cameraCreateRequest struct {
-	Name             string                          `json:"name"`
-	URL              string                          `json:"url"`
-	Stream           string                          `json:"streamName"`
-	Host             string                          `json:"host"`
-	Username         string                          `json:"username"`
-	Password         string                          `json:"password"`
-	RTSPPort         int                             `json:"rtspPort"`
-	HTTPPort         int                             `json:"httpPort"`
-	ONVIFPort        int                             `json:"onvifPort"`
-	Adapter          string                          `json:"adapter"`
-	ChannelIndex     *int                            `json:"channelIndex"`
-	Profile          cameraprofile.DeviceProfile     `json:"profile"`
-	Streams          []cameraprofile.StreamCandidate `json:"streams"`
-	StreamSelections []cameraStreamSelection         `json:"streamSelections"`
+	Name                string                          `json:"name"`
+	URL                 string                          `json:"url"`
+	Stream              string                          `json:"streamName"`
+	Host                string                          `json:"host"`
+	Username            string                          `json:"username"`
+	Password            string                          `json:"password"`
+	RTSPPort            int                             `json:"rtspPort"`
+	HTTPPort            int                             `json:"httpPort"`
+	ONVIFPort           int                             `json:"onvifPort"`
+	Adapter             string                          `json:"adapter"`
+	ChannelIndex        *int                            `json:"channelIndex"`
+	ProfileTemplateID   *int64                          `json:"profileTemplateId"`
+	SaveProfileTemplate *cameraProfileTemplateRequest   `json:"saveProfileTemplate"`
+	Profile             cameraprofile.DeviceProfile     `json:"profile"`
+	Streams             []cameraprofile.StreamCandidate `json:"streams"`
+	StreamSelections    []cameraStreamSelection         `json:"streamSelections"`
 }
 
 var (
@@ -71,6 +73,9 @@ func cameraUpdateRequest(existing store.Camera, req cameraCreateRequest) cameraC
 	if req.ChannelIndex == nil {
 		req.ChannelIndex = existing.ChannelIndex
 	}
+	if req.ProfileTemplateID == nil {
+		req.ProfileTemplateID = existing.ProfileTemplateID
+	}
 	return req
 }
 
@@ -100,8 +105,24 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	}
 
 	profile := req.Profile
+	if req.SaveProfileTemplate != nil {
+		created, err := db.CreateCameraProfileTemplate(ctx, req.SaveProfileTemplate.storeTemplate())
+		if err != nil {
+			return store.Camera{}, camera.ProbeResult{}, nil, err
+		}
+		req.ProfileTemplateID = &created.ID
+	}
+	var selectedTemplate *store.CameraProfileTemplate
+	if req.ProfileTemplateID != nil {
+		template, err := db.GetCameraProfileTemplate(ctx, *req.ProfileTemplateID)
+		if err != nil {
+			return store.Camera{}, camera.ProbeResult{}, nil, err
+		}
+		selectedTemplate = &template
+		profile = mergeTemplateIntoDeviceProfile(profile, template, req)
+	}
 	scanReq := scanRequestFromCamera(req)
-	if !hasProfileCandidates(profile) && scanReqHasTarget(scanReq) {
+	if !hasProfileCandidates(profile) && len(req.Streams) == 0 && scanReqHasTarget(scanReq) {
 		scanned, err := cameraprofile.NewScanner(cameraprofile.NewNetworkScannerClient()).Scan(ctx, scanReq)
 		if err != nil {
 			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: %v", errCameraProfileScanFailed, err)
@@ -110,11 +131,17 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	}
 
 	candidates := profileCandidates(profile)
+	selectionProfile := profile
 	if len(req.Streams) > 0 {
 		candidates = req.Streams
+		selectionProfile = profileWithCandidates(cameraprofile.DeviceProfile{}, candidates)
+	}
+	if selectedTemplate != nil && len(candidates) == 0 {
+		candidates = profileTemplateCandidates(*selectedTemplate, req)
+		selectionProfile = profileWithCandidates(cameraprofile.DeviceProfile{}, candidates)
 	}
 	if len(req.StreamSelections) > 0 {
-		candidates = selectProfileCandidates(profile, req.ChannelIndexValue(), req.StreamSelections)
+		candidates = selectProfileCandidates(selectionProfile, req.ChannelIndexValue(), req.StreamSelections)
 		if len(candidates) == 0 {
 			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: selected stream profiles were not found", errBadCameraProfileRequest)
 		}
@@ -137,20 +164,21 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	}
 
 	saved, err := db.UpsertCamera(ctx, store.Camera{
-		Name:           req.Name,
-		URL:            primaryURL,
-		StreamName:     req.Stream,
-		State:          state,
-		Manufacturer:   profile.Manufacturer,
-		Model:          profile.Model,
-		ProfileAdapter: profile.Adapter,
-		Host:           firstNonEmpty(profile.Host, scanReq.Host),
-		RTSPPort:       firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
-		HTTPPort:       firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
-		ONVIFPort:      firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
-		ChannelIndex:   req.ChannelIndex,
-		LastProbeJSON:  toMap(result),
-		LastScanJSON:   profile.LastScan,
+		Name:              req.Name,
+		URL:               primaryURL,
+		StreamName:        req.Stream,
+		State:             state,
+		ProfileTemplateID: req.ProfileTemplateID,
+		Manufacturer:      profile.Manufacturer,
+		Model:             profile.Model,
+		ProfileAdapter:    profile.Adapter,
+		Host:              firstNonEmpty(profile.Host, scanReq.Host),
+		RTSPPort:          firstNonZero(profile.RTSPPort, scanReq.RTSPPort),
+		HTTPPort:          firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
+		ONVIFPort:         firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
+		ChannelIndex:      req.ChannelIndex,
+		LastProbeJSON:     toMap(result),
+		LastScanJSON:      profile.LastScan,
 	})
 	if err != nil {
 		return store.Camera{}, camera.ProbeResult{}, nil, err
