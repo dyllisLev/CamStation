@@ -20,6 +20,7 @@ type Camera struct {
 	LayoutKey           string                    `json:"layoutKey,omitempty"`
 	RecordingStreamName string                    `json:"recordingStreamName,omitempty"`
 	LiveStreamName      string                    `json:"liveStreamName,omitempty"`
+	FocusStreamName     string                    `json:"focusStreamName,omitempty"`
 	State               string                    `json:"state"`
 	ProfileTemplateID   *int64                    `json:"profileTemplateId,omitempty"`
 	Manufacturer        string                    `json:"manufacturer,omitempty"`
@@ -173,6 +174,12 @@ type CameraOutputVerification struct {
 	FPS        float64   `json:"fps,omitempty"`
 	CheckedAt  time.Time `json:"checkedAt,omitempty"`
 	Error      string    `json:"error,omitempty"`
+}
+
+type CameraOutputApplyResult struct {
+	Purpose      CameraOutputPurpose        `json:"purpose"`
+	Policy       CameraOutputPolicySnapshot `json:"policy"`
+	Verification CameraOutputVerification   `json:"verification"`
 }
 
 type CameraOutput struct {

@@ -14,25 +14,15 @@ func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams [
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
+	before, err := cameraInputGraphSignatureTx(ctx, tx, cameraID)
+	if err != nil {
+		return err
+	}
 	if err := upsertCameraStreamsTx(ctx, tx, cameraID, streams, now); err != nil {
 		return err
 	}
-	recordingName, liveName := "", ""
 	for i := range streams {
 		normalizeCameraStream(&streams[i])
-		if streams[i].Role == CameraStreamRoleRecording && recordingName == "" {
-			recordingName = streams[i].Go2RTCStreamName
-		}
-		if streams[i].Role == CameraStreamRoleLive && liveName == "" {
-			liveName = streams[i].Go2RTCStreamName
-		}
-	}
-	if liveName == "" {
-		liveName = recordingName
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET recording_stream_name=?,live_stream_name=?,updated_at=? WHERE id=?`,
-		recordingName, liveName, now.Format(time.RFC3339Nano), cameraID); err != nil {
-		return err
 	}
 	// A legacy first replacement upgrades the live default to the newly discovered live input.
 	_, _ = tx.ExecContext(ctx, `UPDATE camera_outputs SET source_stream_id=(
@@ -43,7 +33,51 @@ func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams [
 	if err := deleteMissingCameraStreamsTx(ctx, tx, cameraID, streams); err != nil {
 		return err
 	}
+	after, err := cameraInputGraphSignatureTx(ctx, tx, cameraID)
+	if err != nil {
+		return err
+	}
+	if before != after {
+		if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET desired_revision=desired_revision+1,apply_state='pending',apply_state_at=? WHERE camera_id=?`, now.Format(time.RFC3339Nano), cameraID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET updated_at=? WHERE id=?`, now.Format(time.RFC3339Nano), cameraID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func cameraInputGraphSignatureTx(ctx context.Context, tx *sql.Tx, cameraID int64) (string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT source_key,role,source,url,go2rtc_stream_name FROM camera_streams WHERE camera_id=? ORDER BY source_key`, cameraID)
+	if err != nil {
+		return "", err
+	}
+	signature := ""
+	for rows.Next() {
+		var key, role, source, url, name string
+		if err := rows.Scan(&key, &role, &source, &url, &name); err != nil {
+			rows.Close()
+			return "", err
+		}
+		signature += fmt.Sprintf("i:%q:%q:%q:%q:%q;", key, role, source, url, name)
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT o.purpose,s.source_key FROM camera_outputs o JOIN camera_streams s ON s.id=o.source_stream_id WHERE o.camera_id=? ORDER BY o.purpose`, cameraID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var purpose, key string
+		if err := rows.Scan(&purpose, &key); err != nil {
+			return "", err
+		}
+		signature += fmt.Sprintf("o:%q:%q;", purpose, key)
+	}
+	return signature, rows.Err()
 }
 
 func upsertCameraStreamsTx(ctx context.Context, tx *sql.Tx, cameraID int64, streams []CameraStream, now time.Time) error {

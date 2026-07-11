@@ -24,14 +24,19 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	}
 	defer tx.Rollback()
 
-	var currentRevision int64
-	if err := tx.QueryRowContext(ctx, `SELECT desired_revision FROM camera_policy_states WHERE camera_id = ?`, camera.ID).Scan(&currentRevision); err != nil {
-		return Camera{}, err
-	}
-	if expectedDesiredRevision != nil && *expectedDesiredRevision != currentRevision {
-		return Camera{}, fmt.Errorf("%w: expected %d, current %d", ErrDesiredRevisionMismatch, *expectedDesiredRevision, currentRevision)
-	}
 	now := time.Now().UTC()
+	if camera.Name == "" {
+		camera.Name = "Camera"
+	}
+	if camera.State == "" {
+		camera.State = "unknown"
+	}
+	if camera.StreamName == "" {
+		return Camera{}, fmt.Errorf("camera stream name is required")
+	}
+	if camera.LayoutKey == "" {
+		camera.LayoutKey = camera.StreamName
+	}
 	probe, err := json.Marshal(camera.LastProbeJSON)
 	if err != nil {
 		return Camera{}, err
@@ -44,18 +49,46 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	if err != nil {
 		return Camera{}, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE cameras SET
-		name=?, url=?, layout_key=?, state=?, profile_template_id=?, manufacturer=?, model=?, profile_adapter=?,
-		host=?, rtsp_port=?, http_port=?, onvif_port=?, channel_index=?, last_probe_json=?, last_scan_json=?,
-		control_capabilities_json=?, updated_at=? WHERE id=?`,
-		camera.Name, camera.URL, camera.LayoutKey, camera.State, camera.ProfileTemplateID, camera.Manufacturer,
-		camera.Model, camera.ProfileAdapter, camera.Host, camera.RTSPPort, camera.HTTPPort, camera.ONVIFPort,
-		camera.ChannelIndex, string(probe), string(scan), string(controls), now.Format(time.RFC3339Nano), camera.ID)
-	if err != nil {
-		return Camera{}, err
+	newCamera := camera.ID == 0
+	var currentRevision int64
+	if newCamera {
+		result, err := tx.ExecContext(ctx, `INSERT INTO cameras(
+			name,url,stream_name,layout_key,recording_stream_name,live_stream_name,state,profile_template_id,
+			manufacturer,model,profile_adapter,host,rtsp_port,http_port,onvif_port,channel_index,
+			last_probe_json,last_scan_json,control_capabilities_json,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			camera.Name, camera.URL, camera.StreamName, camera.LayoutKey, "", "", camera.State, camera.ProfileTemplateID,
+			camera.Manufacturer, camera.Model, camera.ProfileAdapter, camera.Host, camera.RTSPPort, camera.HTTPPort, camera.ONVIFPort,
+			camera.ChannelIndex, string(probe), string(scan), string(controls), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		if err != nil {
+			return Camera{}, err
+		}
+		camera.ID, err = result.LastInsertId()
+		if err != nil {
+			return Camera{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO camera_policy_states(camera_id,desired_revision,applied_revision,apply_state,apply_state_at) VALUES(?,0,0,'pending',?)`, camera.ID, now.Format(time.RFC3339Nano)); err != nil {
+			return Camera{}, err
+		}
+	} else {
+		if err := tx.QueryRowContext(ctx, `SELECT desired_revision FROM camera_policy_states WHERE camera_id=?`, camera.ID).Scan(&currentRevision); err != nil {
+			return Camera{}, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE cameras SET
+			name=?,url=?,layout_key=?,state=?,profile_template_id=?,manufacturer=?,model=?,profile_adapter=?,host=?,
+			rtsp_port=?,http_port=?,onvif_port=?,channel_index=?,last_probe_json=?,last_scan_json=?,control_capabilities_json=?,updated_at=? WHERE id=?`,
+			camera.Name, camera.URL, camera.LayoutKey, camera.State, camera.ProfileTemplateID, camera.Manufacturer, camera.Model,
+			camera.ProfileAdapter, camera.Host, camera.RTSPPort, camera.HTTPPort, camera.ONVIFPort, camera.ChannelIndex,
+			string(probe), string(scan), string(controls), now.Format(time.RFC3339Nano), camera.ID)
+		if err != nil {
+			return Camera{}, err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return Camera{}, sql.ErrNoRows
+		}
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
-		return Camera{}, sql.ErrNoRows
+	if expectedDesiredRevision != nil && *expectedDesiredRevision != currentRevision {
+		return Camera{}, fmt.Errorf("%w: expected %d, current %d", ErrDesiredRevisionMismatch, *expectedDesiredRevision, currentRevision)
 	}
 	if err := upsertCameraStreamsTx(ctx, tx, camera.ID, camera.Streams, now); err != nil {
 		return Camera{}, err
@@ -87,8 +120,32 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	if err := rows.Close(); err != nil {
 		return Camera{}, err
 	}
+	serverNames := map[CameraOutputPurpose]string{}
+	if newCamera {
+		serverNames[CameraOutputRecording] = camera.StreamName + "-recording"
+		serverNames[CameraOutputLive] = camera.StreamName + "-live"
+		serverNames[CameraOutputFocus] = camera.StreamName + "-focus"
+	} else {
+		nameRows, err := tx.QueryContext(ctx, `SELECT purpose,stream_name FROM camera_outputs WHERE camera_id=?`, camera.ID)
+		if err != nil {
+			return Camera{}, err
+		}
+		for nameRows.Next() {
+			var purpose CameraOutputPurpose
+			var name string
+			if err := nameRows.Scan(&purpose, &name); err != nil {
+				nameRows.Close()
+				return Camera{}, err
+			}
+			serverNames[purpose] = name
+		}
+		if err := nameRows.Close(); err != nil {
+			return Camera{}, err
+		}
+	}
 	for i := range camera.Outputs {
 		output := &camera.Outputs[i]
+		output.StreamName = serverNames[output.Purpose]
 		if output.SourceKey != "" {
 			output.SourceStreamID = streamIDs[output.SourceKey]
 		}
@@ -102,30 +159,15 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 		if output.StreamName == "" {
 			return Camera{}, fmt.Errorf("output %s stream name is required", output.Purpose)
 		}
-		applied, err := json.Marshal(output.AppliedPolicy)
-		if err != nil {
-			return Camera{}, err
-		}
-		var verifiedAt any
-		if !output.Verification.CheckedAt.IsZero() {
-			verifiedAt = output.Verification.CheckedAt.Format(time.RFC3339Nano)
-		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO camera_outputs(
-			camera_id,purpose,stream_name,source_stream_id,video_mode,max_width,max_height,max_fps,audio_mode,activation,
-			applied_policy_json,verified_video_codec,verified_audio_codec,verified_width,verified_height,verified_fps,
-			verified_at,verification_error,created_at,updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			camera_id,purpose,stream_name,source_stream_id,video_mode,max_width,max_height,max_fps,audio_mode,activation,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(camera_id,purpose) DO UPDATE SET
-			stream_name=excluded.stream_name,source_stream_id=excluded.source_stream_id,video_mode=excluded.video_mode,
+			source_stream_id=excluded.source_stream_id,video_mode=excluded.video_mode,
 			max_width=excluded.max_width,max_height=excluded.max_height,max_fps=excluded.max_fps,audio_mode=excluded.audio_mode,
-			activation=excluded.activation,applied_policy_json=excluded.applied_policy_json,
-			verified_video_codec=excluded.verified_video_codec,verified_audio_codec=excluded.verified_audio_codec,
-			verified_width=excluded.verified_width,verified_height=excluded.verified_height,verified_fps=excluded.verified_fps,
-			verified_at=excluded.verified_at,verification_error=excluded.verification_error,updated_at=excluded.updated_at`,
+			activation=excluded.activation,updated_at=excluded.updated_at`,
 			camera.ID, output.Purpose, output.StreamName, output.SourceStreamID, output.VideoMode, output.MaxWidth, output.MaxHeight,
-			output.MaxFPS, output.AudioMode, output.Activation, string(applied), output.Verification.VideoCodec,
-			output.Verification.AudioCodec, output.Verification.Width, output.Verification.Height, output.Verification.FPS,
-			verifiedAt, redactString(output.Verification.Error), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+			output.MaxFPS, output.AudioMode, output.Activation, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		if err != nil {
 			return Camera{}, err
 		}
@@ -133,16 +175,8 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	if err := deleteMissingCameraStreamsTx(ctx, tx, camera.ID, camera.Streams); err != nil {
 		return Camera{}, err
 	}
-	applyAt := camera.PolicyState.ApplyStateAt
-	if applyAt.IsZero() {
-		applyAt = now
-	}
-	applyState := camera.PolicyState.ApplyState
-	if applyState == "" {
-		applyState = CameraApplyPending
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE camera_policy_states SET desired_revision=?, applied_revision=?, apply_state=?, apply_state_at=?, apply_error=? WHERE camera_id=?`,
-		currentRevision+1, camera.PolicyState.AppliedRevision, applyState, applyAt.Format(time.RFC3339Nano), redactString(camera.PolicyState.ApplyError), camera.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE camera_policy_states SET desired_revision=?,apply_state='pending',apply_state_at=? WHERE camera_id=?`,
+		currentRevision+1, now.Format(time.RFC3339Nano), camera.ID)
 	if err != nil {
 		return Camera{}, err
 	}
@@ -268,4 +302,80 @@ func (d *DB) getCameraPolicyState(ctx context.Context, cameraID int64, includeSe
 		state.ApplyError = redactString(state.ApplyError)
 	}
 	return state, err
+}
+
+func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int64, results []CameraOutputApplyResult) error {
+	if len(results) != 3 {
+		return fmt.Errorf("exactly three output apply results are required")
+	}
+	seen := map[CameraOutputPurpose]bool{}
+	for _, result := range results {
+		if result.Purpose != CameraOutputRecording && result.Purpose != CameraOutputLive && result.Purpose != CameraOutputFocus {
+			return fmt.Errorf("invalid output purpose %q", result.Purpose)
+		}
+		if seen[result.Purpose] {
+			return fmt.Errorf("duplicate output purpose %q", result.Purpose)
+		}
+		seen[result.Purpose] = true
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := requireDesiredRevision(ctx, tx, cameraID, revision); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, result := range results {
+		policy, err := json.Marshal(result.Policy)
+		if err != nil {
+			return err
+		}
+		var checkedAt any
+		if !result.Verification.CheckedAt.IsZero() {
+			checkedAt = result.Verification.CheckedAt.Format(time.RFC3339Nano)
+		}
+		update, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET applied_policy_json=?,verified_video_codec=?,verified_audio_codec=?,
+			verified_width=?,verified_height=?,verified_fps=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=?`,
+			string(policy), result.Verification.VideoCodec, result.Verification.AudioCodec, result.Verification.Width, result.Verification.Height,
+			result.Verification.FPS, checkedAt, redactString(result.Verification.Error), now, cameraID, result.Purpose)
+		if err != nil {
+			return err
+		}
+		if affected, _ := update.RowsAffected(); affected != 1 {
+			return sql.ErrNoRows
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET applied_revision=?,apply_state='applied',apply_state_at=?,apply_error='' WHERE camera_id=?`, revision, now, cameraID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) MarkCameraPolicyFailed(ctx context.Context, cameraID, revision int64, applyError string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := requireDesiredRevision(ctx, tx, cameraID, revision); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET apply_state='apply_failed',apply_state_at=?,apply_error=? WHERE camera_id=?`,
+		time.Now().UTC().Format(time.RFC3339Nano), redactString(applyError), cameraID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func requireDesiredRevision(ctx context.Context, tx *sql.Tx, cameraID, revision int64) error {
+	var current int64
+	if err := tx.QueryRowContext(ctx, `SELECT desired_revision FROM camera_policy_states WHERE camera_id=?`, cameraID).Scan(&current); err != nil {
+		return err
+	}
+	if current != revision {
+		return fmt.Errorf("%w: expected %d, current %d", ErrDesiredRevisionMismatch, revision, current)
+	}
+	return nil
 }

@@ -123,27 +123,16 @@ func scanCameraStream(row scanner, includeSecrets bool) (CameraStream, error) {
 	return stream, nil
 }
 
-func applyRoleStreamNames(camera *Camera) {
-	if camera.RecordingStreamName == "" {
-		camera.RecordingStreamName = camera.StreamName
-	}
-	if camera.LiveStreamName == "" {
-		camera.LiveStreamName = camera.StreamName
-	}
-	for _, stream := range camera.Streams {
-		switch stream.Role {
-		case CameraStreamRoleRecording:
-			if stream.Go2RTCStreamName != "" {
-				camera.RecordingStreamName = stream.Go2RTCStreamName
-			}
-		case CameraStreamRoleLive:
-			if stream.Go2RTCStreamName != "" {
-				camera.LiveStreamName = stream.Go2RTCStreamName
-			}
+func applyOutputStreamNames(camera *Camera) {
+	for _, output := range camera.Outputs {
+		switch output.Purpose {
+		case CameraOutputRecording:
+			camera.RecordingStreamName = output.StreamName
+		case CameraOutputLive:
+			camera.LiveStreamName = output.StreamName
+		case CameraOutputFocus:
+			camera.FocusStreamName = output.StreamName
 		}
-	}
-	if camera.LiveStreamName == "" {
-		camera.LiveStreamName = camera.RecordingStreamName
 	}
 }
 

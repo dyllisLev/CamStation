@@ -195,11 +195,22 @@ func TestCameraPolicyPublicPrivateReadsRedactSecretsAndKeepMetadata(t *testing.T
 	camera.Streams[0].DetectedFPS = 29.97
 	camera.Streams[0].DetectedCheckedAt = time.Now().UTC().Truncate(time.Microsecond)
 	camera.Streams[0].DetectedError = "probe rtsp://admin:secret@10.0.0.2/main failed"
-	camera.Outputs[0].AppliedPolicy = CameraOutputPolicySnapshot{SourceStreamID: camera.Streams[0].ID, VideoMode: CameraVideoCopy, AudioMode: CameraAudioSource, Activation: CameraActivationOnDemand}
-	camera.Outputs[0].Verification = CameraOutputVerification{VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080, FPS: 29.97, CheckedAt: time.Now().UTC().Truncate(time.Microsecond), Error: "verify rtsp://admin:secret@10.0.0.2/out failed"}
-	camera.PolicyState.ApplyState = CameraApplyFailed
-	camera.PolicyState.ApplyError = "apply rtsp://admin:secret@10.0.0.2/out failed"
-	if _, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(camera.PolicyState.DesiredRevision)); err != nil {
+	saved, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(camera.PolicyState.DesiredRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]CameraOutputApplyResult, 0, 3)
+	for _, output := range saved.Outputs {
+		result := CameraOutputApplyResult{Purpose: output.Purpose, Policy: CameraOutputPolicySnapshot{SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode, AudioMode: output.AudioMode, Activation: output.Activation}}
+		if output.Purpose == CameraOutputRecording {
+			result.Verification = CameraOutputVerification{VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080, FPS: 29.97, CheckedAt: time.Now().UTC().Truncate(time.Microsecond), Error: "verify rtsp://admin:secret@10.0.0.2/out failed"}
+		}
+		results = append(results, result)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), saved.ID, saved.PolicyState.DesiredRevision, results); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyFailed(t.Context(), saved.ID, saved.PolicyState.DesiredRevision, "apply rtsp://admin:secret@10.0.0.2/out failed"); err != nil {
 		t.Fatal(err)
 	}
 	public, err := db.ListCameras(t.Context(), false)
@@ -220,6 +231,156 @@ func TestCameraPolicyPublicPrivateReadsRedactSecretsAndKeepMetadata(t *testing.T
 	}
 	if private[0].URL == "" || private[0].Streams[0].URL == "" || private[0].Streams[0].DetectedVideoCodec != "h264" || private[0].Outputs[0].AppliedPolicy.VideoMode != CameraVideoCopy {
 		t.Fatalf("private read lost data: %#v", private[0])
+	}
+}
+
+func TestDesiredSavePreservesCoordinatorOwnedAppliedState(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "applied-owner")
+	results := make([]CameraOutputApplyResult, 0, 3)
+	for _, output := range camera.Outputs {
+		results = append(results, CameraOutputApplyResult{
+			Purpose: output.Purpose,
+			Policy: CameraOutputPolicySnapshot{
+				SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode,
+				AudioMode: output.AudioMode, Activation: output.Activation,
+			},
+			Verification: CameraOutputVerification{VideoCodec: "h264", Width: 1920, Height: 1080, FPS: 15},
+		})
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, results); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyFailed(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, "failed rtsp://admin:secret@10.0.0.2/out"); err != nil {
+		t.Fatal(err)
+	}
+	camera = mustGetCamera(t, db, camera.StreamName)
+	wantApplied := camera.Outputs[0].AppliedPolicy
+	wantVerification := camera.Outputs[0].Verification
+	wantAppliedRevision := camera.PolicyState.AppliedRevision
+	wantError := camera.PolicyState.ApplyError
+	camera.Outputs[0].AppliedPolicy = CameraOutputPolicySnapshot{VideoMode: CameraVideoH264}
+	camera.Outputs[0].Verification = CameraOutputVerification{VideoCodec: "stale"}
+	camera.PolicyState.AppliedRevision = 0
+	camera.PolicyState.ApplyError = "stale caller overwrite"
+
+	saved, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(camera.PolicyState.DesiredRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(saved.Outputs[0].AppliedPolicy, wantApplied) || !reflect.DeepEqual(saved.Outputs[0].Verification, wantVerification) {
+		t.Fatalf("desired save overwrote applied output: %#v", saved.Outputs[0])
+	}
+	if saved.PolicyState.AppliedRevision != wantAppliedRevision || saved.PolicyState.ApplyError != wantError {
+		t.Fatalf("desired save overwrote applied state: %#v", saved.PolicyState)
+	}
+	if saved.PolicyState.ApplyState != CameraApplyPending || saved.PolicyState.DesiredRevision != camera.PolicyState.DesiredRevision+1 {
+		t.Fatalf("desired save state = %#v", saved.PolicyState)
+	}
+}
+
+func TestSaveCameraConfigurationCreatesIDLessCameraAtomically(t *testing.T) {
+	db := openMigratedStore(t)
+	registration := Camera{
+		Name: "registered", URL: "rtsp://admin:secret@10.0.0.8/main", StreamName: "registered", State: "unknown",
+		Streams: []CameraStream{
+			{SourceKey: "recording", Role: CameraStreamRoleRecording, URL: "rtsp://admin:secret@10.0.0.8/main", Go2RTCStreamName: "producer-main"},
+			{SourceKey: "live", Role: CameraStreamRoleLive, URL: "rtsp://admin:secret@10.0.0.8/sub", Go2RTCStreamName: "producer-sub", DetectedVideoCodec: "h264"},
+		},
+		Outputs: desiredOutputs("recording", "live"),
+	}
+	created, err := db.SaveCameraConfiguration(t.Context(), registration, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == 0 || created.PolicyState.DesiredRevision != 1 || created.Streams[1].DetectedVideoCodec != "h264" {
+		t.Fatalf("created camera = %#v", created)
+	}
+	if created.RecordingStreamName != "registered-recording" || created.LiveStreamName != "registered-live" || created.FocusStreamName != "registered-focus" {
+		t.Fatalf("created output names = %q/%q/%q", created.RecordingStreamName, created.LiveStreamName, created.FocusStreamName)
+	}
+
+	broken := registration
+	broken.StreamName = "rolled-back"
+	broken.Name = "rolled-back"
+	broken.Outputs = desiredOutputs("missing", "live")
+	if _, err := db.SaveCameraConfiguration(t.Context(), broken, nil); err == nil {
+		t.Fatal("expected unresolved source failure")
+	}
+	cameras, err := db.ListCameras(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, camera := range cameras {
+		if camera.StreamName == "rolled-back" {
+			t.Fatal("failed registration left a partial camera row")
+		}
+	}
+}
+
+func TestCameraStreamNamesComeFromImmutableOutputRows(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "names")
+	if camera.RecordingStreamName != "names-recording" || camera.LiveStreamName != "names-live" || camera.FocusStreamName != "names-focus" {
+		t.Fatalf("default names = %q/%q/%q", camera.RecordingStreamName, camera.LiveStreamName, camera.FocusStreamName)
+	}
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, []CameraStream{
+		{SourceKey: "recording", Role: CameraStreamRoleRecording, URL: "rtsp://u:p@host/main", Go2RTCStreamName: "producer-recording"},
+		{SourceKey: "live", Role: CameraStreamRoleLive, URL: "rtsp://u:p@host/sub", Go2RTCStreamName: "producer-live"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	camera = mustGetCamera(t, db, "names")
+	for i := range camera.Outputs {
+		camera.Outputs[i].StreamName = "caller-controlled-" + string(camera.Outputs[i].Purpose)
+	}
+	saved, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(camera.PolicyState.DesiredRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.RecordingStreamName != "names-recording" || saved.LiveStreamName != "names-live" || saved.FocusStreamName != "names-focus" {
+		t.Fatalf("mutable/producer names escaped: %#v", saved)
+	}
+}
+
+func TestReplaceCameraStreamsAdvancesRevisionOnlyForGraphChanges(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "replace-revision")
+	start := camera.PolicyState.DesiredRevision
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, camera.Streams); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGetCamera(t, db, camera.StreamName).PolicyState.DesiredRevision; got != start {
+		t.Fatalf("no-op revision = %d, want %d", got, start)
+	}
+	camera.Streams[0].URL = "rtsp://admin:secret@10.0.0.2/changed"
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, camera.Streams); err != nil {
+		t.Fatal(err)
+	}
+	changed := mustGetCamera(t, db, camera.StreamName)
+	if changed.PolicyState.DesiredRevision != start+1 || changed.PolicyState.ApplyState != CameraApplyPending {
+		t.Fatalf("changed state = %#v", changed.PolicyState)
+	}
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, changed.Streams); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGetCamera(t, db, camera.StreamName).PolicyState.DesiredRevision; got != start+1 {
+		t.Fatalf("second no-op revision = %d, want %d", got, start+1)
+	}
+	changed.Streams = append(changed.Streams, CameraStream{SourceKey: "live", Role: CameraStreamRoleLive, URL: "rtsp://admin:secret@10.0.0.2/sub", Go2RTCStreamName: "producer-live"})
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, changed.Streams); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGetCamera(t, db, camera.StreamName).PolicyState.DesiredRevision; got != start+2 {
+		t.Fatalf("source-FK revision = %d, want %d", got, start+2)
+	}
+}
+
+func desiredOutputs(recordingKey, liveKey string) []CameraOutput {
+	return []CameraOutput{
+		{Purpose: CameraOutputRecording, SourceKey: recordingKey, VideoMode: CameraVideoCopy, AudioMode: CameraAudioSource, Activation: CameraActivationOnDemand},
+		{Purpose: CameraOutputLive, SourceKey: liveKey, VideoMode: CameraVideoAuto, AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
+		{Purpose: CameraOutputFocus, SourceKey: recordingKey, VideoMode: CameraVideoAuto, MaxWidth: intPtr(1920), MaxHeight: intPtr(1080), AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
 	}
 }
 

@@ -149,7 +149,7 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 		if err != nil {
 			return nil, err
 		}
-		applyRoleStreamNames(&cameras[i])
+		applyOutputStreamNames(&cameras[i])
 	}
 	return cameras, nil
 }
@@ -159,8 +159,10 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
-		 FROM cameras
-		 WHERE stream_name = ? OR recording_stream_name = ? OR live_stream_name = ?`,
+		 FROM cameras c
+		 WHERE stream_name = ? OR recording_stream_name = ? OR live_stream_name = ?
+		 OR EXISTS (SELECT 1 FROM camera_outputs o WHERE o.camera_id=c.id AND o.stream_name=?)`,
+		streamName,
 		streamName,
 		streamName,
 		streamName,
@@ -182,7 +184,7 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	if err != nil {
 		return Camera{}, err
 	}
-	applyRoleStreamNames(&camera)
+	applyOutputStreamNames(&camera)
 	return camera, nil
 }
 
