@@ -1,7 +1,7 @@
 # Live PTZ Camera Control Design
 
 **Date:** 2026-07-11 KST
-**Status:** Approved for implementation planning
+**Status:** Review updates applied; awaiting re-approval
 
 ## Goal
 
@@ -72,7 +72,8 @@ standard siren operation. Siren support remains unknown and unavailable.
 
 ### Camera selection and toolbar state
 
-The live workspace keeps one selected camera using its stable layout key.
+The live workspace keeps one selected camera using its stable internal
+`streamName`, matching the current live grid, saved layout items, and camera API.
 
 - The `PTZ 제어` toolbar button is always visible.
 - It is enabled only when the selected camera reports PTZ as supported and
@@ -114,13 +115,31 @@ Direction and zoom buttons use pointer events so the same behavior works with a
 mouse, touch, or pen.
 
 - Pointer down sends the first continuous-move command.
-- While held, the client renews the command once per second.
+- The client allows only one move request to be in flight. It targets a renewal
+  one second after the previous dispatch: if the previous request has completed,
+  it waits until that deadline; if the deadline passes while the request is in
+  flight, it renews immediately after completion without overlapping requests.
 - The command uses a 2-second device timeout, so a disconnected browser cannot
   leave the camera moving indefinitely.
-- Pointer up, pointer cancel, pointer leave, window blur, page visibility loss,
-  camera selection change, panel close, and component unmount all trigger stop.
+- Pointer up, pointer cancel, lost pointer capture, pointer leave, window blur,
+  page visibility loss, camera selection change, panel close, and component
+  unmount all stop renewal, abort the current browser request, and trigger stop.
+- Space or Enter keydown/keyup provides the same press-and-hold behavior for a
+  focused direction or zoom button. Escape triggers stop while the panel is
+  open.
 - The center of the direction pad and the separate stop button both issue an
   immediate stop.
+
+The server maintains one command gate and active transport cancellation function
+per camera. Stop increments the camera command generation, cancels the active
+non-stop transport call, waits for that call to exit within the short request
+timeout, and then sends ONVIF Stop while still holding the gate. A stale move
+generation cannot send another device request. This makes Stop the final wire
+command rather than merely a concurrent request that could arrive before a
+delayed move.
+
+Movement and stop transport calls use a 2-second HTTP timeout. Read-only
+capability discovery may use the existing longer scanner timeout.
 
 The server clamps all velocity components to the advertised generic range. The
 UI speed slider changes the magnitude but never bypasses server validation.
@@ -146,8 +165,11 @@ The panel shows the current count and device maximum. It supports:
 - deleting a selected preset after confirmation
 
 Preset names are trimmed, required, and limited to 64 characters. Preset tokens
-are opaque device values. The server accepts an operation only for a token in a
-fresh device response; the browser cannot supply an arbitrary ONVIF token.
+are opaque device values and never become URL path segments. The browser sends a
+token obtained from the preset list in a bounded JSON body. The server requires
+valid UTF-8, rejects empty values and values longer than 64 characters, and XML
+escapes the exact token before the camera validates it. It does not add a second
+device-list request before every preset action.
 
 The camera is the source of truth for preset positions. CamStation does not
 duplicate preset coordinates in SQLite.
@@ -205,13 +227,17 @@ The controller obtains a target from the stored camera record. Routes never
 accept a host, port, username, password, ONVIF endpoint, or raw camera URL from
 the browser.
 
-Non-stop commands are serialized per camera. Stop requests are not queued
-behind ordinary movement or preset requests and may be sent immediately.
+Non-stop commands are serialized per camera. Stop preempts an active non-stop
+transport call by cancellation, waits for the canceled call to leave the command
+gate, and then becomes the final serialized device command. The wait is bounded
+by the controller request timeout.
 
 ### Persisted capability summary
 
-Add a credential-free control-capability JSON value to each camera record. It
-stores a normalized summary and discovery timestamp, not raw ONVIF responses.
+Add a `control_capabilities_json TEXT NOT NULL DEFAULT '{}'` column to each camera
+record. It stores a credential-free normalized summary and discovery timestamp,
+not raw ONVIF responses. Existing rows receive `{}`, which decodes to all
+features `unknown` and unavailable rather than guessing support.
 
 Each feature has:
 
@@ -223,27 +249,40 @@ The public camera DTO includes this summary so the live toolbar can update
 without probing the camera on every tile selection.
 
 Camera scan/save refreshes the summary. A guarded control-refresh operation is
-available for an existing camera whose summary is missing or stale. The
-registered `염소장` camera is refreshed once after deployment rather than on
-every page load.
+available for an existing camera whose summary is missing or stale. When the
+operator selects a camera with an unknown summary, the live workspace attempts
+one guarded refresh for that camera during the page session, persists the
+result, and invalidates the camera query. A failed refresh leaves the button
+disabled with a reason and is not automatically retried in a loop. This gives
+the existing `염소장` row a defined lazy migration path without a manual
+post-deployment database edit.
 
 ## HTTP API
 
 All control APIs use the existing trusted-console management guard. They accept
-only a registered `streamName` target.
+only a registered stable `streamName` target. If the existing camera lookup also
+matches a recording or live role-stream alias, the route compares the resolved
+camera's `streamName` with the path value and rejects an alias target.
+
+The frontend adds a camera-management request wrapper around the existing JSON
+request helper. It explicitly adds `X-CamStation-Management: 1` for guarded GET
+requests as well as mutations; the existing global GET behavior does not change.
+Control and preset queries disable automatic retry, focus refetch, and polling.
+They refresh only when the panel opens, the operator explicitly refreshes, or a
+successful mutation invalidates the relevant query.
 
 ### Capability and state
 
 - `GET /api/cameras/{streamName}/controls`
-  - returns the safe persisted capability summary, current PTZ status, and
-    current presets
+  - returns the safe persisted capability summary and current PTZ status
 - `POST /api/cameras/{streamName}/controls/refresh`
   - performs read-only capability discovery and persists the safe summary
 
 ### Movement
 
 - `POST /api/cameras/{streamName}/ptz/move`
-  - body: normalized `pan`, `tilt`, and `zoom` velocities
+  - body: `{ "pan": number, "tilt": number, "zoom": number }` using normalized
+    velocities
   - server timeout is fixed at 2 seconds
 - `POST /api/cameras/{streamName}/ptz/stop`
   - stops both pan/tilt and zoom
@@ -257,9 +296,11 @@ only a registered `streamName` target.
 
 - `GET /api/cameras/{streamName}/ptz/presets`
 - `POST /api/cameras/{streamName}/ptz/presets`
-  - body: preset name
-- `POST /api/cameras/{streamName}/ptz/presets/{token}/goto`
-- `DELETE /api/cameras/{streamName}/ptz/presets/{token}`
+  - body: `{ "name": string }`
+- `POST /api/cameras/{streamName}/ptz/presets/goto`
+  - body: `{ "token": string }`
+- `POST /api/cameras/{streamName}/ptz/presets/delete`
+  - body: `{ "token": string }`
 
 Successful responses expose only normalized state. They never echo credentials,
 camera endpoints, SOAP payloads, or raw device faults.
@@ -270,6 +311,8 @@ camera endpoints, SOAP payloads, or raw device faults.
 - Resolve all targets from the SQLite camera row.
 - Bound request bodies and reject unknown fields.
 - Clamp movement values and reject a command with no nonzero movement.
+- Validate preset names and tokens by type and length, then XML escape all ONVIF
+  values before constructing a SOAP body.
 - Apply short network and route timeouts.
 - On a movement error, attempt one best-effort stop without retrying the move.
 - On a stop error, show the failure and allow another explicit stop; do not start
@@ -327,9 +370,14 @@ code change:
    controls, preset controls, and capability-disabled device buttons in one
    browser session
 
-Do not automatically change the home position. Do not repeat movement merely to
-collect duplicate evidence. Capture one API trace or log excerpt and one UI
-screenshot for the final handoff.
+Do not automatically change the home position because the previous persistent
+home value cannot be restored reliably. If the operator confirms that the
+existing home target is safe, invoke `홈으로 이동` once during the supervised
+session; otherwise record home actuation as intentionally not performed and rely
+on the verified capability response plus the focused SOAP and route tests. Never
+invoke `현재 위치를 홈으로 설정` as an automated test. Do not repeat movement
+merely to collect duplicate evidence. Capture one API trace or log excerpt and
+one UI screenshot for the final handoff.
 
 ## Non-Goals
 
