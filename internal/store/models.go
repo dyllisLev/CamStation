@@ -12,29 +12,74 @@ type Event struct {
 }
 
 type Camera struct {
-	ID                  int64          `json:"id"`
-	Name                string         `json:"name"`
-	URL                 string         `json:"url,omitempty"`
-	RedactedURL         string         `json:"redactedUrl"`
-	StreamName          string         `json:"streamName"`
-	LayoutKey           string         `json:"layoutKey,omitempty"`
-	RecordingStreamName string         `json:"recordingStreamName,omitempty"`
-	LiveStreamName      string         `json:"liveStreamName,omitempty"`
-	State               string         `json:"state"`
-	ProfileTemplateID   *int64         `json:"profileTemplateId,omitempty"`
-	Manufacturer        string         `json:"manufacturer,omitempty"`
-	Model               string         `json:"model,omitempty"`
-	ProfileAdapter      string         `json:"profileAdapter,omitempty"`
-	Host                string         `json:"host,omitempty"`
-	RTSPPort            int            `json:"rtspPort,omitempty"`
-	HTTPPort            int            `json:"httpPort,omitempty"`
-	ONVIFPort           int            `json:"onvifPort,omitempty"`
-	ChannelIndex        *int           `json:"channelIndex,omitempty"`
-	LastProbeJSON       map[string]any `json:"lastProbe,omitempty"`
-	LastScanJSON        map[string]any `json:"lastScan,omitempty"`
-	Streams             []CameraStream `json:"streams,omitempty"`
-	CreatedAt           time.Time      `json:"createdAt"`
-	UpdatedAt           time.Time      `json:"updatedAt"`
+	ID                  int64                     `json:"id"`
+	Name                string                    `json:"name"`
+	URL                 string                    `json:"url,omitempty"`
+	RedactedURL         string                    `json:"redactedUrl"`
+	StreamName          string                    `json:"streamName"`
+	LayoutKey           string                    `json:"layoutKey,omitempty"`
+	RecordingStreamName string                    `json:"recordingStreamName,omitempty"`
+	LiveStreamName      string                    `json:"liveStreamName,omitempty"`
+	State               string                    `json:"state"`
+	ProfileTemplateID   *int64                    `json:"profileTemplateId,omitempty"`
+	Manufacturer        string                    `json:"manufacturer,omitempty"`
+	Model               string                    `json:"model,omitempty"`
+	ProfileAdapter      string                    `json:"profileAdapter,omitempty"`
+	Host                string                    `json:"host,omitempty"`
+	RTSPPort            int                       `json:"rtspPort,omitempty"`
+	HTTPPort            int                       `json:"httpPort,omitempty"`
+	ONVIFPort           int                       `json:"onvifPort,omitempty"`
+	ChannelIndex        *int                      `json:"channelIndex,omitempty"`
+	LastProbeJSON       map[string]any            `json:"lastProbe,omitempty"`
+	LastScanJSON        map[string]any            `json:"lastScan,omitempty"`
+	ControlCapabilities CameraControlCapabilities `json:"controlCapabilities"`
+	Streams             []CameraStream            `json:"streams,omitempty"`
+	CreatedAt           time.Time                 `json:"createdAt"`
+	UpdatedAt           time.Time                 `json:"updatedAt"`
+}
+
+type ControlSupport string
+
+const (
+	ControlSupportUnknown     ControlSupport = "unknown"
+	ControlSupportSupported   ControlSupport = "supported"
+	ControlSupportUnsupported ControlSupport = "unsupported"
+)
+
+type CameraControlFeature struct {
+	Support   ControlSupport `json:"support"`
+	Available bool           `json:"available"`
+	Reason    string         `json:"reason,omitempty"`
+}
+
+type CameraControlCapabilities struct {
+	PTZ          CameraControlFeature `json:"ptz"`
+	Home         CameraControlFeature `json:"home"`
+	Presets      CameraControlFeature `json:"presets"`
+	Listen       CameraControlFeature `json:"listen"`
+	Talk         CameraControlFeature `json:"talk"`
+	Siren        CameraControlFeature `json:"siren"`
+	MaxPresets   int                  `json:"maxPresets,omitempty"`
+	DiscoveredAt string               `json:"discoveredAt,omitempty"`
+}
+
+func normalizeControlCapabilities(value CameraControlCapabilities) CameraControlCapabilities {
+	features := []*CameraControlFeature{&value.PTZ, &value.Home, &value.Presets, &value.Listen, &value.Talk, &value.Siren}
+	for _, feature := range features {
+		switch feature.Support {
+		case ControlSupportUnknown, ControlSupportSupported, ControlSupportUnsupported:
+		default:
+			feature.Support = ControlSupportUnknown
+			feature.Available = false
+		}
+		if feature.Support != ControlSupportSupported {
+			feature.Available = false
+		}
+	}
+	if value.MaxPresets < 0 {
+		value.MaxPresets = 0
+	}
+	return value
 }
 
 type CameraStreamRole string

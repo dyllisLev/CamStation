@@ -125,6 +125,7 @@ func (d *DB) Migrate(ctx context.Context) error {
 				channel_index INTEGER,
 					last_probe_json TEXT NOT NULL DEFAULT '{}',
 					last_scan_json TEXT NOT NULL DEFAULT '{}',
+					control_capabilities_json TEXT NOT NULL DEFAULT '{}',
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
 					FOREIGN KEY(profile_template_id) REFERENCES camera_profile_templates(id) ON DELETE RESTRICT

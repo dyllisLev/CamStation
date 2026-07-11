@@ -10,7 +10,7 @@ import (
 
 func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	var camera Camera
-	var createdAt, updatedAt, probeJSON, scanJSON string
+	var createdAt, updatedAt, probeJSON, scanJSON, controlCapabilitiesJSON string
 	var channelIndex sql.NullInt64
 	var profileTemplateID sql.NullInt64
 	if err := row.Scan(
@@ -33,6 +33,7 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 		&channelIndex,
 		&probeJSON,
 		&scanJSON,
+		&controlCapabilitiesJSON,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -65,6 +66,9 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	if camera.LastScanJSON == nil {
 		camera.LastScanJSON = map[string]any{}
 	}
+	var controlCapabilities CameraControlCapabilities
+	_ = json.Unmarshal([]byte(controlCapabilitiesJSON), &controlCapabilities)
+	camera.ControlCapabilities = normalizeControlCapabilities(controlCapabilities)
 	camera.RedactedURL = RedactURL(camera.URL)
 	if !includeSecrets {
 		camera.URL = ""

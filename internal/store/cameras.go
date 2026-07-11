@@ -41,6 +41,10 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 	if err != nil {
 		return Camera{}, err
 	}
+	encodedControlCapabilities, err := json.Marshal(normalizeControlCapabilities(camera.ControlCapabilities))
+	if err != nil {
+		return Camera{}, err
+	}
 	var channelIndex any
 	if camera.ChannelIndex != nil {
 		channelIndex = *camera.ChannelIndex
@@ -54,9 +58,9 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 		`INSERT INTO cameras(
 			name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
 			profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
-			last_probe_json, last_scan_json, created_at, updated_at
+			last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(stream_name) DO UPDATE SET
 			name=excluded.name,
 			url=excluded.url,
@@ -75,6 +79,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 			channel_index=excluded.channel_index,
 			last_probe_json=excluded.last_probe_json,
 			last_scan_json=excluded.last_scan_json,
+			control_capabilities_json=excluded.control_capabilities_json,
 			updated_at=excluded.updated_at`,
 		camera.Name,
 		camera.URL,
@@ -94,6 +99,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 		channelIndex,
 		string(encoded),
 		string(encodedScan),
+		string(encodedControlCapabilities),
 		camera.CreatedAt.Format(time.RFC3339Nano),
 		camera.UpdatedAt.Format(time.RFC3339Nano),
 	)
@@ -107,7 +113,7 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
-		        last_probe_json, last_scan_json, created_at, updated_at
+		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
 		 FROM cameras ORDER BY id`,
 	)
 	if err != nil {
@@ -141,7 +147,7 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	row := d.db.QueryRowContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
-		        last_probe_json, last_scan_json, created_at, updated_at
+		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
 		 FROM cameras
 		 WHERE stream_name = ? OR recording_stream_name = ? OR live_stream_name = ?`,
 		streamName,
@@ -159,6 +165,28 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	camera.Streams = streams
 	applyRoleStreamNames(&camera)
 	return camera, nil
+}
+
+func (d *DB) UpdateCameraControlCapabilities(ctx context.Context, streamName string, capabilities CameraControlCapabilities) error {
+	payload, err := json.Marshal(normalizeControlCapabilities(capabilities))
+	if err != nil {
+		return err
+	}
+	result, err := d.db.ExecContext(ctx,
+		`UPDATE cameras SET control_capabilities_json = ?, updated_at = ? WHERE stream_name = ?`,
+		string(payload), time.Now().UTC().Format(time.RFC3339Nano), streamName,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (d *DB) DeleteCamera(ctx context.Context, streamName string) (Camera, error) {
