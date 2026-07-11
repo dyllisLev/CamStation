@@ -10,6 +10,7 @@ import (
 )
 
 var ErrDesiredRevisionMismatch = errors.New("camera desired revision mismatch")
+var ErrAppliedRevisionRegression = errors.New("camera applied revision regression")
 
 func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expectedDesiredRevision *int64) (Camera, error) {
 	if err := validateCameraOutputs(camera.Outputs); err != nil {
@@ -323,11 +324,20 @@ func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int
 		return err
 	}
 	defer tx.Rollback()
-	if err := requireDesiredRevision(ctx, tx, cameraID, revision); err != nil {
+	_, _, err = validateApplyRevision(ctx, tx, cameraID, revision)
+	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, result := range results {
+		if result.Policy.SourceKey == "" && result.Policy.SourceStreamID != 0 {
+			if err := tx.QueryRowContext(ctx, `SELECT source_key FROM camera_streams WHERE camera_id=? AND id=?`, cameraID, result.Policy.SourceStreamID).Scan(&result.Policy.SourceKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		if result.Policy.SourceKey == "" {
+			return fmt.Errorf("applied output %s source key is required", result.Purpose)
+		}
 		policy, err := json.Marshal(result.Policy)
 		if err != nil {
 			return err
@@ -347,7 +357,10 @@ func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int
 			return sql.ErrNoRows
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET applied_revision=?,apply_state='applied',apply_state_at=?,apply_error='' WHERE camera_id=?`, revision, now, cameraID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET applied_revision=?,
+		apply_state=CASE WHEN desired_revision=? THEN 'applied' ELSE 'pending' END,
+		apply_state_at=?,apply_error=CASE WHEN desired_revision=? THEN '' ELSE apply_error END WHERE camera_id=?`,
+		revision, revision, now, revision, cameraID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -359,8 +372,12 @@ func (d *DB) MarkCameraPolicyFailed(ctx context.Context, cameraID, revision int6
 		return err
 	}
 	defer tx.Rollback()
-	if err := requireDesiredRevision(ctx, tx, cameraID, revision); err != nil {
+	desired, _, err := validateApplyRevision(ctx, tx, cameraID, revision)
+	if err != nil {
 		return err
+	}
+	if revision < desired {
+		return tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET apply_state='apply_failed',apply_state_at=?,apply_error=? WHERE camera_id=?`,
 		time.Now().UTC().Format(time.RFC3339Nano), redactString(applyError), cameraID); err != nil {
@@ -369,13 +386,16 @@ func (d *DB) MarkCameraPolicyFailed(ctx context.Context, cameraID, revision int6
 	return tx.Commit()
 }
 
-func requireDesiredRevision(ctx context.Context, tx *sql.Tx, cameraID, revision int64) error {
-	var current int64
-	if err := tx.QueryRowContext(ctx, `SELECT desired_revision FROM camera_policy_states WHERE camera_id=?`, cameraID).Scan(&current); err != nil {
-		return err
+func validateApplyRevision(ctx context.Context, tx *sql.Tx, cameraID, revision int64) (int64, int64, error) {
+	var desired, applied int64
+	if err := tx.QueryRowContext(ctx, `SELECT desired_revision,applied_revision FROM camera_policy_states WHERE camera_id=?`, cameraID).Scan(&desired, &applied); err != nil {
+		return 0, 0, err
 	}
-	if current != revision {
-		return fmt.Errorf("%w: expected %d, current %d", ErrDesiredRevisionMismatch, revision, current)
+	if revision > desired {
+		return desired, applied, fmt.Errorf("%w: applied %d exceeds desired %d", ErrDesiredRevisionMismatch, revision, desired)
 	}
-	return nil
+	if revision < applied {
+		return desired, applied, fmt.Errorf("%w: applied %d is older than %d", ErrAppliedRevisionRegression, revision, applied)
+	}
+	return desired, applied, nil
 }

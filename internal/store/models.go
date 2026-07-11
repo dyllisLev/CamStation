@@ -157,7 +157,8 @@ const (
 )
 
 type CameraOutputPolicySnapshot struct {
-	SourceStreamID int64            `json:"sourceStreamId,omitempty"`
+	SourceStreamID int64            `json:"-"`
+	SourceKey      string           `json:"sourceKey,omitempty"`
 	VideoMode      CameraVideoMode  `json:"videoMode,omitempty"`
 	MaxWidth       *int             `json:"maxWidth,omitempty"`
 	MaxHeight      *int             `json:"maxHeight,omitempty"`

@@ -24,12 +24,6 @@ func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams [
 	for i := range streams {
 		normalizeCameraStream(&streams[i])
 	}
-	// A legacy first replacement upgrades the live default to the newly discovered live input.
-	_, _ = tx.ExecContext(ctx, `UPDATE camera_outputs SET source_stream_id=(
-		SELECT id FROM camera_streams WHERE camera_id=? AND source_key='live'
-	) WHERE camera_id=? AND purpose='live' AND EXISTS(
-		SELECT 1 FROM camera_policy_states WHERE camera_id=? AND desired_revision=1
-	) AND EXISTS(SELECT 1 FROM camera_streams WHERE camera_id=? AND source_key='live')`, cameraID, cameraID, cameraID, cameraID)
 	if err := deleteMissingCameraStreamsTx(ctx, tx, cameraID, streams); err != nil {
 		return err
 	}

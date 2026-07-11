@@ -80,6 +80,13 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 			return fmt.Errorf("camera policy migration failed: %w", err)
 		}
 	}
+	if _, err := d.db.ExecContext(ctx, `UPDATE camera_outputs SET applied_policy_json=json_set(
+		applied_policy_json,'$.sourceKey',(SELECT source_key FROM camera_streams
+		WHERE id=CAST(json_extract(applied_policy_json,'$.sourceStreamId') AS INTEGER)))
+		WHERE COALESCE(json_extract(applied_policy_json,'$.sourceKey'),'')=''
+		AND COALESCE(json_extract(applied_policy_json,'$.sourceStreamId'),0) != 0`); err != nil {
+		return fmt.Errorf("camera applied source-key migration failed: %w", err)
+	}
 	return d.ensureCameraPolicyDefaults(ctx)
 }
 

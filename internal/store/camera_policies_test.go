@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -374,6 +375,106 @@ func TestReplaceCameraStreamsAdvancesRevisionOnlyForGraphChanges(t *testing.T) {
 	if got := mustGetCamera(t, db, camera.StreamName).PolicyState.DesiredRevision; got != start+2 {
 		t.Fatalf("source-FK revision = %d, want %d", got, start+2)
 	}
+}
+
+func TestCoordinatorResultsRespectNewerDesiredRevision(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "coordinator-race")
+	oldRevision := camera.PolicyState.DesiredRevision
+	results := applyResults(camera)
+	camera.Outputs[1].VideoMode = CameraVideoH264
+	newer, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(oldRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, oldRevision, results); err != nil {
+		t.Fatalf("accept older completed apply: %v", err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	if got.PolicyState.AppliedRevision != oldRevision || got.PolicyState.DesiredRevision != newer.PolicyState.DesiredRevision || got.PolicyState.ApplyState != CameraApplyPending {
+		t.Fatalf("older completion state = %#v", got.PolicyState)
+	}
+	if got.Outputs[0].AppliedPolicy.SourceKey != "recording" {
+		t.Fatalf("older applied snapshot = %#v", got.Outputs[0].AppliedPolicy)
+	}
+	if err := db.MarkCameraPolicyFailed(t.Context(), camera.ID, oldRevision, "old apply failed"); err != nil {
+		t.Fatalf("stale failure: %v", err)
+	}
+	if state := mustGetCamera(t, db, camera.StreamName).PolicyState; state.ApplyState != CameraApplyPending {
+		t.Fatalf("stale failure poisoned newer desired state: %#v", state)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, newer.PolicyState.DesiredRevision+1, applyResults(newer)); !errors.Is(err, ErrDesiredRevisionMismatch) {
+		t.Fatalf("future applied revision error = %v", err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, oldRevision-1, results); !errors.Is(err, ErrAppliedRevisionRegression) {
+		t.Fatalf("regressed applied revision error = %v", err)
+	}
+}
+
+func TestAppliedSnapshotKeepsSourceKeyAfterInputDeletion(t *testing.T) {
+	db := openMigratedStore(t)
+	created, err := db.SaveCameraConfiguration(t.Context(), Camera{
+		Name: "source-key", URL: "rtsp://u:p@host/main", StreamName: "source-key", State: "unknown",
+		Streams: []CameraStream{
+			{SourceKey: "recording", Role: CameraStreamRoleRecording, URL: "rtsp://u:p@host/main", Go2RTCStreamName: "producer-main"},
+			{SourceKey: "live", Role: CameraStreamRoleLive, URL: "rtsp://u:p@host/sub", Go2RTCStreamName: "producer-live"},
+		},
+		Outputs: desiredOutputs("recording", "live"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), created.ID, created.PolicyState.DesiredRevision, applyResults(created)); err != nil {
+		t.Fatal(err)
+	}
+	created.Streams = created.Streams[:1]
+	for i := range created.Outputs {
+		created.Outputs[i].SourceKey = "recording"
+		created.Outputs[i].SourceStreamID = created.Streams[0].ID
+	}
+	updated, err := db.SaveCameraConfiguration(t.Context(), created, int64Ptr(created.PolicyState.DesiredRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := updated.Outputs[1].AppliedPolicy
+	if live.SourceKey != "live" {
+		t.Fatalf("applied source identity = %#v", live)
+	}
+	encoded, err := json.Marshal(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"sourceKey":"live"`) || strings.Contains(string(encoded), "sourceStreamId") {
+		t.Fatalf("public snapshot JSON = %s", encoded)
+	}
+}
+
+func TestReplaceCameraStreamsDoesNotRetargetLivePolicy(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "no-retarget")
+	if camera.Outputs[1].SourceKey != "recording" {
+		t.Fatalf("initial live source = %q", camera.Outputs[1].SourceKey)
+	}
+	streams := append(camera.Streams, CameraStream{SourceKey: "live", Role: CameraStreamRoleLive, URL: "rtsp://u:p@host/sub", Go2RTCStreamName: "producer-live"})
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, streams); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	if got.Outputs[1].SourceKey != "recording" {
+		t.Fatalf("input discovery retargeted live policy to %q", got.Outputs[1].SourceKey)
+	}
+}
+
+func applyResults(camera Camera) []CameraOutputApplyResult {
+	results := make([]CameraOutputApplyResult, 0, len(camera.Outputs))
+	for _, output := range camera.Outputs {
+		results = append(results, CameraOutputApplyResult{Purpose: output.Purpose, Policy: CameraOutputPolicySnapshot{
+			SourceKey: output.SourceKey, SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode,
+			MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS,
+			AudioMode: output.AudioMode, Activation: output.Activation,
+		}})
+	}
+	return results
 }
 
 func desiredOutputs(recordingKey, liveKey string) []CameraOutput {
