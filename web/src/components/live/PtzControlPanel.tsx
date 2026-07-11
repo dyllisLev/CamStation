@@ -1,4 +1,17 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ZoomIn, ZoomOut } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  House,
+  LoaderCircle,
+  MapPin,
+  Navigation,
+  Save,
+  Trash2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import type { Camera, PTZMoveVector } from "../../app/api";
@@ -104,6 +117,17 @@ function HoldButton({ label, move, className, direction, onStart, onStop, childr
   );
 }
 
+function ActionContent({ pending, icon, children }: { pending: boolean; icon: ReactNode; children: ReactNode }) {
+  return (
+    <>
+      <span className="new-ptz-action-icon" aria-hidden="true">
+        {pending ? <LoaderCircle className="new-ptz-spinner" /> : icon}
+      </span>
+      <span>{children}</span>
+    </>
+  );
+}
+
 export function PtzControlPanel({ camera, onBack, onStopReady }: PtzControlPanelProps) {
   const [speed, setSpeed] = useState(0.6);
   const [presetName, setPresetName] = useState("");
@@ -136,24 +160,32 @@ export function PtzControlPanel({ camera, onBack, onStopReady }: PtzControlPanel
 
   const homeActionButtons = (
     <>
-      <h3>위치 / 홈</h3>
+      <header className="new-ptz-card-title">
+        <h3>위치 / 홈</h3>
+      </header>
       <button
         type="button"
+        className="new-ptz-action new-ptz-home-action"
         disabled={!controls.home.available || gotoHome.isPending}
+        data-pending={gotoHome.isPending}
+        aria-busy={gotoHome.isPending}
         onClick={() => gotoHome.mutate({ streamName: camera.streamName }, { onError: mutationError })}
       >
-        홈으로 이동
+        <ActionContent pending={gotoHome.isPending} icon={<House />}>홈으로 이동</ActionContent>
       </button>
       <button
         type="button"
+        className="new-ptz-action new-ptz-home-action"
         disabled={!controls.home.available || setHome.isPending}
+        data-pending={setHome.isPending}
+        aria-busy={setHome.isPending}
         onClick={() => {
           if (window.confirm("현재 카메라 위치를 홈으로 설정할까요?")) {
             setHome.mutate({ streamName: camera.streamName }, { onError: mutationError });
           }
         }}
       >
-        현재 위치를 홈으로 설정
+        <ActionContent pending={setHome.isPending} icon={<MapPin />}>현재 위치를 홈으로 설정</ActionContent>
       </button>
     </>
   );
@@ -184,39 +216,58 @@ export function PtzControlPanel({ camera, onBack, onStopReady }: PtzControlPanel
           aria-label="새 프리셋 이름"
           placeholder="프리셋 이름"
         />
-        <button type="submit" disabled={!controls.presets.available || !presetName.trim() || createPreset.isPending}>
-          현재 위치 저장
+        <button
+          type="submit"
+          className="new-ptz-action new-ptz-save-action"
+          disabled={!controls.presets.available || !presetName.trim() || createPreset.isPending}
+          data-pending={createPreset.isPending}
+          aria-busy={createPreset.isPending}
+        >
+          <ActionContent pending={createPreset.isPending} icon={<Save />}>현재 위치 저장</ActionContent>
         </button>
       </form>
       <ul className="new-ptz-preset-list">
-        {(presetsQuery.data ?? []).map((preset) => (
-          <li key={preset.token}>
-            <span>{preset.name || "이름 없는 프리셋"}</span>
-            <button
-              type="button"
-              disabled={gotoPreset.isPending}
-              onClick={() =>
-                gotoPreset.mutate({ streamName: camera.streamName, token: preset.token }, { onError: mutationError })
-              }
-            >
-              이동
-            </button>
-            <button
-              type="button"
-              disabled={deletePreset.isPending}
-              onClick={() => {
-                if (window.confirm(`‘${preset.name || "이름 없는 프리셋"}’ 프리셋을 삭제할까요?`)) {
-                  deletePreset.mutate(
+        {(presetsQuery.data ?? []).map((preset) => {
+          const moving = gotoPreset.isPending && gotoPreset.variables?.token === preset.token;
+          const deleting = deletePreset.isPending && deletePreset.variables?.token === preset.token;
+          return (
+            <li key={preset.token}>
+              <span>{preset.name || "이름 없는 프리셋"}</span>
+              <button
+                type="button"
+                className="new-ptz-action new-ptz-preset-action"
+                disabled={gotoPreset.isPending}
+                data-pending={moving}
+                aria-busy={moving}
+                onClick={() =>
+                  gotoPreset.mutate(
                     { streamName: camera.streamName, token: preset.token },
                     { onError: mutationError },
-                  );
+                  )
                 }
-              }}
-            >
-              삭제
-            </button>
-          </li>
-        ))}
+              >
+                <ActionContent pending={moving} icon={<Navigation />}>이동</ActionContent>
+              </button>
+              <button
+                type="button"
+                className="new-ptz-action new-ptz-preset-action new-ptz-danger-action"
+                disabled={deletePreset.isPending}
+                data-pending={deleting}
+                aria-busy={deleting}
+                onClick={() => {
+                  if (window.confirm(`‘${preset.name || "이름 없는 프리셋"}’ 프리셋을 삭제할까요?`)) {
+                    deletePreset.mutate(
+                      { streamName: camera.streamName, token: preset.token },
+                      { onError: mutationError },
+                    );
+                  }
+                }}
+              >
+                <ActionContent pending={deleting} icon={<Trash2 />}>삭제</ActionContent>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </>
   );
@@ -333,7 +384,11 @@ export function PtzControlPanel({ camera, onBack, onStopReady }: PtzControlPanel
         이동 속도 <output>{Math.round(speed * 100)}%</output>
         <input type="range" min="0.2" max="1" step="0.1" value={speed} onChange={handleSpeed} />
       </label>
-      <button type="button" className="new-ptz-emergency" onClick={holdStop}>
+      <button
+        type="button"
+        className="new-ptz-action new-ptz-emergency new-ptz-danger-action"
+        onClick={holdStop}
+      >
         ■ 즉시 정지
       </button>
       <div className="new-ptz-card new-ptz-home">{homeActionButtons}</div>
