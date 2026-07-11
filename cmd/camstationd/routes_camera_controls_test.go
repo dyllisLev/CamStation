@@ -157,6 +157,24 @@ func TestCameraControlRoutesUpdateWithoutProfilePreservesCapabilities(t *testing
 	}
 }
 
+func TestCameraControlRoutesRejectFieldsOnEmptyBodyActions(t *testing.T) {
+	fake := &fakeCameraController{}
+	server := newCameraControlRouteServer(t, fake)
+	for _, target := range []string{
+		"/api/cameras/goat-yard/controls/refresh",
+		"/api/cameras/goat-yard/ptz/stop",
+		"/api/cameras/goat-yard/ptz/home/goto",
+	} {
+		status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, target, `{"host":"camera.invalid"}`, trustedConsoleHeaders())
+		if status != http.StatusBadRequest {
+			t.Fatalf("POST %s status = %d, want %d", target, status, http.StatusBadRequest)
+		}
+	}
+	if fake.discoverCalls != 0 || fake.stopCalls != 0 || fake.gotoHomeCalls != 0 {
+		t.Fatalf("controller calls = discover:%d stop:%d home:%d", fake.discoverCalls, fake.stopCalls, fake.gotoHomeCalls)
+	}
+}
+
 type fakeCameraController struct {
 	capabilities                       store.CameraControlCapabilities
 	status                             cameracontrol.Status
@@ -165,10 +183,12 @@ type fakeCameraController struct {
 	gotoPresetToken, deletePresetToken string
 	createdPresetName                  string
 	moveCalls, stopCalls               int
+	discoverCalls, gotoHomeCalls       int
 	err                                error
 }
 
 func (f *fakeCameraController) Discover(context.Context, store.Camera) (store.CameraControlCapabilities, error) {
+	f.discoverCalls++
 	return f.capabilities, f.err
 }
 func (f *fakeCameraController) Status(context.Context, store.Camera) (cameracontrol.Status, error) {
@@ -183,8 +203,11 @@ func (f *fakeCameraController) Stop(context.Context, store.Camera) error {
 	f.stopCalls++
 	return f.err
 }
-func (f *fakeCameraController) GotoHome(context.Context, store.Camera) error { return f.err }
-func (f *fakeCameraController) SetHome(context.Context, store.Camera) error  { return f.err }
+func (f *fakeCameraController) GotoHome(context.Context, store.Camera) error {
+	f.gotoHomeCalls++
+	return f.err
+}
+func (f *fakeCameraController) SetHome(context.Context, store.Camera) error { return f.err }
 func (f *fakeCameraController) ListPresets(context.Context, store.Camera) ([]cameracontrol.Preset, error) {
 	return f.presets, f.err
 }

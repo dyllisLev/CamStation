@@ -76,6 +76,9 @@ func (d routeDeps) refreshCameraControls(w http.ResponseWriter, r *http.Request)
 	if !requireCameraManagementRequest(w, r) {
 		return
 	}
+	if !decodeEmptyControlJSON(w, r) {
+		return
+	}
 	camera, err := d.controlCamera(r.Context(), r.PathValue("streamName"))
 	if err != nil {
 		writeCameraControlError(w, err)
@@ -135,6 +138,9 @@ func (d routeDeps) stopCamera(w http.ResponseWriter, r *http.Request) {
 	if !requireCameraManagementRequest(w, r) {
 		return
 	}
+	if !decodeEmptyControlJSON(w, r) {
+		return
+	}
 	camera, err := d.controlCamera(r.Context(), r.PathValue("streamName"))
 	if err != nil {
 		writeCameraControlError(w, err)
@@ -160,6 +166,9 @@ func (d routeDeps) setCameraHome(w http.ResponseWriter, r *http.Request) {
 
 func (d routeDeps) cameraHomeAction(w http.ResponseWriter, r *http.Request, operation string, set bool) {
 	if !requireCameraManagementRequest(w, r) {
+		return
+	}
+	if !decodeEmptyControlJSON(w, r) {
 		return
 	}
 	camera, err := d.controlCamera(r.Context(), r.PathValue("streamName"))
@@ -316,6 +325,10 @@ func decodeControlJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+func decodeEmptyControlJSON(w http.ResponseWriter, r *http.Request) bool {
+	return decodeControlJSON(w, r, &struct{}{})
 }
 
 func writeCameraControlError(w http.ResponseWriter, err error) {
