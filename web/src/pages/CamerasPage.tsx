@@ -8,6 +8,7 @@ import { CameraStreamPolicyEditor } from "./cameras/CameraStreamPolicyEditor";
 import { ProfileLibrary } from "./cameras/ProfileLibrary";
 import type { ProfileTemplateDraftSource } from "./cameras/profileLibraryModel";
 import { RegisteredCameraTable } from "./cameras/RegisteredCameraTable";
+import { cameraPolicySurfaceKey } from "./cameras/streamOutputPolicyModel";
 
 type CameraWorkflowMode = "create" | "edit";
 
@@ -48,6 +49,7 @@ export function CamerasPage() {
         )}
       </div>
       <CameraWorkflow
+        key={cameraPolicySurfaceKey(activeMode, selectedCamera?.streamName)}
         mode={activeMode}
         camera={activeMode === "edit" ? selectedCamera : null}
         onScanComplete={setLastProfile}
@@ -57,7 +59,9 @@ export function CamerasPage() {
           setWorkflowMode("create");
         }}
       />
-      {activeMode === "edit" && selectedCamera && <CameraStreamPolicyEditor camera={selectedCamera} />}
+      {activeMode === "edit" && selectedCamera && (
+        <CameraStreamPolicyEditor key={cameraPolicySurfaceKey("edit", selectedCamera.streamName)} camera={selectedCamera} />
+      )}
       <ProfileLibrary draftSource={profileDraftSource} />
     </div>
   );

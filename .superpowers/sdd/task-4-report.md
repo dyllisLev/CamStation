@@ -34,4 +34,6 @@
 - A 409 now invalidates the cameras query; the reload action explicitly fetches `GET /api/cameras` and rebuilds the draft from that fresh response instead of copying a stale prop.
 - Connection/profile rescans show and send the same policy draft. Existing manual modes and limits remain intact, while a live source deduplicated by the backend is visibly normalized to recording before validation/save.
 - Live-input availability now compares public producer identity, not only differing profile tokens, matching backend same-URL deduplication.
-- Follow-up verification: 15/15 tests, lint without warnings, and production build pass.
+- Workflow and policy editor instances are keyed by mode plus stable camera `streamName`, so late async results from camera A cannot mutate camera B's local draft after selection changes.
+- Candidate identity comparison is deliberately conservative: equal or unavailable public producer identities fall back to recording. Credential-redaction ambiguity can suppress an otherwise distinct live source, but cannot generate the backend `sourceKey=live` 400 failure.
+- Follow-up verification: 16/16 tests, lint without warnings, and production build pass.

@@ -29,6 +29,10 @@ export type PolicyMutationNotice = {
   message: string;
 };
 
+export function cameraPolicySurfaceKey(mode: "create" | "edit", streamName?: string): string {
+  return mode === "create" ? "create:new" : `edit:${streamName || "none"}`;
+}
+
 export function recommendedStreamOutputs(hasLiveSource: boolean): StreamOutputSettingsTuple {
   return [
     output("recording", "recording", "copy", null, null, null, "source", "on_demand"),

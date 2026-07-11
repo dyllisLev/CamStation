@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Camera } from "../src/app/cameraTypes.ts";
 import {
   CAMERA_POLICY_INVALIDATION_KEYS,
+  cameraPolicySurfaceKey,
   hasDistinctLiveSource,
   draftFromCamera,
   policyMutationNotice,
@@ -82,6 +83,12 @@ test("dirty draft survives same-camera refetch and exposes server revision chang
   assert.equal(reconciled.serverRevision, 8);
   assert.equal(reconciled.outputs[1].maxFPS, 15);
   assert.equal(reconciled.dirty, true);
+});
+
+test("camera policy surfaces get a new instance key when mode or camera changes", () => {
+  assert.equal(cameraPolicySurfaceKey("edit", "fire-station-1"), "edit:fire-station-1");
+  assert.notEqual(cameraPolicySurfaceKey("edit", "fire-station-1"), cameraPolicySurfaceKey("edit", "fire-station-5"));
+  assert.notEqual(cameraPolicySurfaceKey("edit", "fire-station-1"), cameraPolicySurfaceKey("create"));
 });
 
 test("server reload rebuilds the draft from the freshly fetched camera revision", () => {
