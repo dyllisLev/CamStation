@@ -198,6 +198,43 @@ func TestCameraControlRoutesPersistOverlayAndReconcilePresetNames(t *testing.T) 
 	}
 }
 
+func TestCameraControlRoutesKeepPresetNameCreatedAfterListStarted(t *testing.T) {
+	fake := &fakeCameraController{
+		listPresetsStarted: make(chan struct{}),
+		releaseListPresets: make(chan struct{}),
+	}
+	server := newCameraControlRouteServer(t, fake)
+	headers := trustedConsoleHeaders()
+	type listResult struct {
+		status int
+		list   []map[string]any
+	}
+	listed := make(chan listResult, 1)
+	go func() {
+		status, list := requestJSONArrayWithHeaders(t, server.handler, http.MethodGet, "/api/cameras/goat-yard/ptz/presets", "", headers)
+		listed <- listResult{status: status, list: list}
+	}()
+	<-fake.listPresetsStarted
+
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, headers)
+	if status != http.StatusOK || payload["name"] != "입구" {
+		t.Fatalf("create = %d/%v", status, payload)
+	}
+	close(fake.releaseListPresets)
+	result := <-listed
+	if result.status != http.StatusOK || len(result.list) != 0 {
+		t.Fatalf("stale list = %d/%v", result.status, result.list)
+	}
+	camera, err := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	if err != nil {
+		t.Fatalf("get camera: %v", err)
+	}
+	names, err := server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if err != nil || names["created-token"] != "입구" {
+		t.Fatalf("names/error = %#v/%v", names, err)
+	}
+}
+
 func TestCameraControlRoutesDeletePresetNameOnlyAfterDeviceSuccess(t *testing.T) {
 	fake := &fakeCameraController{}
 	server := newCameraControlRouteServer(t, fake)
@@ -243,6 +280,8 @@ type fakeCameraController struct {
 	moveCalls, stopCalls               int
 	discoverCalls, gotoHomeCalls       int
 	onCreatePreset                     func()
+	listPresetsStarted                 chan struct{}
+	releaseListPresets                 chan struct{}
 	err                                error
 }
 
@@ -268,7 +307,14 @@ func (f *fakeCameraController) GotoHome(context.Context, store.Camera) error {
 }
 func (f *fakeCameraController) SetHome(context.Context, store.Camera) error { return f.err }
 func (f *fakeCameraController) ListPresets(context.Context, store.Camera) ([]cameracontrol.Preset, error) {
-	return f.presets, f.err
+	presets := append([]cameracontrol.Preset(nil), f.presets...)
+	if f.listPresetsStarted != nil {
+		close(f.listPresetsStarted)
+	}
+	if f.releaseListPresets != nil {
+		<-f.releaseListPresets
+	}
+	return presets, f.err
 }
 func (f *fakeCameraController) CreatePreset(_ context.Context, _ store.Camera, name string) (cameracontrol.Preset, error) {
 	f.createdPresetName = name

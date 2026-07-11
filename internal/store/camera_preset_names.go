@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -39,7 +40,7 @@ func (d *DB) DeleteCameraPresetName(ctx context.Context, cameraID int64, token s
 	return err
 }
 
-func (d *DB) ReconcileCameraPresetNames(ctx context.Context, cameraID int64, activeTokens []string) error {
+func (d *DB) ReconcileCameraPresetNames(ctx context.Context, cameraID int64, activeTokens []string, cutoff time.Time) error {
 	active := make(map[string]struct{}, len(activeTokens))
 	for _, token := range activeTokens {
 		active[token] = struct{}{}
@@ -51,18 +52,27 @@ func (d *DB) ReconcileCameraPresetNames(ctx context.Context, cameraID int64, act
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.QueryContext(ctx, `SELECT preset_token FROM camera_preset_names WHERE camera_id=?`, cameraID)
+	rows, err := tx.QueryContext(ctx, `SELECT preset_token,updated_at FROM camera_preset_names WHERE camera_id=?`, cameraID)
 	if err != nil {
 		return err
 	}
-	var existing []string
+	type presetName struct {
+		token     string
+		updatedAt time.Time
+	}
+	var existing []presetName
 	for rows.Next() {
-		var token string
-		if err := rows.Scan(&token); err != nil {
+		var token, updatedAtValue string
+		if err := rows.Scan(&token, &updatedAtValue); err != nil {
 			rows.Close()
 			return err
 		}
-		existing = append(existing, token)
+		updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtValue)
+		if err != nil {
+			rows.Close()
+			return fmt.Errorf("parse preset name updated_at: %w", err)
+		}
+		existing = append(existing, presetName{token: token, updatedAt: updatedAt})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -72,11 +82,11 @@ func (d *DB) ReconcileCameraPresetNames(ctx context.Context, cameraID int64, act
 		return err
 	}
 
-	for _, token := range existing {
-		if _, ok := active[token]; ok {
+	for _, name := range existing {
+		if _, ok := active[name.token]; ok || !name.updatedAt.Before(cutoff) {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM camera_preset_names WHERE camera_id=? AND preset_token=?`, cameraID, token); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM camera_preset_names WHERE camera_id=? AND preset_token=?`, cameraID, name.token); err != nil {
 			return err
 		}
 	}

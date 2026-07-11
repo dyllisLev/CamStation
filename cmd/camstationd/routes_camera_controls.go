@@ -206,6 +206,7 @@ func (d routeDeps) listCameraPresets(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	cutoff := time.Now().UTC()
 	ctx, cancel := context.WithTimeout(r.Context(), cameraControlRouteTimeout)
 	defer cancel()
 	presets, err := d.cameraController.ListPresets(ctx, camera)
@@ -227,7 +228,7 @@ func (d routeDeps) listCameraPresets(w http.ResponseWriter, r *http.Request) {
 			presets[i].Name = name
 		}
 	}
-	if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens); err != nil {
+	if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens, cutoff); err != nil {
 		d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err)
 		writeCameraControlError(w, err)
 		return
