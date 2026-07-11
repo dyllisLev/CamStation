@@ -1,5 +1,6 @@
 import { backupApi } from "./backupApi";
 import { cameraApi } from "./cameraApi";
+import { cameraControlApi } from "./cameraControlApi";
 import { eventsIncidentsApi } from "./eventsIncidentsApi";
 import { recordingsApi } from "./recordingsApi";
 import { settingsJobsApi } from "./settingsJobsApi";
@@ -14,6 +15,7 @@ export type * from "./streamsViewersSystemApi";
 
 export const api = {
   ...cameraApi,
+  ...cameraControlApi,
   ...eventsIncidentsApi,
   ...recordingsApi,
   ...settingsJobsApi,

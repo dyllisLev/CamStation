@@ -23,6 +23,7 @@ export type Camera = {
   onvifPort?: number;
   channelIndex?: number;
   lastScan?: Record<string, unknown>;
+  controlCapabilities: CameraControlCapabilities;
   streams?: CameraStream[];
   lastProbe?: {
     readonly reachable?: boolean;
@@ -41,6 +42,29 @@ export type Camera = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type ControlSupport = "unknown" | "supported" | "unsupported";
+
+export type CameraControlFeature = {
+  readonly support: ControlSupport;
+  readonly available: boolean;
+  readonly reason?: string;
+};
+
+export type CameraControlCapabilities = {
+  readonly ptz: CameraControlFeature;
+  readonly home: CameraControlFeature;
+  readonly presets: CameraControlFeature;
+  readonly listen: CameraControlFeature;
+  readonly talk: CameraControlFeature;
+  readonly siren: CameraControlFeature;
+  readonly maxPresets?: number;
+  readonly discoveredAt?: string;
+};
+
+export type CameraControlStatus = { readonly panTilt: string; readonly zoom: string };
+export type CameraPreset = { readonly token: string; readonly name: string };
+export type PTZMoveVector = { readonly pan: number; readonly tilt: number; readonly zoom: number };
 
 export type CameraStream = {
   id?: number;

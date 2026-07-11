@@ -10,6 +10,7 @@ import {
 } from "./api";
 
 export * from "./backupQueries";
+export * from "./cameraControlQueries";
 export * from "./eventsIncidentsQueries";
 export * from "./recordingsQueries";
 export * from "./settingsJobsQueries";

@@ -29,6 +29,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+export function managementRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("X-CamStation-Management", "1");
+  return request<T>(path, { ...init, headers });
+}
+
 function isCameraManagementMutation(path: string, method = "GET"): boolean {
   const normalizedMethod = method.toUpperCase();
   if (normalizedMethod === "GET" || normalizedMethod === "HEAD") {
