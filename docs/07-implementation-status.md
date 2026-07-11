@@ -78,6 +78,8 @@ This document records the current implementation state so the next session can c
 - Focus behavior:
   - `집중 보기` no longer opens a new player window
   - clicking `집중 보기` toggles in-page tile enlargement
+  - normal `/live` tiles use the camera's live role stream
+  - the enlarged focus tile uses the recording role stream, falling back to the live or stable stream name when unavailable
   - enlarged tile button changes to `집중 보기 종료`
   - double-click on a tile also toggles in-page tile enlargement
   - `Escape` exits the in-page tile enlargement
@@ -146,11 +148,18 @@ rtsp://127.0.0.1:8554/{streamName}
 Commands run successfully:
 
 ```bash
+cd web && node --experimental-strip-types --test tests/streamSelection.test.ts
 cd web && npm run lint
 cd web && npm run build
 go test ./...
 go build -o camstationd ./cmd/camstationd
 ```
+
+Focused stream selection verification:
+
+- Normal tiles select the live role stream.
+- `집중 보기` selects the recording role stream and falls back to the live or stable stream name when unavailable.
+- Changing focus view does not reconfigure or restart recorder workers.
 
 Browser/Playwright verification performed:
 
