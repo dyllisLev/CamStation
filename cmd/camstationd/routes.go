@@ -21,6 +21,10 @@ type streamController interface {
 	Restart(context.Context, []store.Camera) error
 }
 
+type policyApplier interface {
+	Apply(context.Context) stream.PolicyApplyResult
+}
+
 type cameraControlService interface {
 	Discover(context.Context, store.Camera) (store.CameraControlCapabilities, error)
 	Status(context.Context, store.Camera) (cameracontrol.Status, error)
@@ -38,6 +42,7 @@ type routeDeps struct {
 	db               *store.DB
 	prober           camera.Prober
 	streamer         streamController
+	policyApplier    policyApplier
 	recorderManager  *recorder.Manager
 	cleaner          *cleanup.Cleaner
 	backupRunner     *backup.Runner
@@ -60,6 +65,7 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 		db:               db,
 		prober:           prober,
 		streamer:         streamer,
+		policyApplier:    stream.NewApplyCoordinator(db, streamer, recorderManager),
 		recorderManager:  recorderManager,
 		cleaner:          cleaner,
 		backupRunner:     backupRunner,

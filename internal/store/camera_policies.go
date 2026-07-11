@@ -298,9 +298,11 @@ func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecre
 func (d *DB) getCameraPolicyState(ctx context.Context, cameraID int64, includeSecrets bool) (CameraPolicyState, error) {
 	var state CameraPolicyState
 	var at string
-	err := d.db.QueryRowContext(ctx, `SELECT camera_id,desired_revision,applied_revision,apply_state,apply_state_at,apply_error FROM camera_policy_states WHERE camera_id=?`, cameraID).
-		Scan(&state.CameraID, &state.DesiredRevision, &state.AppliedRevision, &state.ApplyState, &at, &state.ApplyError)
+	var appliedAt sql.NullString
+	err := d.db.QueryRowContext(ctx, `SELECT camera_id,desired_revision,applied_revision,apply_state,apply_state_at,applied_at,apply_error FROM camera_policy_states WHERE camera_id=?`, cameraID).
+		Scan(&state.CameraID, &state.DesiredRevision, &state.AppliedRevision, &state.ApplyState, &at, &appliedAt, &state.ApplyError)
 	state.ApplyStateAt, _ = time.Parse(time.RFC3339Nano, at)
+	state.AppliedAt, _ = time.Parse(time.RFC3339Nano, appliedAt.String)
 	if !includeSecrets {
 		state.ApplyError = redactString(state.ApplyError)
 	}
@@ -392,8 +394,8 @@ func markCameraPolicyAppliedTx(ctx context.Context, tx *sql.Tx, snapshot CameraP
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET applied_revision=?,
 		apply_state=CASE WHEN desired_revision=? THEN 'applied' ELSE 'pending' END,
-		apply_state_at=?,apply_error=CASE WHEN desired_revision=? THEN '' ELSE apply_error END WHERE camera_id=?`,
-		snapshot.Revision, snapshot.Revision, now, snapshot.Revision, snapshot.CameraID); err != nil {
+		apply_state_at=?,applied_at=?,apply_error=CASE WHEN desired_revision=? THEN '' ELSE apply_error END WHERE camera_id=?`,
+		snapshot.Revision, snapshot.Revision, now, now, snapshot.Revision, snapshot.CameraID); err != nil {
 		return err
 	}
 	return nil
@@ -415,6 +417,45 @@ func (d *DB) MarkCameraPolicyFailed(ctx context.Context, cameraID, revision int6
 	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET apply_state='apply_failed',apply_state_at=?,apply_error=? WHERE camera_id=?`,
 		time.Now().UTC().Format(time.RFC3339Nano), redactString(applyError), cameraID); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) UpdateCameraOutputVerifications(ctx context.Context, cameraID, expectedAppliedRevision int64, verifications map[CameraOutputPurpose]CameraOutputVerification) error {
+	if len(verifications) != 3 {
+		return fmt.Errorf("exactly three output verifications are required")
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var currentAppliedRevision int64
+	if err := tx.QueryRowContext(ctx, `SELECT applied_revision FROM camera_policy_states WHERE camera_id=?`, cameraID).Scan(&currentAppliedRevision); err != nil {
+		return err
+	}
+	if currentAppliedRevision != expectedAppliedRevision {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, purpose := range []CameraOutputPurpose{CameraOutputRecording, CameraOutputLive, CameraOutputFocus} {
+		verification, ok := verifications[purpose]
+		if !ok {
+			return fmt.Errorf("missing output verification %s", purpose)
+		}
+		var checkedAt any
+		if !verification.CheckedAt.IsZero() {
+			checkedAt = verification.CheckedAt.Format(time.RFC3339Nano)
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET verified_video_codec=?,verified_audio_codec=?,verified_width=?,verified_height=?,verified_fps=?,verified_transcoding=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=?`,
+			verification.VideoCodec, verification.AudioCodec, verification.Width, verification.Height, verification.FPS,
+			verification.Transcoding, checkedAt, redactString(verification.Error), now, cameraID, purpose)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return sql.ErrNoRows
+		}
 	}
 	return tx.Commit()
 }

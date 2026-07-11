@@ -24,7 +24,7 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 		}
 		saved, result, probeErr, err := persistCameraProfile(r.Context(), d.db, d.prober, req, "")
 		if err != nil {
-			if errors.Is(err, errBadCameraProfileRequest) {
+			if errors.Is(err, errBadCameraProfileRequest) || isCameraPolicyValidationError(err) {
 				writeError(w, http.StatusBadRequest, err)
 			} else if errors.Is(err, errCameraProfileScanFailed) {
 				writeError(w, http.StatusBadGateway, err)
@@ -34,17 +34,6 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 			return
 		}
 		level, message := cameraMutationEvent("camera registered", probeErr)
-		if len(req.Profile.Channels) > 0 {
-			if err := d.db.UpdateCameraControlCapabilities(r.Context(), saved.StreamName, controlCapabilitiesFromProfile(req.Profile)); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			saved, err = d.db.GetCameraByStream(r.Context(), saved.StreamName)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
 		publicSaved := publicCameraFromStore(saved)
 
 		_ = d.db.AppendEvent(r.Context(), store.Event{
@@ -60,6 +49,10 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 				"error":   errString(probeErr),
 			},
 		})
+		if d.policyApplier != nil {
+			d.writePolicyApplyResponse(w, r, saved.StreamName, true)
+			return
+		}
 
 		cameras, err := d.db.ListCameras(r.Context(), true)
 		if err != nil {
@@ -113,7 +106,7 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 		req = cameraUpdateRequest(existing, req)
 		saved, result, probeErr, err := persistCameraProfile(r.Context(), d.db, d.prober, req, existing.StreamName)
 		if err != nil {
-			if errors.Is(err, errBadCameraProfileRequest) {
+			if errors.Is(err, errBadCameraProfileRequest) || isCameraPolicyValidationError(err) {
 				writeError(w, http.StatusBadRequest, err)
 			} else if errors.Is(err, errCameraProfileScanFailed) {
 				writeError(w, http.StatusBadGateway, err)
@@ -123,19 +116,6 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 			return
 		}
 		level, message := cameraMutationEvent("camera updated", probeErr)
-		controlCapabilities := existing.ControlCapabilities
-		if len(req.Profile.Channels) > 0 {
-			controlCapabilities = controlCapabilitiesFromProfile(req.Profile)
-		}
-		if err := d.db.UpdateCameraControlCapabilities(r.Context(), saved.StreamName, controlCapabilities); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		saved, err = d.db.GetCameraByStream(r.Context(), saved.StreamName)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
 		publicSaved := publicCameraFromStore(saved)
 
 		_ = d.db.AppendEvent(r.Context(), store.Event{
@@ -151,6 +131,10 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 				"error":   errString(probeErr),
 			},
 		})
+		if d.policyApplier != nil {
+			d.writePolicyApplyResponse(w, r, saved.StreamName, true)
+			return
+		}
 
 		cameras, err := d.db.ListCameras(r.Context(), true)
 		if err != nil {
@@ -207,6 +191,21 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 				"roles":  len(deleted.Streams),
 			},
 		})
+		if d.policyApplier != nil {
+			result := d.applyPolicies(r.Context())
+			cameras, listErr := d.db.ListCameras(r.Context(), false)
+			if listErr != nil {
+				writeSafeError(w, http.StatusInternalServerError, listErr)
+				return
+			}
+			code, warning := policyApplyHTTPStatus(result, cameras)
+			response := map[string]any{"saved": true, "applied": result.Applied, "camera": publicDeleted}
+			if warning != "" {
+				response["warning"] = warning
+			}
+			writeJSON(w, code, response)
+			return
+		}
 
 		cameras, err := d.db.ListCameras(r.Context(), true)
 		if err != nil {

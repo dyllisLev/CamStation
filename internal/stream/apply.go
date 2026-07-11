@@ -39,9 +39,10 @@ type ApplyCoordinator struct {
 }
 
 type PolicyApplyResult struct {
-	Applied bool   `json:"applied"`
-	Pending bool   `json:"pending"`
-	Error   string `json:"error,omitempty"`
+	Applied        bool   `json:"applied"`
+	Pending        bool   `json:"pending"`
+	RecoveryFailed bool   `json:"recoveryFailed,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 func NewApplyCoordinator(db policyStore, runtime policyRuntime, recorders recorderHandoff) *ApplyCoordinator {
@@ -68,9 +69,9 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 		active := c.recorders.SuspendActive()
 		runtimeTx, err := c.runtime.PrepareConfig(ctx, config)
 		if err != nil {
-			_ = c.recorders.RestoreActive(active)
+			restoreErr := c.recorders.RestoreActive(active)
 			c.markFailed(ctx, cameras, err)
-			return PolicyApplyResult{Pending: true, Error: err.Error()}
+			return PolicyApplyResult{Pending: true, RecoveryFailed: runtimeRecoveryFailed(err) || restoreErr != nil, Error: handoffError(err, nil, restoreErr).Error()}
 		}
 		now := time.Now().UTC()
 		snapshots := make([]store.CameraPolicyApplySnapshot, 0, len(cameras))
@@ -89,7 +90,7 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 			rollbackErr := runtimeTx.Rollback(ctx)
 			restoreErr := c.recorders.RestoreActive(active)
 			c.markFailed(ctx, cameras, err)
-			return PolicyApplyResult{Pending: true, Error: handoffError(err, rollbackErr, restoreErr).Error()}
+			return PolicyApplyResult{Pending: true, RecoveryFailed: rollbackErr != nil || restoreErr != nil, Error: handoffError(err, rollbackErr, restoreErr).Error()}
 		}
 		if len(snapshots) > 0 {
 			if err := c.db.MarkCameraPoliciesApplied(ctx, snapshots); err != nil {
@@ -97,7 +98,7 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 				rollbackErr := runtimeTx.Rollback(ctx)
 				restoreErr := c.recorders.RestoreActive(active)
 				c.markFailed(ctx, cameras, err)
-				return PolicyApplyResult{Pending: true, Error: handoffError(err, rollbackErr, restoreErr).Error()}
+				return PolicyApplyResult{Pending: true, RecoveryFailed: rollbackErr != nil || restoreErr != nil, Error: handoffError(err, rollbackErr, restoreErr).Error()}
 			}
 		}
 		commitErr := runtimeTx.Commit()
@@ -106,10 +107,12 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 			if commitErr != nil {
 				err = fmt.Errorf("%v; last-good commit failed: %w", err, commitErr)
 			}
-			return PolicyApplyResult{Applied: commitErr == nil || lastGoodInvariantPreserved(commitErr), Error: err.Error()}
+			applied := commitErr == nil || lastGoodInvariantPreserved(commitErr)
+			return PolicyApplyResult{Applied: applied, RecoveryFailed: !applied, Error: err.Error()}
 		}
 		if commitErr != nil {
-			return PolicyApplyResult{Applied: lastGoodInvariantPreserved(commitErr), Error: commitErr.Error()}
+			applied := lastGoodInvariantPreserved(commitErr)
+			return PolicyApplyResult{Applied: applied, RecoveryFailed: !applied, Error: commitErr.Error()}
 		}
 		if !newerRevisionExists(cameras, fresh) {
 			return PolicyApplyResult{Applied: true}
@@ -134,6 +137,7 @@ func camerasWithAppliedResults(cameras []store.Camera, results map[int64][]store
 		camera.PolicyState.AppliedRevision = camera.PolicyState.DesiredRevision
 		camera.PolicyState.ApplyState = store.CameraApplyApplied
 		camera.PolicyState.ApplyStateAt = appliedAt
+		camera.PolicyState.AppliedAt = appliedAt
 		camera.PolicyState.ApplyError = ""
 		applied[i] = camera
 	}
@@ -240,11 +244,11 @@ func (g *Go2RTC) prepareConfig(ctx context.Context, config []byte, restart func(
 		}
 		if restoreErr := writeFileAtomic(g.configPath, previous); restoreErr != nil {
 			g.applyMu.Unlock()
-			return nil, fmt.Errorf("apply failed: %v; restore config failed: %w", err, restoreErr)
+			return nil, &runtimeRecoveryError{err: fmt.Errorf("apply failed: %v; restore config failed: %w", err, restoreErr)}
 		}
 		if restoreErr := restart(ctx); restoreErr != nil {
 			g.applyMu.Unlock()
-			return nil, fmt.Errorf("apply failed: %v; restore process failed: %w", err, restoreErr)
+			return nil, &runtimeRecoveryError{err: fmt.Errorf("apply failed: %v; restore process failed: %w", err, restoreErr)}
 		}
 		g.applyMu.Unlock()
 		return nil, err
@@ -262,6 +266,16 @@ type go2RTCConfigTransaction struct {
 type lastGoodCommitError struct {
 	err           error
 	invariantSafe bool
+}
+
+type runtimeRecoveryError struct{ err error }
+
+func (e *runtimeRecoveryError) Error() string { return e.err.Error() }
+func (e *runtimeRecoveryError) Unwrap() error { return e.err }
+
+func runtimeRecoveryFailed(err error) bool {
+	var recoveryErr *runtimeRecoveryError
+	return errors.As(err, &recoveryErr)
 }
 
 func (e *lastGoodCommitError) Error() string { return e.err.Error() }

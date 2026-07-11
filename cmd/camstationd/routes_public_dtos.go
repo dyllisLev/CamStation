@@ -9,13 +9,12 @@ import (
 )
 
 type publicCamera struct {
-	ID                  int64                           `json:"id"`
 	Name                string                          `json:"name"`
-	RedactedURL         string                          `json:"redactedUrl"`
 	StreamName          string                          `json:"streamName"`
 	LayoutKey           string                          `json:"layoutKey,omitempty"`
 	RecordingStreamName string                          `json:"recordingStreamName,omitempty"`
 	LiveStreamName      string                          `json:"liveStreamName,omitempty"`
+	FocusStreamName     string                          `json:"focusStreamName,omitempty"`
 	State               string                          `json:"state"`
 	ProfileTemplateID   *int64                          `json:"profileTemplateId,omitempty"`
 	Manufacturer        string                          `json:"manufacturer,omitempty"`
@@ -30,67 +29,157 @@ type publicCamera struct {
 	LastScanJSON        map[string]any                  `json:"lastScan,omitempty"`
 	ControlCapabilities store.CameraControlCapabilities `json:"controlCapabilities"`
 	Streams             []publicCameraStream            `json:"streams,omitempty"`
+	StreamOutputs       []publicCameraStreamOutput      `json:"streamOutputs"`
+	StreamApplyState    publicCameraStreamApplyState    `json:"streamApplyState"`
 	CreatedAt           time.Time                       `json:"createdAt"`
 	UpdatedAt           time.Time                       `json:"updatedAt"`
 }
 
 type publicCameraStream struct {
-	ID               int64                  `json:"id"`
-	CameraID         int64                  `json:"camera_id"`
-	Role             store.CameraStreamRole `json:"role"`
-	Label            string                 `json:"label"`
-	Source           string                 `json:"source"`
-	RedactedURL      string                 `json:"redactedUrl"`
-	Go2RTCStreamName string                 `json:"go2rtcStreamName"`
-	Codec            string                 `json:"codec,omitempty"`
-	Width            int                    `json:"width,omitempty"`
-	Height           int                    `json:"height,omitempty"`
-	FPS              float64                `json:"fps,omitempty"`
-	BitrateKbps      int                    `json:"bitrateKbps,omitempty"`
-	ProfileToken     string                 `json:"profileToken,omitempty"`
-	State            string                 `json:"state,omitempty"`
-	CreatedAt        time.Time              `json:"createdAt,omitempty"`
-	UpdatedAt        time.Time              `json:"updatedAt,omitempty"`
+	SourceKey  string                 `json:"sourceKey"`
+	Role       store.CameraStreamRole `json:"role"`
+	Label      string                 `json:"label"`
+	Advertised *publicMediaDescriptor `json:"advertised"`
+	Detected   *publicMediaDescriptor `json:"detected"`
+	CheckedAt  string                 `json:"checkedAt,omitempty"`
+	Error      string                 `json:"error,omitempty"`
 }
 
-func publicCameras(cameras []store.Camera) []publicCamera {
+type publicMediaDescriptor struct {
+	VideoCodec  string  `json:"videoCodec,omitempty"`
+	AudioCodec  string  `json:"audioCodec,omitempty"`
+	Profile     string  `json:"profile,omitempty"`
+	Level       string  `json:"level,omitempty"`
+	PixelFormat string  `json:"pixelFormat,omitempty"`
+	BitDepth    int     `json:"bitDepth,omitempty"`
+	Width       int     `json:"width,omitempty"`
+	Height      int     `json:"height,omitempty"`
+	FPS         float64 `json:"fps,omitempty"`
+}
+
+type publicEffectiveDescriptor struct {
+	VideoCodec  string  `json:"videoCodec,omitempty"`
+	AudioCodec  string  `json:"audioCodec,omitempty"`
+	Width       int     `json:"width,omitempty"`
+	Height      int     `json:"height,omitempty"`
+	FPS         float64 `json:"fps,omitempty"`
+	Transcoding bool    `json:"transcoding"`
+}
+
+type publicStreamOutputSettings struct {
+	Purpose    store.CameraOutputPurpose `json:"purpose"`
+	SourceKey  string                    `json:"sourceKey"`
+	VideoMode  store.CameraVideoMode     `json:"videoMode"`
+	MaxWidth   *int                      `json:"maxWidth"`
+	MaxHeight  *int                      `json:"maxHeight"`
+	MaxFPS     *float64                  `json:"maxFps"`
+	AudioMode  store.CameraAudioMode     `json:"audioMode"`
+	Activation store.CameraActivation    `json:"activation"`
+}
+
+type publicStreamOutputSource struct {
+	Label      string                 `json:"label"`
+	Advertised *publicMediaDescriptor `json:"advertised"`
+	Detected   *publicMediaDescriptor `json:"detected"`
+	CheckedAt  string                 `json:"checkedAt,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+}
+
+type publicStreamOutputVerification struct {
+	State     string `json:"state"`
+	CheckedAt string `json:"checkedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type publicStreamOutputRuntime struct {
+	State         string `json:"state"`
+	ProducerCount int    `json:"producerCount"`
+	ConsumerCount int    `json:"consumerCount"`
+	ViewerCount   int    `json:"viewerCount"`
+}
+
+type publicCameraStreamOutput struct {
+	Purpose      store.CameraOutputPurpose      `json:"purpose"`
+	SourceKey    string                         `json:"sourceKey"`
+	StreamName   string                         `json:"streamName"`
+	Desired      publicStreamOutputSettings     `json:"desired"`
+	Applied      *publicStreamOutputSettings    `json:"applied"`
+	Source       publicStreamOutputSource       `json:"source"`
+	Effective    *publicEffectiveDescriptor     `json:"effective"`
+	Verification publicStreamOutputVerification `json:"verification"`
+	Runtime      publicStreamOutputRuntime      `json:"runtime"`
+}
+
+type publicCameraStreamApplyState struct {
+	DesiredRevision int64                  `json:"desiredRevision"`
+	AppliedRevision int64                  `json:"appliedRevision"`
+	State           store.CameraApplyState `json:"state"`
+	AppliedAt       string                 `json:"appliedAt,omitempty"`
+	Error           string                 `json:"error,omitempty"`
+}
+
+func publicCameras(cameras []store.Camera, statuses ...stream.Status) []publicCamera {
 	out := make([]publicCamera, 0, len(cameras))
 	for _, camera := range cameras {
-		out = append(out, publicCameraFromStore(camera))
+		out = append(out, publicCameraFromStore(camera, statuses...))
 	}
 	return out
 }
 
-func publicCameraFromStore(camera store.Camera) publicCamera {
+func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publicCamera {
 	streams := make([]publicCameraStream, 0, len(camera.Streams))
-	for _, stream := range camera.Streams {
+	bySourceKey := make(map[string]store.CameraStream, len(camera.Streams))
+	for _, input := range camera.Streams {
+		bySourceKey[input.SourceKey] = input
 		streams = append(streams, publicCameraStream{
-			ID:               stream.ID,
-			CameraID:         stream.CameraID,
-			Role:             stream.Role,
-			Label:            stream.Label,
-			Source:           stream.Source,
-			RedactedURL:      stream.RedactedURL,
-			Go2RTCStreamName: stream.Go2RTCStreamName,
-			Codec:            stream.Codec,
-			Width:            stream.Width,
-			Height:           stream.Height,
-			FPS:              stream.FPS,
-			BitrateKbps:      stream.BitrateKbps,
-			ProfileToken:     stream.ProfileToken,
-			State:            stream.State,
-			CreatedAt:        stream.CreatedAt,
-			UpdatedAt:        stream.UpdatedAt,
+			SourceKey: input.SourceKey, Role: input.Role, Label: input.Label,
+			Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input),
+			CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: store.RedactText(input.DetectedError),
 		})
 	}
+	var status stream.Status
+	if len(statuses) > 0 {
+		status = statuses[0]
+	}
+	outputs := make([]publicCameraStreamOutput, 0, len(camera.Outputs))
+	for _, output := range camera.Outputs {
+		input := bySourceKey[output.SourceKey]
+		desired := publicSettings(output.Purpose, output.SourceKey, output.VideoMode, output.MaxWidth, output.MaxHeight, output.MaxFPS, output.AudioMode, output.Activation)
+		var applied *publicStreamOutputSettings
+		if camera.PolicyState.AppliedRevision > 0 && output.AppliedPolicy.SourceKey != "" {
+			value := publicSettings(output.Purpose, output.AppliedPolicy.SourceKey, output.AppliedPolicy.VideoMode, output.AppliedPolicy.MaxWidth, output.AppliedPolicy.MaxHeight, output.AppliedPolicy.MaxFPS, output.AppliedPolicy.AudioMode, output.AppliedPolicy.Activation)
+			applied = &value
+		}
+		verificationState := "unverified"
+		if output.Verification.Error != "" {
+			verificationState = "degraded"
+		} else if !output.Verification.CheckedAt.IsZero() {
+			verificationState = "healthy"
+		}
+		var effective *publicEffectiveDescriptor
+		if output.Verification.VideoCodec != "" || output.Verification.AudioCodec != "" || output.Verification.Width > 0 {
+			effective = &publicEffectiveDescriptor{VideoCodec: output.Verification.VideoCodec, AudioCodec: output.Verification.AudioCodec, Width: output.Verification.Width, Height: output.Verification.Height, FPS: output.Verification.FPS, Transcoding: output.Verification.Transcoding}
+		}
+		runtime := status.Streams[output.StreamName]
+		outputs = append(outputs, publicCameraStreamOutput{
+			Purpose: output.Purpose, SourceKey: output.SourceKey, StreamName: output.StreamName, Desired: desired, Applied: applied,
+			Source:       publicStreamOutputSource{Label: input.Label, Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input), CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: store.RedactText(input.DetectedError)},
+			Effective:    effective,
+			Verification: publicStreamOutputVerification{State: verificationState, CheckedAt: formatPublicTime(output.Verification.CheckedAt), Error: store.RedactText(output.Verification.Error)},
+			Runtime:      publicStreamOutputRuntime{State: defaultRuntimeState(runtime.State), ProducerCount: runtime.ProducerCount, ConsumerCount: runtime.ConsumerCount, ViewerCount: runtime.ViewerCount},
+		})
+	}
+	applyState := publicCameraStreamApplyState{DesiredRevision: camera.PolicyState.DesiredRevision, AppliedRevision: camera.PolicyState.AppliedRevision, State: camera.PolicyState.ApplyState, Error: store.RedactText(camera.PolicyState.ApplyError)}
+	if camera.PolicyState.AppliedRevision > 0 {
+		applyState.AppliedAt = formatPublicTime(camera.PolicyState.AppliedAt)
+	}
 	return publicCamera{
-		ID:                  camera.ID,
 		Name:                camera.Name,
-		RedactedURL:         camera.RedactedURL,
 		StreamName:          camera.StreamName,
 		LayoutKey:           camera.LayoutKey,
 		RecordingStreamName: camera.RecordingStreamName,
 		LiveStreamName:      camera.LiveStreamName,
+		FocusStreamName:     camera.FocusStreamName,
 		State:               camera.State,
 		ProfileTemplateID:   camera.ProfileTemplateID,
 		Manufacturer:        camera.Manufacturer,
@@ -105,9 +194,43 @@ func publicCameraFromStore(camera store.Camera) publicCamera {
 		LastScanJSON:        publicJSONMap(camera.LastScanJSON),
 		ControlCapabilities: camera.ControlCapabilities,
 		Streams:             streams,
+		StreamOutputs:       outputs,
+		StreamApplyState:    applyState,
 		CreatedAt:           camera.CreatedAt,
 		UpdatedAt:           camera.UpdatedAt,
 	}
+}
+
+func publicSettings(purpose store.CameraOutputPurpose, sourceKey string, video store.CameraVideoMode, maxWidth, maxHeight *int, maxFPS *float64, audio store.CameraAudioMode, activation store.CameraActivation) publicStreamOutputSettings {
+	return publicStreamOutputSettings{Purpose: purpose, SourceKey: sourceKey, VideoMode: video, MaxWidth: maxWidth, MaxHeight: maxHeight, MaxFPS: maxFPS, AudioMode: audio, Activation: activation}
+}
+
+func advertisedDescriptor(input store.CameraStream) *publicMediaDescriptor {
+	if input.Codec == "" && input.Width == 0 && input.Height == 0 && input.FPS == 0 {
+		return nil
+	}
+	return &publicMediaDescriptor{VideoCodec: input.Codec, Width: input.Width, Height: input.Height, FPS: input.FPS}
+}
+
+func detectedDescriptor(input store.CameraStream) *publicMediaDescriptor {
+	if input.DetectedVideoCodec == "" && input.DetectedAudioCodec == "" && input.DetectedWidth == 0 && input.DetectedHeight == 0 {
+		return nil
+	}
+	return &publicMediaDescriptor{VideoCodec: input.DetectedVideoCodec, AudioCodec: input.DetectedAudioCodec, Profile: input.DetectedProfile, Level: input.DetectedLevel, PixelFormat: input.DetectedPixelFormat, BitDepth: input.DetectedBitDepth, Width: input.DetectedWidth, Height: input.DetectedHeight, FPS: input.DetectedFPS}
+}
+
+func formatPublicTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func defaultRuntimeState(value string) string {
+	if value == "" {
+		return "idle"
+	}
+	return value
 }
 
 func publicJSONMap(input map[string]any) map[string]any {

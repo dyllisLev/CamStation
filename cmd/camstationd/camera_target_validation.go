@@ -49,6 +49,20 @@ func validateProbeTarget(ctx context.Context, rawURL string) error {
 	return nil
 }
 
+func validateStoredProbeTarget(ctx context.Context, rawURL string) error {
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil || !isAllowedCameraScheme(parsed.Scheme) || parsed.Hostname() == "" {
+		return errUnsafeCameraTarget
+	}
+	if err := validateCameraHost(ctx, parsed.Hostname()); err != nil {
+		return err
+	}
+	if port := defaultPort(parsed); port != 0 && !isAllowedCameraPort(port) {
+		return errUnsafeCameraTarget
+	}
+	return nil
+}
+
 func scanTarget(req cameraprofile.ScanRequest) (cameraTarget, error) {
 	target := cameraTarget{host: strings.TrimSpace(req.Host)}
 	if req.URL == "" {

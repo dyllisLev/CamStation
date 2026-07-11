@@ -377,6 +377,59 @@ func TestReplaceCameraStreamsAdvancesRevisionOnlyForGraphChanges(t *testing.T) {
 	}
 }
 
+func TestUpdateCameraStreamDetectionsCannotOverwriteConcurrentSourceEdit(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "detection-race")
+	stale := append([]CameraStream(nil), camera.Streams...)
+	camera.Streams[0].URL = "rtsp://u:p@host/new"
+	if err := db.ReplaceCameraStreams(t.Context(), camera.ID, camera.Streams); err != nil {
+		t.Fatal(err)
+	}
+	stale[0].DetectedVideoCodec = "stale-hevc"
+	stale[0].DetectedCheckedAt = time.Now().UTC()
+	if err := db.UpdateCameraStreamDetections(t.Context(), camera.ID, stale); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	if got.Streams[0].URL != camera.Streams[0].URL || got.Streams[0].DetectedVideoCodec == "stale-hevc" {
+		t.Fatalf("stale detection overwrote concurrent source: %#v", got.Streams[0])
+	}
+	if got.PolicyState.DesiredRevision != camera.PolicyState.DesiredRevision+1 {
+		t.Fatalf("detection update changed desired revision: %#v", got.PolicyState)
+	}
+}
+
+func TestUpdateCameraOutputVerificationsDiscardsStaleAppliedRevision(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "verification-race")
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	oldRevision := camera.PolicyState.DesiredRevision
+	camera = mustGetCamera(t, db, camera.StreamName)
+	camera.Outputs[1].VideoMode = CameraVideoH264
+	newer, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(oldRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), newer.ID, newer.PolicyState.DesiredRevision, applyResults(newer)); err != nil {
+		t.Fatal(err)
+	}
+	stale := map[CameraOutputPurpose]CameraOutputVerification{}
+	for _, purpose := range []CameraOutputPurpose{CameraOutputRecording, CameraOutputLive, CameraOutputFocus} {
+		stale[purpose] = CameraOutputVerification{VideoCodec: "stale-codec", CheckedAt: time.Now().UTC()}
+	}
+	if err := db.UpdateCameraOutputVerifications(t.Context(), camera.ID, oldRevision, stale); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	for _, output := range got.Outputs {
+		if output.Verification.VideoCodec == "stale-codec" {
+			t.Fatalf("stale verification overwrote revision %d: %#v", got.PolicyState.AppliedRevision, output)
+		}
+	}
+}
+
 func TestCoordinatorResultsRespectNewerDesiredRevision(t *testing.T) {
 	db := openMigratedStore(t)
 	camera := mustCamera(t, db, "coordinator-race")

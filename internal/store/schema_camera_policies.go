@@ -72,6 +72,7 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 			applied_revision INTEGER NOT NULL DEFAULT 0,
 			apply_state TEXT NOT NULL DEFAULT 'pending' CHECK (apply_state IN ('applied','pending','apply_failed')),
 			apply_state_at TEXT NOT NULL,
+			applied_at TEXT,
 			apply_error TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
 		)`,
@@ -82,6 +83,9 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 		}
 	}
 	if err := d.addColumnIfMissing(ctx, "camera_outputs", "verified_transcoding", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfMissing(ctx, "camera_policy_states", "applied_at", "TEXT"); err != nil {
 		return err
 	}
 	if _, err := d.db.ExecContext(ctx, `UPDATE camera_outputs SET applied_policy_json=json_set(

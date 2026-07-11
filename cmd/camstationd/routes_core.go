@@ -25,8 +25,9 @@ func (d routeDeps) registerCoreRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		annotateCameraRuntimeStatus(cameras, d.streamer.Status(r.Context()))
-		writeJSON(w, http.StatusOK, publicCameras(cameras))
+		status := d.streamer.Status(r.Context())
+		annotateCameraRuntimeStatus(cameras, status)
+		writeJSON(w, http.StatusOK, publicCameras(cameras, status))
 	})
 
 	mux.HandleFunc("GET /api/layouts", func(w http.ResponseWriter, r *http.Request) {

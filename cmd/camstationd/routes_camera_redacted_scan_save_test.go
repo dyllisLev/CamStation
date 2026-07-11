@@ -68,3 +68,58 @@ func TestCameraProfileCreate_savesTemplateSelectionFromRedactedScanResponse(t *t
 		t.Fatalf("stored URLs = %q/%q, want template paths", stored.Streams[0].URL, stored.Streams[1].URL)
 	}
 }
+
+func TestCameraProfileCreate_rescansManualSelectionFromRedactedScanResponse(t *testing.T) {
+	t.Parallel()
+
+	server := newCameraMutationRouteServer(t, &fakeRouteCameraProber{})
+	withRouteScanner(t, func() (cameraprofile.DeviceScanResult, error) {
+		recordingURL := routeSyntheticRTSPURL("manual-redacted-main")
+		return routeDeviceScanResult(recordingURL, strings.Replace(recordingURL, "av0_0", "av0_1", 1)), nil
+	})
+	scanStatus, scanPayload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/scan", `{"host":"192.168.1.10","rtspPort":554,"httpPort":80,"onvifPort":80}`, trustedConsoleHeaders())
+	if scanStatus != http.StatusOK {
+		t.Fatalf("scan status = %d, want %d; body=%#v", scanStatus, http.StatusOK, scanPayload)
+	}
+	scanObject := requirePayloadObject(t, scanPayload, "scan")
+	if countJSONKey(scanObject, "url") != 0 || countJSONKey(scanObject, "redactedUrl") == 0 {
+		t.Fatalf("scan response should expose only redacted candidate URLs before save flow: %s", mustMarshalString(t, scanObject))
+	}
+	body := map[string]any{
+		"name":         "Manual Redacted Save",
+		"streamName":   "manual-redacted-save",
+		"host":         "192.168.1.10",
+		"rtspPort":     554,
+		"httpPort":     80,
+		"onvifPort":    80,
+		"profile":      scanObject,
+		"channelIndex": 0,
+		"streamSelections": []map[string]any{
+			{"role": "recording", "profileToken": "PROFILE_000"},
+			{"role": "live", "profileToken": "PROFILE_001"},
+		},
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal redacted scan save body: %v", err)
+	}
+
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", string(bodyBytes), trustedConsoleHeaders())
+
+	if status != http.StatusOK {
+		t.Fatalf("POST /api/cameras status = %d, want %d; body=%#v", status, http.StatusOK, payload)
+	}
+	stored, err := server.db.GetCameraByStream(t.Context(), "manual-redacted-save")
+	if err != nil {
+		t.Fatalf("read stored camera: %v", err)
+	}
+	if len(stored.Streams) != 2 {
+		t.Fatalf("stored streams = %d, want 2: %#v", len(stored.Streams), stored.Streams)
+	}
+	if stored.Streams[0].URL == "" || stored.Streams[1].URL == "" {
+		t.Fatalf("manual selection from redacted scan did not recover stream URLs: %#v", stored.Streams)
+	}
+	if !strings.Contains(stored.Streams[0].URL, "/tcp/av0_0") || !strings.Contains(stored.Streams[1].URL, "/tcp/av0_1") {
+		t.Fatalf("stored URLs = %q/%q, want scanned paths", stored.Streams[0].URL, stored.Streams[1].URL)
+	}
+}

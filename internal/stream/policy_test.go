@@ -293,6 +293,25 @@ func TestStartupPendingPolicyUsesLastGoodConfigInsteadOfNewDesiredInput(t *testi
 	}
 }
 
+func TestStartupFailedFirstApplyAndMixedPendingCameraFailClosed(t *testing.T) {
+	path := t.TempDir() + "/go2rtc.yaml"
+	if err := os.WriteFile(path+".last-good", []byte("verified-config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := NewGo2RTC(path)
+	failed := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}
+	config, preserve, err := g.startupConfig([]store.Camera{failed})
+	if err != nil || !preserve || string(config) != "verified-config\n" {
+		t.Fatalf("failed first apply startup = %q preserve=%v err=%v", config, preserve, err)
+	}
+	existing := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 3, AppliedRevision: 3, ApplyState: store.CameraApplyApplied}}
+	newPending := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
+	config, preserve, err = g.startupConfig([]store.Camera{existing, newPending})
+	if err != nil || !preserve || string(config) != "verified-config\n" {
+		t.Fatalf("mixed pending startup = %q preserve=%v err=%v", config, preserve, err)
+	}
+}
+
 func policyFixture(codec, pixelFormat string, bitDepth, width, height int, fps float64) (store.Camera, store.CameraOutput) {
 	stream := store.CameraStream{
 		ID: 10, CameraID: 1, SourceKey: "recording", URL: "rtsp://user:pass@192.0.2.1/main",

@@ -129,6 +129,39 @@ func TestApplyCoordinatorRollsBackRuntimeDBAndRecordersWhenBulkCommitFails(t *te
 	}
 }
 
+func TestApplyCoordinatorReportsRecoveryFailureWhenRuntimeRollbackFails(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 4, AppliedRevision: 3}
+	db := &fakePolicyStore{camera: camera, bulkErr: errors.New("bulk DB commit failed")}
+	runtime := &fakePolicyRuntime{rollbackErr: errors.New("rollback restart failed")}
+	recorder := &fakeRecorderHandoff{active: []store.Camera{{ID: 1, PolicyState: store.CameraPolicyState{AppliedRevision: 3}}}}
+
+	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
+	if !result.RecoveryFailed || !strings.Contains(result.Error, "rollback restart failed") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPrepareConfigMarksFailedPreviousProcessRestoreAsRecoveryFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go2rtc.yaml")
+	if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := NewGo2RTC(path)
+	restarts := 0
+	_, err := g.prepareConfig(t.Context(), []byte("new\n"), func(context.Context) error {
+		restarts++
+		if restarts == 1 {
+			return errors.New("new process failed")
+		}
+		return errors.New("old process restore failed")
+	})
+	if err == nil || !runtimeRecoveryFailed(err) {
+		t.Fatalf("prepare error = %v", err)
+	}
+}
+
 func TestApplyCoordinatorRestoresFreshRecordersWhenLastGoodCommitFails(t *testing.T) {
 	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
 	camera.Outputs = threeOutputs(output)
@@ -319,11 +352,12 @@ func (f *fakePolicyStore) MarkCameraPolicyFailed(_ context.Context, _ int64, rev
 }
 
 type fakePolicyRuntime struct {
-	configs   [][]byte
-	err       error
-	commits   int
-	rollbacks int
-	commitErr error
+	configs     [][]byte
+	err         error
+	commits     int
+	rollbacks   int
+	commitErr   error
+	rollbackErr error
 }
 
 func (f *fakePolicyRuntime) PrepareConfig(_ context.Context, config []byte) (runtimeConfigTransaction, error) {
@@ -343,7 +377,7 @@ func (f *fakeRuntimeTransaction) Commit() error {
 
 func (f *fakeRuntimeTransaction) Rollback(context.Context) error {
 	f.runtime.rollbacks++
-	return nil
+	return f.runtime.rollbackErr
 }
 
 type fakeRecorderHandoff struct {

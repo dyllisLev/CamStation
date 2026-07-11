@@ -15,6 +15,15 @@ func hasProfileCandidates(profile cameraprofile.DeviceProfile) bool {
 	return len(profileCandidates(profile)) > 0
 }
 
+func hasProfileCandidateURLs(profile cameraprofile.DeviceProfile) bool {
+	for _, candidate := range profileCandidates(profile) {
+		if candidate.URL != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func profileCandidates(profile cameraprofile.DeviceProfile) []cameraprofile.StreamCandidate {
 	var candidates []cameraprofile.StreamCandidate
 	for _, channel := range profile.Channels {
@@ -100,6 +109,7 @@ func toStoreStreams(base string, candidates []cameraprofile.StreamCandidate, sta
 		}
 		streams = append(streams, store.CameraStream{
 			Role:             role,
+			SourceKey:        string(role),
 			Label:            candidate.Label,
 			Source:           candidate.Source,
 			URL:              candidate.URL,

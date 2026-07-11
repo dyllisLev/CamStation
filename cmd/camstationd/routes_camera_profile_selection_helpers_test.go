@@ -26,13 +26,24 @@ func withRouteScanner(t *testing.T, scan func() (cameraprofile.DeviceScanResult,
 	t.Helper()
 
 	previous := newRouteDeviceScanner
+	previousProfileScanner := newCameraProfileScanner
 	newRouteDeviceScanner = func() routeDeviceScanner {
 		return routeDeviceScannerFunc(func(context.Context, cameraprofile.ScanRequest) (cameraprofile.DeviceScanResult, error) {
 			return scan()
 		})
 	}
+	newCameraProfileScanner = func() cameraProfileScanner {
+		return cameraProfileScannerFunc(func(_ context.Context, req cameraprofile.ScanRequest) (cameraprofile.DeviceProfile, error) {
+			result, err := scan()
+			if err != nil {
+				return cameraprofile.DeviceProfile{}, err
+			}
+			return result.DeviceProfile(req.Name), nil
+		})
+	}
 	t.Cleanup(func() {
 		newRouteDeviceScanner = previous
+		newCameraProfileScanner = previousProfileScanner
 	})
 }
 
@@ -212,5 +223,11 @@ func requestJSONArrayWithHeaders(t *testing.T, handler http.Handler, method stri
 type routeDeviceScannerFunc func(ctx context.Context, req cameraprofile.ScanRequest) (cameraprofile.DeviceScanResult, error)
 
 func (f routeDeviceScannerFunc) ScanResult(ctx context.Context, req cameraprofile.ScanRequest) (cameraprofile.DeviceScanResult, error) {
+	return f(ctx, req)
+}
+
+type cameraProfileScannerFunc func(ctx context.Context, req cameraprofile.ScanRequest) (cameraprofile.DeviceProfile, error)
+
+func (f cameraProfileScannerFunc) Scan(ctx context.Context, req cameraprofile.ScanRequest) (cameraprofile.DeviceProfile, error) {
 	return f(ctx, req)
 }

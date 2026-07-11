@@ -42,6 +42,31 @@ func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams [
 	return tx.Commit()
 }
 
+func (d *DB) UpdateCameraStreamDetections(ctx context.Context, cameraID int64, streams []CameraStream) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, stream := range streams {
+		if stream.SourceKey == "" || stream.URL == "" {
+			return fmt.Errorf("camera detection source key and probed URL are required")
+		}
+		var checkedAt any
+		if !stream.DetectedCheckedAt.IsZero() {
+			checkedAt = stream.DetectedCheckedAt.Format(time.RFC3339Nano)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE camera_streams SET detected_video_codec=?,detected_audio_codec=?,detected_profile=?,detected_level=?,detected_pixel_format=?,detected_bit_depth=?,detected_width=?,detected_height=?,detected_fps=?,detected_checked_at=?,detected_error=?,updated_at=? WHERE camera_id=? AND source_key=? AND url=?`,
+			stream.DetectedVideoCodec, stream.DetectedAudioCodec, stream.DetectedProfile, stream.DetectedLevel,
+			stream.DetectedPixelFormat, stream.DetectedBitDepth, stream.DetectedWidth, stream.DetectedHeight, stream.DetectedFPS,
+			checkedAt, redactString(stream.DetectedError), now, cameraID, stream.SourceKey, stream.URL); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func cameraInputGraphSignatureTx(ctx context.Context, tx *sql.Tx, cameraID int64) (string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT source_key,role,source,url,go2rtc_stream_name FROM camera_streams WHERE camera_id=? ORDER BY source_key`, cameraID)
 	if err != nil {

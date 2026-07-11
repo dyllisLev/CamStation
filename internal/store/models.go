@@ -217,6 +217,7 @@ type CameraPolicyState struct {
 	AppliedRevision int64            `json:"appliedRevision"`
 	ApplyState      CameraApplyState `json:"applyState"`
 	ApplyStateAt    time.Time        `json:"applyStateAt"`
+	AppliedAt       time.Time        `json:"appliedAt,omitempty"`
 	ApplyError      string           `json:"applyError,omitempty"`
 }
 
