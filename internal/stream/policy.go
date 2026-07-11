@@ -147,23 +147,37 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 	buf.WriteString("ffmpeg:\n")
 	buf.WriteString("  h264: \"-codec:v libx264 -preset:v veryfast -tune:v zerolatency -pix_fmt:v yuv420p -g 20 -keyint_min 20 -sc_threshold 0\"\n")
 	preload := false
+	preloaded := make(map[string]bool)
+	writePreload := func(name, tracks string) {
+		if preloaded[name] {
+			return
+		}
+		if !preload {
+			buf.WriteString("preload:\n")
+			preload = true
+		}
+		fmt.Fprintf(&buf, "  %s: %s\n", quoteYAML(name), quoteYAML(tracks))
+		preloaded[name] = true
+	}
 	for _, camera := range cameras {
 		for i, output := range camera.Outputs {
 			if applied && output.AppliedPolicy.SourceKey != "" {
 				output = outputFromSnapshot(output, output.AppliedPolicy)
 			}
-			if output.Activation != store.CameraActivationAlways || i >= len(resolved[camera.ID]) {
+			if i >= len(resolved[camera.ID]) {
 				continue
 			}
-			if !preload {
-				buf.WriteString("preload:\n")
-				preload = true
+			if output.Purpose == store.CameraOutputLive {
+				writePreload(resolved[camera.ID][i].SourceName, "video&audio")
+			}
+			if output.Activation != store.CameraActivationAlways {
+				continue
 			}
 			tracks := "video&audio"
 			if output.AudioMode == store.CameraAudioNone {
 				tracks = "video"
 			}
-			fmt.Fprintf(&buf, "  %s: %s\n", quoteYAML(output.StreamName), quoteYAML(tracks))
+			writePreload(output.StreamName, tracks)
 		}
 	}
 	buf.WriteString("streams:\n")

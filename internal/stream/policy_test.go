@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -151,6 +152,34 @@ func TestRenderPolicyConfigKeepsSourcesPrivateEscapesYAMLAndPreloadsAlways(t *te
 	}
 	if !strings.Contains(text, "\"public-focus\":\n") {
 		t.Fatalf("output key is not safely quoted: %s", text)
+	}
+}
+
+func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
+	camera, live := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	live.Purpose = store.CameraOutputLive
+	live.StreamName = "camera-live"
+	recording := live
+	recording.Purpose = store.CameraOutputRecording
+	recording.StreamName = "camera-recording"
+	focus := live
+	focus.Purpose = store.CameraOutputFocus
+	focus.StreamName = "camera-focus"
+	camera.Outputs = []store.CameraOutput{recording, live, focus}
+
+	config, _, err := renderPolicyConfig([]store.Camera{camera}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	entry := fmt.Sprintf("  %q: %q", PrivateSourceName(camera.ID, camera.Streams[0].ID), "video&audio")
+	if strings.Count(text, entry) != 1 {
+		t.Fatalf("private live preload count = %d, want 1: %s", strings.Count(text, entry), text)
+	}
+	for _, publicName := range []string{recording.StreamName, live.StreamName, focus.StreamName} {
+		if strings.Contains(text, fmt.Sprintf("  %q: %q", publicName, "video&audio")) {
+			t.Fatalf("on-demand public output %q was preloaded: %s", publicName, text)
+		}
 	}
 }
 
