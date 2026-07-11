@@ -34,6 +34,17 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 			return
 		}
 		level, message := cameraMutationEvent("camera registered", probeErr)
+		if len(req.Profile.Channels) > 0 {
+			if err := d.db.UpdateCameraControlCapabilities(r.Context(), saved.StreamName, controlCapabilitiesFromProfile(req.Profile)); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			saved, err = d.db.GetCameraByStream(r.Context(), saved.StreamName)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
 		publicSaved := publicCameraFromStore(saved)
 
 		_ = d.db.AppendEvent(r.Context(), store.Event{
@@ -112,6 +123,19 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 			return
 		}
 		level, message := cameraMutationEvent("camera updated", probeErr)
+		controlCapabilities := existing.ControlCapabilities
+		if len(req.Profile.Channels) > 0 {
+			controlCapabilities = controlCapabilitiesFromProfile(req.Profile)
+		}
+		if err := d.db.UpdateCameraControlCapabilities(r.Context(), saved.StreamName, controlCapabilities); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		saved, err = d.db.GetCameraByStream(r.Context(), saved.StreamName)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		publicSaved := publicCameraFromStore(saved)
 
 		_ = d.db.AppendEvent(r.Context(), store.Event{

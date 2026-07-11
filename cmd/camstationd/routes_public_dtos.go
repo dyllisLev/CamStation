@@ -9,28 +9,29 @@ import (
 )
 
 type publicCamera struct {
-	ID                  int64                `json:"id"`
-	Name                string               `json:"name"`
-	RedactedURL         string               `json:"redactedUrl"`
-	StreamName          string               `json:"streamName"`
-	LayoutKey           string               `json:"layoutKey,omitempty"`
-	RecordingStreamName string               `json:"recordingStreamName,omitempty"`
-	LiveStreamName      string               `json:"liveStreamName,omitempty"`
-	State               string               `json:"state"`
-	ProfileTemplateID   *int64               `json:"profileTemplateId,omitempty"`
-	Manufacturer        string               `json:"manufacturer,omitempty"`
-	Model               string               `json:"model,omitempty"`
-	ProfileAdapter      string               `json:"profileAdapter,omitempty"`
-	Host                string               `json:"host,omitempty"`
-	RTSPPort            int                  `json:"rtspPort,omitempty"`
-	HTTPPort            int                  `json:"httpPort,omitempty"`
-	ONVIFPort           int                  `json:"onvifPort,omitempty"`
-	ChannelIndex        *int                 `json:"channelIndex,omitempty"`
-	LastProbeJSON       map[string]any       `json:"lastProbe,omitempty"`
-	LastScanJSON        map[string]any       `json:"lastScan,omitempty"`
-	Streams             []publicCameraStream `json:"streams,omitempty"`
-	CreatedAt           time.Time            `json:"createdAt"`
-	UpdatedAt           time.Time            `json:"updatedAt"`
+	ID                  int64                           `json:"id"`
+	Name                string                          `json:"name"`
+	RedactedURL         string                          `json:"redactedUrl"`
+	StreamName          string                          `json:"streamName"`
+	LayoutKey           string                          `json:"layoutKey,omitempty"`
+	RecordingStreamName string                          `json:"recordingStreamName,omitempty"`
+	LiveStreamName      string                          `json:"liveStreamName,omitempty"`
+	State               string                          `json:"state"`
+	ProfileTemplateID   *int64                          `json:"profileTemplateId,omitempty"`
+	Manufacturer        string                          `json:"manufacturer,omitempty"`
+	Model               string                          `json:"model,omitempty"`
+	ProfileAdapter      string                          `json:"profileAdapter,omitempty"`
+	Host                string                          `json:"host,omitempty"`
+	RTSPPort            int                             `json:"rtspPort,omitempty"`
+	HTTPPort            int                             `json:"httpPort,omitempty"`
+	ONVIFPort           int                             `json:"onvifPort,omitempty"`
+	ChannelIndex        *int                            `json:"channelIndex,omitempty"`
+	LastProbeJSON       map[string]any                  `json:"lastProbe,omitempty"`
+	LastScanJSON        map[string]any                  `json:"lastScan,omitempty"`
+	ControlCapabilities store.CameraControlCapabilities `json:"controlCapabilities"`
+	Streams             []publicCameraStream            `json:"streams,omitempty"`
+	CreatedAt           time.Time                       `json:"createdAt"`
+	UpdatedAt           time.Time                       `json:"updatedAt"`
 }
 
 type publicCameraStream struct {
@@ -102,6 +103,7 @@ func publicCameraFromStore(camera store.Camera) publicCamera {
 		ChannelIndex:        camera.ChannelIndex,
 		LastProbeJSON:       publicJSONMap(camera.LastProbeJSON),
 		LastScanJSON:        publicJSONMap(camera.LastScanJSON),
+		ControlCapabilities: camera.ControlCapabilities,
 		Streams:             streams,
 		CreatedAt:           camera.CreatedAt,
 		UpdatedAt:           camera.UpdatedAt,
