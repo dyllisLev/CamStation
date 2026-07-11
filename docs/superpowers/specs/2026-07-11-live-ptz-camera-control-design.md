@@ -353,9 +353,12 @@ cd web && npm run build
 go build -o camstationd ./cmd/camstationd
 ```
 
-If that final pass reveals a defect, run the failing narrow scope while fixing
-it, then rerun the affected final command once. Do not repeatedly run the full
-matrix without a relevant change.
+If that final pass reveals defects, record all of them and fix each through its
+smallest reproducing test, lint target, or build target. Do not rerun the full
+matrix between individual fixes. Once every known defect passes its narrow
+verification, rerun the complete matrix once as the integration gate. If that
+gate reveals a new defect, repeat the same targeted-fix cycle and run one more
+complete gate only after all newly known defects are resolved.
 
 ### One bounded real-camera session
 
@@ -378,6 +381,12 @@ on the verified capability response plus the focused SOAP and route tests. Never
 invoke `현재 위치를 홈으로 설정` as an automated test. Do not repeat movement
 merely to collect duplicate evidence. Capture one API trace or log excerpt and
 one UI screenshot for the final handoff.
+
+If the real-device session exposes a defect, stop at that action, reproduce and
+fix it with the narrowest automated check, then repeat only the failed device
+action once. After all discovered defects are resolved, rerun the complete
+software matrix once before continuing the remaining acceptance steps. Do not
+replay already-passed device actions unless the fix directly changed them.
 
 ## Non-Goals
 

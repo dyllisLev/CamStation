@@ -19,7 +19,10 @@
 - Movement and Stop device calls use 2-second HTTP timeouts; capability discovery may use 8 seconds.
 - Run only the task's named narrow test or linter during Tasks 1-6.
 - Run the complete Go/frontend verification matrix once, in Task 7.
+- If that matrix reports failures, record all failures, fix and rerun only the narrow test/lint/build scope for each failure, and do not rerun the complete matrix while any known failure remains.
+- After every known failure passes its narrow verification, rerun the complete matrix once as the integration gate. Repeat this targeted-fix-then-one-integration-gate cycle only when the integration gate reveals a new failure.
 - Move the real camera only once, in the bounded Task 7 session; never alter the saved home position automatically.
+- If the bounded real-camera session reveals a defect, add or run the narrow automated regression for that defect, fix it, and repeat only the failed real-device action once. Never repeat unrelated camera actions merely to collect duplicate evidence.
 - Preserve all pre-existing user changes. In particular, do not stage the existing camera-registration source edits, `.debug-journal.md`, `.superpowers/`, or `docs/camera-registration-ui-mockup.html`.
 - `cmd/camstationd/web/index.html` and the existing embedded asset set were already dirty before this feature. Run the required frontend build for verification, but do not stage those generated files in PTZ commits; report them for later user-owned consolidation.
 
@@ -1705,7 +1708,13 @@ cd ..
 go build -o camstationd ./cmd/camstationd
 ```
 
-Expected: every command exits 0. If one command fails, fix and rerun only its narrow failing scope, then rerun that affected final command once. Do not restart the entire matrix without a relevant change.
+Expected: every command exits 0. If any command fails:
+
+1. Record all observed failures from that integration run.
+2. For each failure, write or select the smallest regression command that reproduces it (`go test` package/test name, `oxlint` file list, frontend build, or Go build as appropriate).
+3. Fix that failure and rerun only its reproducing command until it passes; do not run the complete matrix between individual fixes.
+4. When every known failure passes its narrow command, rerun the complete four-command matrix above once.
+5. If the new integration run exposes another failure, repeat steps 1-4. Do not proceed to the daemon or real camera until one complete matrix exits 0.
 
 - [ ] **Step 2: Restart through the managed lifecycle and verify the daemon once**
 
@@ -1731,6 +1740,8 @@ Use the guarded CamStation API, never direct ad hoc camera URLs:
 7. Confirm mouse wheel video zoom, drag pan, focus view, layout save, and timeline behavior still work during the same browser session.
 
 Expected: the camera stops on every release, the final status is IDLE, no temporary preset remains, and no camera credential appears in API responses, events, or logs.
+
+If this session exposes a defect, stop the acceptance sequence at the failed action. Reproduce it with the smallest synthetic/unit/route/UI check, fix it, and rerun only that check. Then repeat only the failed real-device action once. After all discovered defects are resolved, rerun the complete software matrix once before continuing the remaining real-device acceptance steps; do not replay already-passed movement or preset actions unless the fix directly changed that behavior.
 
 - [ ] **Step 4: Capture one UI screenshot and one bounded evidence excerpt**
 
