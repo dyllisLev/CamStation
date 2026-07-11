@@ -145,7 +145,7 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 		}
 	}
 	buf.WriteString("ffmpeg:\n")
-	buf.WriteString("  h264: \"-codec:v libx264 -preset:v veryfast -tune:v zerolatency -pix_fmt:v yuv420p\"\n")
+	buf.WriteString("  h264: \"-codec:v libx264 -preset:v veryfast -tune:v zerolatency -pix_fmt:v yuv420p -g 20 -keyint_min 20 -sc_threshold 0\"\n")
 	preload := false
 	for _, camera := range cameras {
 		for i, output := range camera.Outputs {

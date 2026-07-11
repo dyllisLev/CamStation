@@ -154,6 +154,22 @@ func TestRenderPolicyConfigKeepsSourcesPrivateEscapesYAMLAndPreloadsAlways(t *te
 	}
 }
 
+func TestRenderPolicyConfigUsesShortFixedGOPForSoftwareH264(t *testing.T) {
+	camera, output := policyFixture("hevc", "yuv420p", 8, 3840, 2160, 10)
+	camera.Outputs = []store.CameraOutput{output}
+
+	config, _, err := renderPolicyConfig([]store.Camera{camera}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	for _, option := range []string{"-g 20", "-keyint_min 20", "-sc_threshold 0"} {
+		if !strings.Contains(text, option) {
+			t.Fatalf("H.264 template missing %q: %s", option, text)
+		}
+	}
+}
+
 func TestRenderPolicyConfigUsesCollisionFreePrivateInputNames(t *testing.T) {
 	camera, first := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
 	camera.Streams[0].SourceKey = "a:b"
