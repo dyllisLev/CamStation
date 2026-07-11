@@ -214,6 +214,24 @@ func (d routeDeps) listCameraPresets(w http.ResponseWriter, r *http.Request) {
 		writeCameraControlError(w, err)
 		return
 	}
+	names, err := d.db.ListCameraPresetNames(r.Context(), camera.ID)
+	if err != nil {
+		d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err)
+		writeCameraControlError(w, err)
+		return
+	}
+	tokens := make([]string, 0, len(presets))
+	for i := range presets {
+		tokens = append(tokens, presets[i].Token)
+		if name, ok := names[presets[i].Token]; ok {
+			presets[i].Name = name
+		}
+	}
+	if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens); err != nil {
+		d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err)
+		writeCameraControlError(w, err)
+		return
+	}
 	if presets == nil {
 		presets = []cameracontrol.Preset{}
 	}
@@ -245,6 +263,15 @@ func (d routeDeps) createCameraPreset(w http.ResponseWriter, r *http.Request) {
 		writeCameraControlError(w, err)
 		return
 	}
+	if err := d.db.UpsertCameraPresetName(r.Context(), camera.ID, preset.Token, req.Name); err != nil {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(r.Context()), cameraControlRouteTimeout)
+		defer cancelCleanup()
+		_ = d.cameraController.DeletePreset(cleanupCtx, camera, preset.Token)
+		d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_create", err)
+		writeCameraControlError(w, err)
+		return
+	}
+	preset.Name = req.Name
 	d.recordCameraControlSuccess(r.Context(), camera.StreamName, "preset_create")
 	writeJSON(w, http.StatusOK, preset)
 }
@@ -286,6 +313,11 @@ func (d routeDeps) cameraPresetTokenAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if delete {
+		if err := d.db.DeleteCameraPresetName(r.Context(), camera.ID, req.Token); err != nil {
+			d.recordCameraControlFailure(r.Context(), camera.StreamName, operation, err)
+			writeCameraControlError(w, err)
+			return
+		}
 		d.recordCameraControlSuccess(r.Context(), camera.StreamName, operation)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

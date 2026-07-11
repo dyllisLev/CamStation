@@ -175,6 +175,64 @@ func TestCameraControlRoutesRejectFieldsOnEmptyBodyActions(t *testing.T) {
 	}
 }
 
+func TestCameraControlRoutesPersistOverlayAndReconcilePresetNames(t *testing.T) {
+	fake := &fakeCameraController{}
+	server := newCameraControlRouteServer(t, fake)
+	headers := trustedConsoleHeaders()
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, headers)
+	if status != http.StatusOK || payload["name"] != "입구" {
+		t.Fatalf("create = %d/%v", status, payload)
+	}
+	fake.presets = []cameracontrol.Preset{{Token: "created-token", Name: "PRESET_0"}, {Token: "camera-token", Name: "카메라 이름"}}
+	status, list := requestJSONArrayWithHeaders(t, server.handler, http.MethodGet, "/api/cameras/goat-yard/ptz/presets", "", headers)
+	encoded, _ := json.Marshal(list)
+	if status != http.StatusOK || !strings.Contains(string(encoded), `"name":"입구"`) || !strings.Contains(string(encoded), `"name":"카메라 이름"`) {
+		t.Fatalf("list = %d/%s", status, encoded)
+	}
+	fake.presets = []cameracontrol.Preset{{Token: "camera-token", Name: "카메라 이름"}}
+	status, _ = requestJSONArrayWithHeaders(t, server.handler, http.MethodGet, "/api/cameras/goat-yard/ptz/presets", "", headers)
+	camera, _ := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	names, err := server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if status != http.StatusOK || err != nil || len(names) != 0 {
+		t.Fatalf("reconcile = %d/%#v/%v", status, names, err)
+	}
+}
+
+func TestCameraControlRoutesDeletePresetNameOnlyAfterDeviceSuccess(t *testing.T) {
+	fake := &fakeCameraController{}
+	server := newCameraControlRouteServer(t, fake)
+	camera, _ := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	_ = server.db.UpsertCameraPresetName(t.Context(), camera.ID, "saved-token", "입구")
+	fake.err = cameracontrol.ErrUnavailable
+	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets/delete", `{"token":"saved-token"}`, trustedConsoleHeaders())
+	names, _ := server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if status != http.StatusBadGateway || names["saved-token"] != "입구" {
+		t.Fatalf("failed delete = %d/%#v", status, names)
+	}
+	fake.err = nil
+	status, _ = requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets/delete", `{"token":"saved-token"}`, trustedConsoleHeaders())
+	names, _ = server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if status != http.StatusOK || len(names) != 0 {
+		t.Fatalf("successful delete = %d/%#v", status, names)
+	}
+}
+
+func TestCameraControlRoutesCompensateWhenPresetNamePersistenceFails(t *testing.T) {
+	fake := &fakeCameraController{}
+	server := newCameraControlRouteServer(t, fake)
+	fake.onCreatePreset = func() { _, _ = server.db.DeleteCamera(t.Context(), "goat-yard") }
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, trustedConsoleHeaders())
+	encoded, _ := json.Marshal(payload)
+	if status != http.StatusBadGateway || fake.deletePresetToken != "created-token" {
+		t.Fatalf("compensation = %d/%q/%s", status, fake.deletePresetToken, encoded)
+	}
+	for _, secret := range []string{"rtsp://", "camera.invalid", "FOREIGN KEY"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
 type fakeCameraController struct {
 	capabilities                       store.CameraControlCapabilities
 	status                             cameracontrol.Status
@@ -184,6 +242,7 @@ type fakeCameraController struct {
 	createdPresetName                  string
 	moveCalls, stopCalls               int
 	discoverCalls, gotoHomeCalls       int
+	onCreatePreset                     func()
 	err                                error
 }
 
@@ -213,6 +272,9 @@ func (f *fakeCameraController) ListPresets(context.Context, store.Camera) ([]cam
 }
 func (f *fakeCameraController) CreatePreset(_ context.Context, _ store.Camera, name string) (cameracontrol.Preset, error) {
 	f.createdPresetName = name
+	if f.onCreatePreset != nil {
+		f.onCreatePreset()
+	}
 	return cameracontrol.Preset{Token: "created-token", Name: name}, f.err
 }
 func (f *fakeCameraController) GotoPreset(_ context.Context, _ store.Camera, token string) error {
