@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -52,6 +52,7 @@ This document records the current implementation state so the next session can c
   - Stop is the final ordered command with a 2-second HTTP and device timeout backstop
   - home navigation and confirmation-gated home-setting action
   - camera-owned preset list/create/goto/delete
+  - operator preset names persisted in SQLite by camera and opaque preset token across refreshes and daemon restarts
   - `/live` toolbar capability gating and full right-panel replacement
   - listen/talk/siren controls remain disabled until their transport or protocol is implemented
   - final verification used one bounded real-camera movement and temporary-preset session
@@ -229,6 +230,11 @@ Browser/Playwright verification performed:
   - `/live` showed the capability-enabled PTZ button and full replacement panel; selecting a non-PTZ camera closed the panel and disabled the button
   - wheel zoom/reset, focus view, layout-save presence, timeline presence, and disabled listen/talk/siren states were checked in the same browser session
   - screenshot evidence: `data/diagnostics/live-ptz-panel.png` (runtime evidence, intentionally untracked)
+- PTZ preset-name persistence verification on 2026-07-12:
+  - a temporary Korean alias was created once on the `소방서5/fire-station-5` VStarcam and returned as the exact token/name pair
+  - the same pair remained after a controlled `camstationctl.sh restart` and healthy daemon recovery
+  - goto and delete both returned HTTP 200; the final list confirmed the temporary token and alias were absent
+  - final `camstationctl.sh verify` passed and no temporary preset remained
 - Per-camera stream policy rollout on 2026-07-11:
   - full Go tests, web tests (16/16), lint, production build, daemon build, controlled restart, and `camstationctl.sh verify` passed
   - all eight registered cameras have three DB-backed outputs and an `applied` desired/applied revision

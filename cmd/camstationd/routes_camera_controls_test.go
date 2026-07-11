@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"camstation/internal/cameracontrol"
 	"camstation/internal/store"
@@ -55,7 +56,10 @@ func TestCameraControlRoutesRefreshPersistsCapabilities(t *testing.T) {
 	if err != nil || !stored.ControlCapabilities.PTZ.Available || stored.ControlCapabilities.MaxPresets != 100 {
 		t.Fatalf("stored capabilities/error = %#v/%v", stored.ControlCapabilities, err)
 	}
-	encoded, _ := json.Marshal(payload)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode refresh response: %v", err)
+	}
 	for _, secret := range []string{"camera-secret", "192.0.2.10", "rtsp://"} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("refresh response leaked %q: %s", secret, encoded)
@@ -96,7 +100,10 @@ func TestCameraControlRoutesNormalizeControllerErrors(t *testing.T) {
 			if status != tt.status || payload["error"] != tt.message {
 				t.Fatalf("status/payload = %d/%v", status, payload)
 			}
-			encoded, _ := json.Marshal(payload)
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("encode error response: %v", err)
+			}
 			for _, secret := range []string{"camera-secret", "192.0.2.10", "rtsp://", "onvif"} {
 				if strings.Contains(strings.ToLower(string(encoded)), strings.ToLower(secret)) {
 					t.Fatalf("error response leaked %q: %s", secret, encoded)
@@ -117,7 +124,10 @@ func TestCameraControlRoutesPersistScannedProfileCapabilities(t *testing.T) {
 		"capabilities": map[string]any{"ptz": true, "microphone": true, "maxPresets": 100},
 		"channels":     []any{map[string]any{"index": 0, "candidates": body["streams"]}},
 	}
-	encoded, _ := json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode camera body: %v", err)
+	}
 	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", string(encoded), trustedConsoleHeaders())
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; payload=%v", status, payload)
@@ -146,7 +156,10 @@ func TestCameraControlRoutesUpdateWithoutProfilePreservesCapabilities(t *testing
 		t.Fatalf("decode request fixture: %v", err)
 	}
 	delete(body, "profile")
-	encoded, _ := json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode camera body: %v", err)
+	}
 	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPut, "/api/cameras/"+camera.StreamName, string(encoded), trustedConsoleHeaders())
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; payload=%v", status, payload)
@@ -185,23 +198,35 @@ func TestCameraControlRoutesPersistOverlayAndReconcilePresetNames(t *testing.T) 
 	}
 	fake.presets = []cameracontrol.Preset{{Token: "created-token", Name: "PRESET_0"}, {Token: "camera-token", Name: "카메라 이름"}}
 	status, list := requestJSONArrayWithHeaders(t, server.handler, http.MethodGet, "/api/cameras/goat-yard/ptz/presets", "", headers)
-	encoded, _ := json.Marshal(list)
-	if status != http.StatusOK || !strings.Contains(string(encoded), `"name":"입구"`) || !strings.Contains(string(encoded), `"name":"카메라 이름"`) {
-		t.Fatalf("list = %d/%s", status, encoded)
+	pairs := make(map[string]string, len(list))
+	for _, preset := range list {
+		token, tokenOK := preset["token"].(string)
+		name, nameOK := preset["name"].(string)
+		if !tokenOK || !nameOK {
+			t.Fatalf("invalid preset payload: %#v", preset)
+		}
+		pairs[token] = name
+	}
+	if status != http.StatusOK || len(list) != 2 || len(pairs) != 2 || pairs["created-token"] != "입구" || pairs["camera-token"] != "카메라 이름" {
+		t.Fatalf("list = %d/%#v", status, list)
 	}
 	fake.presets = []cameracontrol.Preset{{Token: "camera-token", Name: "카메라 이름"}}
 	status, _ = requestJSONArrayWithHeaders(t, server.handler, http.MethodGet, "/api/cameras/goat-yard/ptz/presets", "", headers)
-	camera, _ := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	camera, err := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	if err != nil {
+		t.Fatalf("get camera: %v", err)
+	}
 	names, err := server.db.ListCameraPresetNames(t.Context(), camera.ID)
 	if status != http.StatusOK || err != nil || len(names) != 0 {
 		t.Fatalf("reconcile = %d/%#v/%v", status, names, err)
 	}
 }
 
-func TestCameraControlRoutesKeepPresetNameCreatedAfterListStarted(t *testing.T) {
+func TestCameraControlRoutesSerializePresetCreateBehindList(t *testing.T) {
 	fake := &fakeCameraController{
-		listPresetsStarted: make(chan struct{}),
-		releaseListPresets: make(chan struct{}),
+		listPresetsStarted:  make(chan struct{}),
+		releaseListPresets:  make(chan struct{}),
+		createPresetStarted: make(chan struct{}),
 	}
 	server := newCameraControlRouteServer(t, fake)
 	headers := trustedConsoleHeaders()
@@ -216,14 +241,52 @@ func TestCameraControlRoutesKeepPresetNameCreatedAfterListStarted(t *testing.T) 
 	}()
 	<-fake.listPresetsStarted
 
-	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, headers)
-	if status != http.StatusOK || payload["name"] != "입구" {
-		t.Fatalf("create = %d/%v", status, payload)
+	gotoDone := make(chan int, 1)
+	go func() {
+		status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets/goto", `{"token":"camera-token"}`, headers)
+		gotoDone <- status
+	}()
+	select {
+	case status := <-gotoDone:
+		if status != http.StatusOK {
+			t.Fatalf("goto while list blocked = %d", status)
+		}
+	case <-time.After(time.Second):
+		close(fake.releaseListPresets)
+		<-listed
+		<-gotoDone
+		t.Fatalf("goto was unnecessarily serialized behind preset list")
+	}
+
+	type createResult struct {
+		status  int
+		payload map[string]any
+	}
+	createRequested := make(chan struct{})
+	created := make(chan createResult, 1)
+	go func() {
+		close(createRequested)
+		status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, headers)
+		created <- createResult{status: status, payload: payload}
+	}()
+	<-createRequested
+	overlapped := false
+	select {
+	case <-fake.createPresetStarted:
+		overlapped = true
+	case <-time.After(250 * time.Millisecond):
 	}
 	close(fake.releaseListPresets)
 	result := <-listed
 	if result.status != http.StatusOK || len(result.list) != 0 {
 		t.Fatalf("stale list = %d/%v", result.status, result.list)
+	}
+	create := <-created
+	if overlapped {
+		t.Fatalf("create reached device while preset list was in progress")
+	}
+	if create.status != http.StatusOK || create.payload["name"] != "입구" {
+		t.Fatalf("create = %d/%v", create.status, create.payload)
 	}
 	camera, err := server.db.GetCameraByStream(t.Context(), "goat-yard")
 	if err != nil {
@@ -238,34 +301,46 @@ func TestCameraControlRoutesKeepPresetNameCreatedAfterListStarted(t *testing.T) 
 func TestCameraControlRoutesDeletePresetNameOnlyAfterDeviceSuccess(t *testing.T) {
 	fake := &fakeCameraController{}
 	server := newCameraControlRouteServer(t, fake)
-	camera, _ := server.db.GetCameraByStream(t.Context(), "goat-yard")
-	_ = server.db.UpsertCameraPresetName(t.Context(), camera.ID, "saved-token", "입구")
+	camera, err := server.db.GetCameraByStream(t.Context(), "goat-yard")
+	if err != nil {
+		t.Fatalf("get camera: %v", err)
+	}
+	if err := server.db.UpsertCameraPresetName(t.Context(), camera.ID, "saved-token", "입구"); err != nil {
+		t.Fatalf("seed preset name: %v", err)
+	}
 	fake.err = cameracontrol.ErrUnavailable
 	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets/delete", `{"token":"saved-token"}`, trustedConsoleHeaders())
-	names, _ := server.db.ListCameraPresetNames(t.Context(), camera.ID)
-	if status != http.StatusBadGateway || names["saved-token"] != "입구" {
-		t.Fatalf("failed delete = %d/%#v", status, names)
+	names, err := server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if status != http.StatusBadGateway || err != nil || names["saved-token"] != "입구" {
+		t.Fatalf("failed delete = %d/%#v/%v", status, names, err)
 	}
 	fake.err = nil
 	status, _ = requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets/delete", `{"token":"saved-token"}`, trustedConsoleHeaders())
-	names, _ = server.db.ListCameraPresetNames(t.Context(), camera.ID)
-	if status != http.StatusOK || len(names) != 0 {
-		t.Fatalf("successful delete = %d/%#v", status, names)
+	names, err = server.db.ListCameraPresetNames(t.Context(), camera.ID)
+	if status != http.StatusOK || err != nil || len(names) != 0 {
+		t.Fatalf("successful delete = %d/%#v/%v", status, names, err)
 	}
 }
 
 func TestCameraControlRoutesCompensateWhenPresetNamePersistenceFails(t *testing.T) {
 	fake := &fakeCameraController{}
 	server := newCameraControlRouteServer(t, fake)
-	fake.onCreatePreset = func() { _, _ = server.db.DeleteCamera(t.Context(), "goat-yard") }
+	var deleteCameraErr error
+	fake.onCreatePreset = func() { _, deleteCameraErr = server.db.DeleteCamera(t.Context(), "goat-yard") }
 	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/goat-yard/ptz/presets", `{"name":"입구"}`, trustedConsoleHeaders())
-	encoded, _ := json.Marshal(payload)
+	if deleteCameraErr != nil {
+		t.Fatalf("delete camera: %v", deleteCameraErr)
+	}
 	if status != http.StatusBadGateway || fake.deletePresetToken != "created-token" {
-		t.Fatalf("compensation = %d/%q/%s", status, fake.deletePresetToken, encoded)
+		t.Fatalf("compensation = %d/%q/%v", status, fake.deletePresetToken, payload)
+	}
+	errorMessage, ok := payload["error"].(string)
+	if !ok {
+		t.Fatalf("error payload = %#v", payload)
 	}
 	for _, secret := range []string{"rtsp://", "camera.invalid", "FOREIGN KEY"} {
-		if strings.Contains(string(encoded), secret) {
-			t.Fatalf("leaked %q: %s", secret, encoded)
+		if strings.Contains(errorMessage, secret) {
+			t.Fatalf("leaked %q: %s", secret, errorMessage)
 		}
 	}
 }
@@ -282,6 +357,7 @@ type fakeCameraController struct {
 	onCreatePreset                     func()
 	listPresetsStarted                 chan struct{}
 	releaseListPresets                 chan struct{}
+	createPresetStarted                chan struct{}
 	err                                error
 }
 
@@ -318,6 +394,9 @@ func (f *fakeCameraController) ListPresets(context.Context, store.Camera) ([]cam
 }
 func (f *fakeCameraController) CreatePreset(_ context.Context, _ store.Camera, name string) (cameracontrol.Preset, error) {
 	f.createdPresetName = name
+	if f.createPresetStarted != nil {
+		close(f.createPresetStarted)
+	}
 	if f.onCreatePreset != nil {
 		f.onCreatePreset()
 	}

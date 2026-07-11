@@ -52,6 +52,7 @@ type routeDeps struct {
 	maxStorageBytes  int64
 	recordingEnabled bool
 	cameraController cameraControlService
+	presetLocks      *cameraPresetLockSet
 }
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunnerOpt ...*backup.Runner) (http.Handler, error) {
@@ -84,6 +85,9 @@ func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *strea
 func (d routeDeps) handler() (http.Handler, error) {
 	if d.cameraController == nil {
 		d.cameraController = cameracontrol.New(onvif.NewClient(&http.Client{Timeout: 8 * time.Second}))
+	}
+	if d.presetLocks == nil {
+		d.presetLocks = &cameraPresetLockSet{}
 	}
 	mux := http.NewServeMux()
 	previews := newPreviewRegistry()

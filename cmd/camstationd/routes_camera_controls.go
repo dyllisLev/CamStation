@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -34,6 +35,17 @@ type cameraPresetNameRequest struct {
 
 type cameraPresetTokenRequest struct {
 	Token string `json:"token"`
+}
+
+type cameraPresetLockSet struct {
+	locks sync.Map
+}
+
+func (s *cameraPresetLockSet) lock(cameraID int64) func() {
+	value, _ := s.locks.LoadOrStore(cameraID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (d routeDeps) registerCameraControlRoutes(mux *http.ServeMux) {
@@ -206,7 +218,8 @@ func (d routeDeps) listCameraPresets(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().UTC()
+	unlock := d.presetLocks.lock(camera.ID)
+	defer unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), cameraControlRouteTimeout)
 	defer cancel()
 	presets, err := d.cameraController.ListPresets(ctx, camera)
@@ -228,7 +241,7 @@ func (d routeDeps) listCameraPresets(w http.ResponseWriter, r *http.Request) {
 			presets[i].Name = name
 		}
 	}
-	if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens, cutoff); err != nil {
+	if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens); err != nil {
 		d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err)
 		writeCameraControlError(w, err)
 		return
@@ -256,6 +269,8 @@ func (d routeDeps) createCameraPreset(w http.ResponseWriter, r *http.Request) {
 		writeCameraControlError(w, cameracontrol.ErrInvalidCommand)
 		return
 	}
+	unlock := d.presetLocks.lock(camera.ID)
+	defer unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), cameraControlRouteTimeout)
 	defer cancel()
 	preset, err := d.cameraController.CreatePreset(ctx, camera, req.Name)
@@ -300,6 +315,10 @@ func (d routeDeps) cameraPresetTokenAction(w http.ResponseWriter, r *http.Reques
 	if strings.TrimSpace(req.Token) == "" || !validControlValue(req.Token) {
 		writeCameraControlError(w, cameracontrol.ErrInvalidCommand)
 		return
+	}
+	if delete {
+		unlock := d.presetLocks.lock(camera.ID)
+		defer unlock()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), cameraControlRouteTimeout)
 	defer cancel()
