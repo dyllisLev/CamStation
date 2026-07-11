@@ -164,6 +164,7 @@ export function PtzControlPanel({ camera, onBack, onStopReady }: PtzControlPanel
           maxLength={64}
           onChange={(event) => setPresetName(event.target.value)}
           aria-label="새 프리셋 이름"
+          placeholder="프리셋 이름"
         />
         <button type="submit" disabled={!controls.presets.available || !presetName.trim() || createPreset.isPending}>
           현재 위치 저장
