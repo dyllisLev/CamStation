@@ -11,6 +11,8 @@ import {
   useGotoCameraPreset,
   useSetCameraHome,
 } from "../../app/queries";
+import { updatePtzPressSources } from "./ptzPressState";
+import type { PtzPressSource } from "./ptzPressState";
 import { usePtzHold } from "./usePtzHold";
 
 type PtzControlPanelProps = {
@@ -32,40 +34,54 @@ type HoldButtonProps = {
 function HoldButton({ label, move, className, direction, onStart, onStop, children }: HoldButtonProps) {
   const pointerActive = useRef(false);
   const keyboardActive = useRef(false);
+  const pressedSources = useRef<ReadonlySet<PtzPressSource>>(new Set());
+  const [pressed, setPressed] = useState(false);
   const begin = () => onStart(move);
   const end = onStop;
+  const setSourcePressed = (source: PtzPressSource, active: boolean) => {
+    pressedSources.current = updatePtzPressSources(pressedSources.current, source, active);
+    setPressed(pressedSources.current.size > 0);
+  };
   return (
     <button
       type="button"
       className={className}
       data-direction={direction}
+      data-pressed={pressed}
+      aria-pressed={pressed}
       aria-label={label}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         pointerActive.current = true;
+        setSourcePressed("pointer", true);
         begin();
       }}
       onPointerUp={() => {
         if (pointerActive.current) end();
         pointerActive.current = false;
+        setSourcePressed("pointer", false);
       }}
       onPointerCancel={() => {
         if (pointerActive.current) end();
         pointerActive.current = false;
+        setSourcePressed("pointer", false);
       }}
       onPointerLeave={() => {
         if (pointerActive.current) end();
         pointerActive.current = false;
+        setSourcePressed("pointer", false);
       }}
       onLostPointerCapture={() => {
         if (pointerActive.current) end();
         pointerActive.current = false;
+        setSourcePressed("pointer", false);
       }}
       onKeyDown={(event) => {
         if ((event.key === " " || event.key === "Enter") && !keyboardActive.current) {
           event.preventDefault();
           keyboardActive.current = true;
+          setSourcePressed("keyboard", true);
           begin();
         }
       }}
@@ -73,12 +89,14 @@ function HoldButton({ label, move, className, direction, onStart, onStop, childr
         if ((event.key === " " || event.key === "Enter") && keyboardActive.current) {
           event.preventDefault();
           keyboardActive.current = false;
+          setSourcePressed("keyboard", false);
           end();
         }
       }}
       onBlur={() => {
         if (keyboardActive.current) end();
         keyboardActive.current = false;
+        setSourcePressed("keyboard", false);
       }}
     >
       {children}
