@@ -1,6 +1,7 @@
 data/
 dist/
 node_modules/
+.worktrees/
 /camstationd
 *.log
 .env
