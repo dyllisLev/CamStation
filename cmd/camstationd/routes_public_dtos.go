@@ -72,7 +72,7 @@ type publicStreamOutputSettings struct {
 	VideoMode  store.CameraVideoMode     `json:"videoMode"`
 	MaxWidth   *int                      `json:"maxWidth"`
 	MaxHeight  *int                      `json:"maxHeight"`
-	MaxFPS     *float64                  `json:"maxFps"`
+	MaxFPS     *float64                  `json:"maxFPS"`
 	AudioMode  store.CameraAudioMode     `json:"audioMode"`
 	Activation store.CameraActivation    `json:"activation"`
 }
@@ -296,14 +296,15 @@ func publicJSONValue(value any) any {
 
 func isSecretJSONKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	if key == "profiletoken" || key == "profile_token" {
+	compact := strings.NewReplacer("_", "", "-", "", " ", "").Replace(key)
+	if compact == "profiletoken" {
 		return false
 	}
-	switch key {
-	case "user", "username", "password", "passwd", "pwd", "token", "access_token", "auth", "authorization", "secret", "client_secret":
+	switch compact {
+	case "user", "username", "password", "passwd", "pwd", "token", "accesstoken", "authtoken", "refreshtoken", "apikey", "auth", "authorization", "secret", "clientsecret":
 		return true
 	default:
-		return strings.Contains(key, "password") || strings.Contains(key, "secret") || strings.Contains(key, "authorization")
+		return strings.HasSuffix(compact, "token") || strings.Contains(compact, "password") || strings.Contains(compact, "secret") || strings.Contains(compact, "apikey") || strings.Contains(compact, "authorization")
 	}
 }
 

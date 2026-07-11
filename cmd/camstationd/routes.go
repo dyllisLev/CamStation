@@ -23,6 +23,7 @@ type streamController interface {
 
 type policyApplier interface {
 	Apply(context.Context) stream.PolicyApplyResult
+	ApplyExpected(context.Context, int64, int64) stream.PolicyApplyResult
 }
 
 type cameraControlService interface {

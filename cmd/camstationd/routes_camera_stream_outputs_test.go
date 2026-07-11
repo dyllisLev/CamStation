@@ -19,6 +19,18 @@ import (
 type policyApplyFunc func(context.Context) stream.PolicyApplyResult
 
 func (f policyApplyFunc) Apply(ctx context.Context) stream.PolicyApplyResult { return f(ctx) }
+func (f policyApplyFunc) ApplyExpected(ctx context.Context, _ int64, _ int64) stream.PolicyApplyResult {
+	return f(ctx)
+}
+
+type conflictPolicyApplier struct{}
+
+func (conflictPolicyApplier) Apply(context.Context) stream.PolicyApplyResult {
+	return stream.PolicyApplyResult{Applied: true}
+}
+func (conflictPolicyApplier) ApplyExpected(context.Context, int64, int64) stream.PolicyApplyResult {
+	return stream.PolicyApplyResult{RevisionConflict: true}
+}
 
 type recordingPolicyProber struct {
 	urls []string
@@ -79,6 +91,9 @@ func TestPublicCameraStreamPolicyDTOHasStableKeysAndNoPrivateInputIdentity(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(encoded), `"maxFPS":`) || strings.Contains(string(encoded), `"maxFps":`) {
+		t.Fatalf("public DTO maxFPS key mismatch: %s", encoded)
+	}
 	for _, forbidden := range []string{`"id":`, "sourceStreamId", "camera_id", "go2rtcStreamName", "redactedUrl", "rtsp://", "10.0.0.5", "private-source"} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("public DTO leaked %q: %s", forbidden, encoded)
@@ -116,7 +131,7 @@ func TestPublicCameraRedactsPolicyErrorsAndSecretJSONKeys(t *testing.T) {
 	internal := "rtsp://admin:secret@127.0.0.1:8554/private?token=querysecret"
 	cameraRow := store.Camera{
 		StreamName: "redaction", LastProbeJSON: map[string]any{
-			"username": "admin", "profileToken": "PROFILE_000", "nested": map[string]any{"password": "secret", "token": "abc", "safe": internal},
+			"username": "admin", "profileToken": "PROFILE_000", "accessToken": "access-value", "authToken": "auth-value", "refreshToken": "refresh-value", "apiKey": "api-value", "api_key": "api-underscore", "nested": map[string]any{"password": "secret", "token": "abc", "safe": internal},
 		},
 		Streams: []store.CameraStream{{SourceKey: "recording", Role: store.CameraStreamRoleRecording, DetectedError: "probe " + internal}},
 		Outputs: []store.CameraOutput{
@@ -130,7 +145,7 @@ func TestPublicCameraRedactsPolicyErrorsAndSecretJSONKeys(t *testing.T) {
 	if !strings.Contains(encoded, `"profileToken":"PROFILE_000"`) {
 		t.Fatalf("public camera removed non-secret profile token: %s", encoded)
 	}
-	for _, forbidden := range []string{"admin", "secret", "querysecret", "127.0.0.1", "8554", "username", "password", `"token"`} {
+	for _, forbidden := range []string{"admin", "secret", "querysecret", "access-value", "auth-value", "refresh-value", "api-value", "api-underscore", "127.0.0.1", "8554", "username", "password", `"token"`, "accessToken", "authToken", "refreshToken", "apiKey", "api_key"} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("public camera leaked %q: %s", forbidden, encoded)
 		}
@@ -139,7 +154,7 @@ func TestPublicCameraRedactsPolicyErrorsAndSecretJSONKeys(t *testing.T) {
 
 func TestUpdateCameraStreamOutputsValidatesExactSetAndRevision(t *testing.T) {
 	server, camera := newPolicyRouteServer(t, nil)
-	badBody := `{"expectedDesiredRevision":1,"outputs":[{"purpose":"recording","sourceKey":"recording","videoMode":"copy","maxWidth":null,"maxHeight":null,"maxFps":null,"audioMode":"source","activation":"on_demand"}]}`
+	badBody := `{"expectedDesiredRevision":1,"outputs":[{"purpose":"recording","sourceKey":"recording","videoMode":"copy","maxWidth":null,"maxHeight":null,"maxFPS":null,"audioMode":"source","activation":"on_demand"}]}`
 	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPut, "/api/cameras/"+camera.StreamName+"/stream-outputs", badBody, trustedConsoleHeaders())
 	if status != http.StatusBadRequest {
 		t.Fatalf("invalid exact-set status = %d", status)
@@ -189,6 +204,14 @@ func TestUpdateCameraStreamOutputsReturnsFinalAppliedDTO(t *testing.T) {
 	outputs, ok := publicCamera["streamOutputs"].([]any)
 	if !ok || len(outputs) != 3 {
 		t.Fatalf("stream outputs = %#v", publicCamera["streamOutputs"])
+	}
+	focus := outputs[2].(map[string]any)
+	desired := focus["desired"].(map[string]any)
+	if desired["maxFPS"] != float64(15) {
+		t.Fatalf("maxFPS round trip = %#v", desired)
+	}
+	if _, exists := desired["maxFps"]; exists {
+		t.Fatalf("legacy maxFps key escaped: %#v", desired)
 	}
 }
 
@@ -299,6 +322,15 @@ func TestReapplyRejectsMissingAndStaleDesiredRevision(t *testing.T) {
 	}
 	if applyCalls != 0 {
 		t.Fatalf("stale reapply called apply %d times", applyCalls)
+	}
+}
+
+func TestReapplyMapsCoordinatorTOCTOUConflictTo409(t *testing.T) {
+	server, camera := newPolicyRouteServer(t, conflictPolicyApplier{})
+	body := fmt.Sprintf(`{"expectedDesiredRevision":%d}`, camera.PolicyState.DesiredRevision)
+	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/"+camera.StreamName+"/stream-outputs/reapply", body, trustedConsoleHeaders())
+	if status != http.StatusConflict {
+		t.Fatalf("coordinator revision conflict status = %d", status)
 	}
 }
 
@@ -432,9 +464,9 @@ func TestCameraRegistrationSavesIDLessSourceKeyPoliciesAtomically(t *testing.T) 
 		t.Fatal("invalid policy left an orphan camera")
 	}
 	base["streamOutputs"] = []map[string]any{
-		{"purpose": "recording", "sourceKey": "recording", "videoMode": "copy", "maxWidth": nil, "maxHeight": nil, "maxFps": nil, "audioMode": "source", "activation": "on_demand"},
-		{"purpose": "live", "sourceKey": "live", "videoMode": "h264", "maxWidth": nil, "maxHeight": nil, "maxFps": nil, "audioMode": "none", "activation": "on_demand"},
-		{"purpose": "focus", "sourceKey": "recording", "videoMode": "h264", "maxWidth": 1280, "maxHeight": 720, "maxFps": 15, "audioMode": "none", "activation": "always"},
+		{"purpose": "recording", "sourceKey": "recording", "videoMode": "copy", "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "source", "activation": "on_demand"},
+		{"purpose": "live", "sourceKey": "live", "videoMode": "h264", "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "none", "activation": "on_demand"},
+		{"purpose": "focus", "sourceKey": "recording", "videoMode": "h264", "maxWidth": 1280, "maxHeight": 720, "maxFPS": 15, "audioMode": "none", "activation": "always"},
 	}
 	good, _ := json.Marshal(base)
 	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", string(good), trustedConsoleHeaders())
@@ -450,11 +482,41 @@ func TestCameraRegistrationSavesIDLessSourceKeyPoliciesAtomically(t *testing.T) 
 	}
 }
 
-func newPolicyRouteServer(t *testing.T, applier policyApplyFunc) (testRouteServer, store.Camera) {
+func TestCameraRegistrationNormalizesSnapshotOnlyCandidateToRecordingSource(t *testing.T) {
+	server := newCameraMutationRouteServer(t, &fakeRouteCameraProber{})
+	body := map[string]any{
+		"name": "Snapshot Normalized", "streamName": "snapshot-normalized", "url": routeSyntheticRTSPURL("snapshot-source"),
+		"streams": []map[string]any{{"roleHint": "snapshot", "label": "snapshot", "url": routeSyntheticRTSPURL("snapshot-source"), "profileToken": "snapshot"}},
+		"streamOutputs": []map[string]any{
+			{"purpose": "recording", "sourceKey": "recording", "videoMode": "copy", "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "source", "activation": "on_demand"},
+			{"purpose": "live", "sourceKey": "recording", "videoMode": "auto", "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "none", "activation": "on_demand"},
+			{"purpose": "focus", "sourceKey": "recording", "videoMode": "auto", "maxWidth": 1920, "maxHeight": 1080, "maxFPS": nil, "audioMode": "none", "activation": "on_demand"},
+		},
+	}
+	encoded, _ := json.Marshal(body)
+	status, payload := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras", string(encoded), trustedConsoleHeaders())
+	if status != http.StatusOK {
+		t.Fatalf("snapshot registration status = %d payload=%#v", status, payload)
+	}
+	stored, err := server.db.GetCameraByStream(t.Context(), "snapshot-normalized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Streams) != 1 || stored.Streams[0].SourceKey != "recording" || stored.Streams[0].Role != store.CameraStreamRoleRecording {
+		t.Fatalf("normalized inputs = %#v", stored.Streams)
+	}
+	for _, output := range stored.Outputs {
+		if output.SourceKey != "recording" {
+			t.Fatalf("normalized output = %#v", output)
+		}
+	}
+}
+
+func newPolicyRouteServer(t *testing.T, applier policyApplier) (testRouteServer, store.Camera) {
 	return newPolicyRouteServerWithProber(t, applier, &fakeRouteCameraProber{})
 }
 
-func newPolicyRouteServerWithProber(t *testing.T, applier policyApplyFunc, prober camera.Prober) (testRouteServer, store.Camera) {
+func newPolicyRouteServerWithProber(t *testing.T, applier policyApplier, prober camera.Prober) (testRouteServer, store.Camera) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "camstation.db"))
@@ -492,7 +554,7 @@ func newPolicyRouteServerWithProber(t *testing.T, applier policyApplyFunc, probe
 		t.Fatal(err)
 	}
 	if applier == nil {
-		applier = func(context.Context) stream.PolicyApplyResult { return stream.PolicyApplyResult{Applied: true} }
+		applier = policyApplyFunc(func(context.Context) stream.PolicyApplyResult { return stream.PolicyApplyResult{Applied: true} })
 	}
 	streamer := &fakeStreamController{status: stream.Status{Installed: true, Running: true}}
 	handler, err := (routeDeps{db: db, prober: prober, streamer: streamer, policyApplier: applier}).handler()
@@ -505,9 +567,9 @@ func newPolicyRouteServerWithProber(t *testing.T, applier policyApplyFunc, probe
 func streamOutputRequestBody(t *testing.T, revision int64, liveMode store.CameraVideoMode) string {
 	t.Helper()
 	body := map[string]any{"expectedDesiredRevision": revision, "outputs": []map[string]any{
-		{"purpose": "recording", "sourceKey": "recording", "videoMode": "copy", "maxWidth": nil, "maxHeight": nil, "maxFps": nil, "audioMode": "source", "activation": "on_demand"},
-		{"purpose": "live", "sourceKey": "recording", "videoMode": liveMode, "maxWidth": nil, "maxHeight": nil, "maxFps": nil, "audioMode": "none", "activation": "on_demand"},
-		{"purpose": "focus", "sourceKey": "recording", "videoMode": "h264", "maxWidth": 1920, "maxHeight": 1080, "maxFps": nil, "audioMode": "none", "activation": "on_demand"},
+		{"purpose": "recording", "sourceKey": "recording", "videoMode": "copy", "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "source", "activation": "on_demand"},
+		{"purpose": "live", "sourceKey": "recording", "videoMode": liveMode, "maxWidth": nil, "maxHeight": nil, "maxFPS": nil, "audioMode": "none", "activation": "on_demand"},
+		{"purpose": "focus", "sourceKey": "recording", "videoMode": "h264", "maxWidth": 1920, "maxHeight": 1080, "maxFPS": 15, "audioMode": "none", "activation": "on_demand"},
 	}}
 	encoded, err := json.Marshal(body)
 	if err != nil {

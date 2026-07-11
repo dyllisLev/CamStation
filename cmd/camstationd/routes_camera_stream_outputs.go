@@ -121,7 +121,11 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 			return
 		}
 		defer release()
-		result := d.applyPolicies(r.Context())
+		result := d.policyApplier.ApplyExpected(r.Context(), cameraRow.ID, *req.ExpectedDesiredRevision)
+		if result.RevisionConflict {
+			writeSafeError(w, http.StatusConflict, store.ErrDesiredRevisionMismatch)
+			return
+		}
 		if err := d.probeOutputs(r.Context(), cameraRow.StreamName); err != nil {
 			writeSafeError(w, http.StatusInternalServerError, err)
 			return

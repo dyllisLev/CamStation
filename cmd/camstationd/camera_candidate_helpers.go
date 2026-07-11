@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"camstation/internal/cameraprofile"
 	"camstation/internal/store"
 )
@@ -90,30 +88,15 @@ func candidateByProfileToken(candidates []cameraprofile.StreamCandidate, token s
 }
 
 func toStoreStreams(base string, candidates []cameraprofile.StreamCandidate, state string) []store.CameraStream {
-	streams := make([]store.CameraStream, 0, len(candidates))
-	used := map[string]int{}
-	for _, candidate := range candidates {
-		if candidate.URL == "" {
-			continue
-		}
-		role := store.CameraStreamRole(candidate.RoleHint)
-		if role == "" {
-			role = store.CameraStreamRoleRecording
-		}
-		name := roleStreamName(base, role)
-		if used[name] > 0 {
-			used[name]++
-			name = fmt.Sprintf("%s-%d", name, used[name])
-		} else {
-			used[name] = 1
-		}
+	streams := make([]store.CameraStream, 0, 2)
+	appendCandidate := func(candidate cameraprofile.StreamCandidate, role store.CameraStreamRole) {
 		streams = append(streams, store.CameraStream{
 			Role:             role,
 			SourceKey:        string(role),
 			Label:            candidate.Label,
 			Source:           candidate.Source,
 			URL:              candidate.URL,
-			Go2RTCStreamName: name,
+			Go2RTCStreamName: roleStreamName(base, role),
 			Codec:            candidate.Codec,
 			Width:            candidate.Width,
 			Height:           candidate.Height,
@@ -122,6 +105,36 @@ func toStoreStreams(base string, candidates []cameraprofile.StreamCandidate, sta
 			ProfileToken:     candidate.ProfileToken,
 			State:            state,
 		})
+	}
+	var recording, live *cameraprofile.StreamCandidate
+	for i := range candidates {
+		if candidates[i].URL == "" {
+			continue
+		}
+		switch candidates[i].RoleHint {
+		case cameraprofile.StreamRoleRecording:
+			if recording == nil {
+				recording = &candidates[i]
+			}
+		case cameraprofile.StreamRoleLive:
+			if live == nil {
+				live = &candidates[i]
+			}
+		}
+	}
+	if recording == nil {
+		for i := range candidates {
+			if candidates[i].URL != "" {
+				recording = &candidates[i]
+				break
+			}
+		}
+	}
+	if recording != nil {
+		appendCandidate(*recording, store.CameraStreamRoleRecording)
+	}
+	if live != nil && (recording == nil || live.URL != recording.URL) {
+		appendCandidate(*live, store.CameraStreamRoleLive)
 	}
 	return streams
 }

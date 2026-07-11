@@ -91,6 +91,27 @@ func TestApplyCoordinatorContinuesWhenNewerRevisionIsSaved(t *testing.T) {
 	}
 }
 
+func TestApplyCoordinatorExpectedRevisionCheckRunsInsideApplyLock(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 2, AppliedRevision: 2}
+	db := &fakePolicyStore{camera: camera}
+	runtime := &fakePolicyRuntime{}
+	coordinator := NewApplyCoordinator(db, runtime, &fakeRecorderHandoff{})
+
+	coordinator.mu <- struct{}{}
+	resultCh := make(chan PolicyApplyResult, 1)
+	go func() { resultCh <- coordinator.ApplyExpected(t.Context(), camera.ID, 2) }()
+	db.mu.Lock()
+	db.camera.PolicyState.DesiredRevision = 3
+	db.mu.Unlock()
+	<-coordinator.mu
+	result := <-resultCh
+	if !result.RevisionConflict || result.Applied || len(runtime.configs) != 0 {
+		t.Fatalf("stale expected apply result=%+v runtime=%+v", result, runtime)
+	}
+}
+
 func TestApplyCoordinatorRestoresActiveRecordersAndMarksFailedOnRuntimeFailure(t *testing.T) {
 	camera, output := policyFixture("hevc", "yuv420p", 8, 3840, 2160, 20)
 	camera.Outputs = threeOutputs(output)

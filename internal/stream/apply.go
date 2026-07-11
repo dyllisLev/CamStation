@@ -39,10 +39,11 @@ type ApplyCoordinator struct {
 }
 
 type PolicyApplyResult struct {
-	Applied        bool   `json:"applied"`
-	Pending        bool   `json:"pending"`
-	RecoveryFailed bool   `json:"recoveryFailed,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Applied          bool   `json:"applied"`
+	Pending          bool   `json:"pending"`
+	RecoveryFailed   bool   `json:"recoveryFailed,omitempty"`
+	RevisionConflict bool   `json:"revisionConflict,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 func NewApplyCoordinator(db policyStore, runtime policyRuntime, recorders recorderHandoff) *ApplyCoordinator {
@@ -50,6 +51,18 @@ func NewApplyCoordinator(db policyStore, runtime policyRuntime, recorders record
 }
 
 func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
+	return c.apply(ctx, nil)
+}
+
+type expectedCameraRevision struct {
+	cameraID, revision int64
+}
+
+func (c *ApplyCoordinator) ApplyExpected(ctx context.Context, cameraID, revision int64) PolicyApplyResult {
+	return c.apply(ctx, &expectedCameraRevision{cameraID: cameraID, revision: revision})
+}
+
+func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRevision) PolicyApplyResult {
 	select {
 	case c.mu <- struct{}{}:
 		defer func() { <-c.mu }()
@@ -60,6 +73,19 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 		cameras, err := c.db.ListCameras(ctx, true)
 		if err != nil {
 			return PolicyApplyResult{Error: err.Error()}
+		}
+		if expected != nil {
+			matched := false
+			for _, camera := range cameras {
+				if camera.ID == expected.cameraID {
+					matched = camera.PolicyState.DesiredRevision == expected.revision
+					break
+				}
+			}
+			if !matched {
+				return PolicyApplyResult{RevisionConflict: true, Error: store.ErrDesiredRevisionMismatch.Error()}
+			}
+			expected = nil
 		}
 		config, results, err := renderPolicyConfig(cameras, false)
 		if err != nil {

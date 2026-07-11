@@ -80,6 +80,22 @@ func TestEvents_QueryFiltersSearchCursorDateAndRedactsPublicPayloads(t *testing.
 	}
 }
 
+func TestRedactEventMasksInternalGo2RTCEndpointsRecursively(t *testing.T) {
+	event := RedactEvent(Event{
+		Message: "dial http://127.0.0.1:1984/api/streams failed",
+		Details: map[string]any{"output": "rtsp://admin:secret@localhost:8554/private", "nested": []any{"http://localhost:1984/api"}},
+	})
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"127.0.0.1", "localhost", ":1984", ":8554", "admin", "secret"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("public event leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func TestEvents_PruneRequiresSafeFilterAndAutoIncidentDeduplicatesErrorEvents(t *testing.T) {
 	t.Parallel()
 

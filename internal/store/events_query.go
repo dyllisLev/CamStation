@@ -44,6 +44,7 @@ var (
 	discordWebhookRE = regexp.MustCompile(`https://(?:discord\.com|discordapp\.com)/api/webhooks/[A-Za-z0-9._~%-]+/[A-Za-z0-9._~%-]+`)
 	cameraURLRE      = regexp.MustCompile(`(?i)\b(?:rtsp|rtsps|onvif)://[^\s"']+|\bhttps?://[^/\s"']*(?:camera|cam|nvr|dvr|onvif)[^\s"']*`)
 	credentialURLRE  = regexp.MustCompile(`(?i)\bhttps?://[^/\s"']+:[^@\s"']+@[^\s"']+`)
+	internalGo2RTCRE = regexp.MustCompile(`(?i)(?:https?|rtsp)://(?:[^/@\s"']+@)?(?:127\.0\.0\.1|localhost):(?:1984|8554)[^\s"']*|(?:127\.0\.0\.1|localhost):(?:1984|8554)\b`)
 )
 
 func (d *DB) QueryEvents(ctx context.Context, query EventQuery) (EventPage, error) {
@@ -153,6 +154,7 @@ func redactValue(value any) any {
 
 func redactString(value string) string {
 	value = RedactText(value)
+	value = internalGo2RTCRE.ReplaceAllString(value, "[internal-go2rtc]")
 	value = discordWebhookRE.ReplaceAllString(value, "[redacted-discord-webhook]")
 	value = credentialURLRE.ReplaceAllString(value, "[redacted-url]")
 	return cameraURLRE.ReplaceAllString(value, "[redacted-camera-url]")
