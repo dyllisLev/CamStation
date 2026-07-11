@@ -244,14 +244,14 @@ Expected: list returns `PRESET_0`, successful delete leaves the DB name, and fai
 After `ListPresets` succeeds, load names, replace only matching tokens, then reconcile the complete token list:
 
 ```go
-names, err := d.db.ListCameraPresetNames(ctx, camera.ID)
+names, err := d.db.ListCameraPresetNames(r.Context(), camera.ID)
 if err != nil { d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err); writeCameraControlError(w, err); return }
 tokens := make([]string, 0, len(presets))
 for i := range presets {
 	tokens = append(tokens, presets[i].Token)
 	if name, ok := names[presets[i].Token]; ok { presets[i].Name = name }
 }
-if err := d.db.ReconcileCameraPresetNames(ctx, camera.ID, tokens); err != nil {
+if err := d.db.ReconcileCameraPresetNames(r.Context(), camera.ID, tokens); err != nil {
 	d.recordCameraControlFailure(r.Context(), camera.StreamName, "preset_list", err)
 	writeCameraControlError(w, err)
 	return
@@ -261,7 +261,7 @@ if err := d.db.ReconcileCameraPresetNames(ctx, camera.ID, tokens); err != nil {
 After `CreatePreset`, persist `req.Name`. On failure, best-effort remove the new device preset using `context.WithoutCancel` and return the existing sanitized control error:
 
 ```go
-if err := d.db.UpsertCameraPresetName(ctx, camera.ID, preset.Token, req.Name); err != nil {
+if err := d.db.UpsertCameraPresetName(r.Context(), camera.ID, preset.Token, req.Name); err != nil {
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(r.Context()), cameraControlRouteTimeout)
 	defer cancelCleanup()
 	_ = d.cameraController.DeletePreset(cleanupCtx, camera, preset.Token)
@@ -278,7 +278,7 @@ After successful `DeletePreset` and before the success event:
 
 ```go
 if delete {
-	if err := d.db.DeleteCameraPresetName(ctx, camera.ID, req.Token); err != nil {
+	if err := d.db.DeleteCameraPresetName(r.Context(), camera.ID, req.Token); err != nil {
 		d.recordCameraControlFailure(r.Context(), camera.StreamName, operation, err)
 		writeCameraControlError(w, err)
 		return
