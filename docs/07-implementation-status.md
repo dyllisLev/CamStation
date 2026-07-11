@@ -8,7 +8,7 @@ This document records the current implementation state so the next session can c
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
 - Active branch used for this work: `camstation2-initial`
-- Latest implementation commit at the time of this note: `Add capacity cleanup for recordings`
+- Latest implementation commit at the time of this note: `f3dee5c guard rtsp probe fallback by applied graph`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.29:18080/`
 - Main monitoring page: `http://10.0.0.29:18080/live`
 
@@ -34,6 +34,14 @@ This document records the current implementation state so the next session can c
 - Camera scan/probe/preview targets are bounded to safe private camera targets and redacted public errors.
 - Camera URL redaction in API responses and events
 - ffprobe-based camera probe helper
+- Persistent per-camera stream-output policy:
+  - immutable `recording` / `live` input keys and exactly three `recording` / `live` / `focus` outputs
+  - desired/applied revisions stored in SQLite with optimistic revision checks
+  - per-output source, `auto` / `copy` / software H.264, resolution, FPS, audio, and activation settings
+  - serialized go2rtc/recorder apply, last-good rollback, 200/202/409/503 result separation
+  - manual and bulk input probe plus reapply APIs
+  - RTSP probe fallback through the current applied private go2rtc input when a single-connection camera is occupied; HTTP-FLV remains original-source probed
+  - public DTOs restore desired/applied/effective/verification/runtime state without exposing source URLs or internal endpoints
 - go2rtc managed as a child process by `camstationd`
 - go2rtc API/RTSP bound locally, with CamStation proxying allowed player paths
 - Health, events, stream status, stream restart, camera probe endpoints
@@ -78,8 +86,9 @@ This document records the current implementation state so the next session can c
 - Focus behavior:
   - `집중 보기` no longer opens a new player window
   - clicking `집중 보기` toggles in-page tile enlargement
-  - normal `/live` tiles use the camera's live role stream
-  - the enlarged focus tile uses the recording role stream, falling back to the live or stable stream name when unavailable
+  - normal `/live` tiles use the applied per-camera live output
+  - the enlarged focus tile uses the applied per-camera focus output
+  - the focused camera's normal live MSE component is unmounted while focus is active, avoiding simultaneous live/focus transcodes
   - enlarged tile button changes to `집중 보기 종료`
   - double-click on a tile also toggles in-page tile enlargement
   - `Escape` exits the in-page tile enlargement
@@ -126,6 +135,10 @@ This document records the current implementation state so the next session can c
   - exposes camera-focused update/delete actions
   - provides a separate profile library for reusable manufacturer/model templates
   - profile-template editing never asks for camera IP, username, or password
+  - registration and editing share the same three-output stream policy form and validation model
+  - policy drafts survive the 10-second camera refetch, expose revision conflicts, and reload fresh server values after 409
+  - 202 saved-but-pending state is shown as a warning instead of ordinary success
+  - each policy card shows advertised/detected input plus desired/applied/effective/runtime state
 
 ## Stream And Recording Policy
 
@@ -157,8 +170,8 @@ go build -o camstationd ./cmd/camstationd
 
 Focused stream selection verification:
 
-- Normal tiles select the live role stream.
-- `집중 보기` selects the recording role stream and falls back to the live or stable stream name when unavailable.
+- Normal tiles select the applied live output.
+- `집중 보기` selects the applied focus output and suspends that camera's normal tile connection.
 - Changing focus view does not reconfigure or restart recorder workers.
 
 Browser/Playwright verification performed:
@@ -216,6 +229,15 @@ Browser/Playwright verification performed:
   - `/live` showed the capability-enabled PTZ button and full replacement panel; selecting a non-PTZ camera closed the panel and disabled the button
   - wheel zoom/reset, focus view, layout-save presence, timeline presence, and disabled listen/talk/siren states were checked in the same browser session
   - screenshot evidence: `data/diagnostics/live-ptz-panel.png` (runtime evidence, intentionally untracked)
+- Per-camera stream policy rollout on 2026-07-11:
+  - full Go tests, web tests (16/16), lint, production build, daemon build, controlled restart, and `camstationctl.sh verify` passed
+  - all eight registered cameras have three DB-backed outputs and an `applied` desired/applied revision
+  - `소방서1` recording/live outputs are H.264 copy with `transcoding=false`; focus remains the intentional capped software-H.264 path
+  - `소방서5` recording is HEVC 3840x2160 copy, live is H.264 640x360, and focus is H.264 1920x1080
+  - `소방서5` recording/live/focus output verification is healthy after reapply and restart
+  - PTZ/home capability state survived migration and restart (`소방서5` home remains unavailable)
+  - 202 rollback and 503 unsafe-recovery behavior were verified with non-disruptive route/coordinator tests
+  - public APIs, events, runtime logs, and embedded assets contain no unredacted camera credentials
 
 ## Important Corrections Learned
 
