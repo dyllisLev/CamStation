@@ -1,7 +1,7 @@
 # Live PTZ Camera Control Design
 
 **Date:** 2026-07-11 KST
-**Status:** Review updates applied; awaiting re-approval
+**Status:** Approved for implementation planning
 
 ## Goal
 
