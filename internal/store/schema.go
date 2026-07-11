@@ -149,6 +149,15 @@ func (d *DB) Migrate(ctx context.Context) error {
 				updated_at TEXT NOT NULL,
 				FOREIGN KEY(camera_id) REFERENCES cameras(id) ON DELETE CASCADE
 			)`,
+		`CREATE TABLE IF NOT EXISTS camera_preset_names (
+			camera_id INTEGER NOT NULL,
+			preset_token TEXT NOT NULL,
+			name TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (camera_id, preset_token),
+			FOREIGN KEY (camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_camera_streams_camera_role
 				ON camera_streams(camera_id, role)`,
 		`CREATE TABLE IF NOT EXISTS layouts (
