@@ -204,7 +204,7 @@ func TestCameraPolicyPublicPrivateReadsRedactSecretsAndKeepMetadata(t *testing.T
 	for _, output := range saved.Outputs {
 		result := CameraOutputApplyResult{Purpose: output.Purpose, Policy: CameraOutputPolicySnapshot{SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode, AudioMode: output.AudioMode, Activation: output.Activation}}
 		if output.Purpose == CameraOutputRecording {
-			result.Verification = CameraOutputVerification{VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080, FPS: 29.97, CheckedAt: time.Now().UTC().Truncate(time.Microsecond), Error: "verify rtsp://admin:secret@10.0.0.2/out failed"}
+			result.Verification = CameraOutputVerification{VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080, FPS: 29.97, Transcoding: true, CheckedAt: time.Now().UTC().Truncate(time.Microsecond), Error: "verify rtsp://admin:secret@10.0.0.2/out failed"}
 		}
 		results = append(results, result)
 	}
@@ -230,7 +230,7 @@ func TestCameraPolicyPublicPrivateReadsRedactSecretsAndKeepMetadata(t *testing.T
 			t.Fatalf("public error leaked: %q", value)
 		}
 	}
-	if private[0].URL == "" || private[0].Streams[0].URL == "" || private[0].Streams[0].DetectedVideoCodec != "h264" || private[0].Outputs[0].AppliedPolicy.VideoMode != CameraVideoCopy {
+	if private[0].URL == "" || private[0].Streams[0].URL == "" || private[0].Streams[0].DetectedVideoCodec != "h264" || private[0].Outputs[0].AppliedPolicy.VideoMode != CameraVideoCopy || !private[0].Outputs[0].Verification.Transcoding {
 		t.Fatalf("private read lost data: %#v", private[0])
 	}
 }
@@ -408,6 +408,23 @@ func TestCoordinatorResultsRespectNewerDesiredRevision(t *testing.T) {
 	}
 	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, oldRevision-1, results); !errors.Is(err, ErrAppliedRevisionRegression) {
 		t.Fatalf("regressed applied revision error = %v", err)
+	}
+}
+
+func TestMarkCameraPoliciesAppliedRollsBackWholeSnapshot(t *testing.T) {
+	db := openMigratedStore(t)
+	first := mustCamera(t, db, "bulk-first")
+	second := mustCamera(t, db, "bulk-second")
+	err := db.MarkCameraPoliciesApplied(t.Context(), []CameraPolicyApplySnapshot{
+		{CameraID: first.ID, Revision: first.PolicyState.DesiredRevision, Results: applyResults(first)},
+		{CameraID: second.ID + 1000, Revision: second.PolicyState.DesiredRevision, Results: applyResults(second)},
+	})
+	if err == nil {
+		t.Fatal("expected second snapshot to fail")
+	}
+	got := mustGetCamera(t, db, first.StreamName)
+	if got.PolicyState.AppliedRevision != 0 || got.Outputs[0].AppliedPolicy.SourceKey != "" {
+		t.Fatalf("first snapshot advanced despite rollback: %#v %#v", got.PolicyState, got.Outputs[0].AppliedPolicy)
 	}
 }
 

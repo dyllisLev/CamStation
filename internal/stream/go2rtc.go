@@ -1,16 +1,16 @@
 package stream
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +23,9 @@ type Go2RTC struct {
 	configPath string
 	apiURL     string
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	applyMu sync.Mutex
 }
 
 type Status struct {
@@ -51,56 +52,50 @@ func NewGo2RTC(configPath string) *Go2RTC {
 }
 
 func (g *Go2RTC) Ensure(ctx context.Context, cameras []store.Camera) error {
-	if err := g.WriteConfig(cameras); err != nil {
+	config, preserve, err := g.startupConfig(cameras)
+	if err != nil {
 		return err
 	}
-	return g.Start(ctx)
+	if preserve {
+		if err := writeFileAtomic(g.configPath, config); err != nil {
+			return err
+		}
+		return g.Start(ctx)
+	}
+	return g.ApplyConfig(ctx, config)
 }
 
 func (g *Go2RTC) WriteConfig(cameras []store.Camera) error {
-	if err := os.MkdirAll(filepath.Dir(g.configPath), 0o755); err != nil {
+	config, _, err := g.startupConfig(cameras)
+	if err != nil {
 		return err
 	}
+	return writeFileAtomic(g.configPath, config)
+}
 
-	var buf bytes.Buffer
-	buf.WriteString("api:\n")
-	buf.WriteString("  listen: 127.0.0.1:1984\n")
-	buf.WriteString("rtsp:\n")
-	buf.WriteString("  listen: 127.0.0.1:8554\n")
-	buf.WriteString("webrtc:\n")
-	buf.WriteString("  listen: 0.0.0.0:8555\n")
-	candidates := localCandidates(8555)
-	if len(candidates) > 0 {
-		buf.WriteString("  candidates:\n")
-		for _, candidate := range candidates {
-			buf.WriteString(fmt.Sprintf("    - %s\n", quoteYAML(candidate)))
+func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
+	preserve := false
+	for _, camera := range cameras {
+		state := camera.PolicyState
+		if state.AppliedRevision > 0 && (state.DesiredRevision != state.AppliedRevision || state.ApplyState == store.CameraApplyFailed) {
+			preserve = true
+			break
 		}
 	}
-	buf.WriteString("streams:\n")
-	if len(cameras) == 0 {
-		buf.WriteString("  {}\n")
-	} else {
-		for _, camera := range cameras {
-			wroteRoleStream := false
-			for _, stream := range camera.Streams {
-				if stream.URL == "" || stream.Go2RTCStreamName == "" {
-					continue
-				}
-				buf.WriteString(fmt.Sprintf("  %s:\n", yamlKey(stream.Go2RTCStreamName)))
-				buf.WriteString(fmt.Sprintf("    - %s\n", quoteYAML(stream.URL)))
-				wroteRoleStream = true
-			}
-			if wroteRoleStream {
-				continue
-			}
-			if camera.URL == "" || camera.StreamName == "" {
-				continue
-			}
-			buf.WriteString(fmt.Sprintf("  %s:\n", yamlKey(camera.StreamName)))
-			buf.WriteString(fmt.Sprintf("    - %s\n", quoteYAML(camera.URL)))
+	if !preserve {
+		config, err := renderStartupConfig(cameras)
+		return config, false, err
+	}
+	for _, path := range []string{g.configPath + ".last-good", g.configPath} {
+		config, err := os.ReadFile(path)
+		if err == nil {
+			return config, true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, false, err
 		}
 	}
-	return os.WriteFile(g.configPath, buf.Bytes(), 0o600)
+	return nil, false, fmt.Errorf("pending camera policy has no last-known-good stream configuration")
 }
 
 func (g *Go2RTC) Start(ctx context.Context) error {
@@ -136,17 +131,29 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	if g.cmd == cmd && cmd.Process != nil && cmd.ProcessState == nil {
+		_ = cmd.Process.Kill()
+		g.cmd = nil
+	}
 	return fmt.Errorf("go2rtc did not become healthy on %s", g.apiURL)
 }
 
 func (g *Go2RTC) Restart(ctx context.Context, cameras []store.Camera) error {
+	config, _, err := renderPolicyConfig(cameras, false)
+	if err != nil {
+		return err
+	}
+	return g.ApplyConfig(ctx, config)
+}
+
+func (g *Go2RTC) restartProcess(ctx context.Context) error {
 	g.mu.Lock()
 	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
 		_ = g.cmd.Process.Kill()
 		g.cmd = nil
 	}
 	g.mu.Unlock()
-	return g.Ensure(ctx, cameras)
+	return g.Start(ctx)
 }
 
 func (g *Go2RTC) Status(ctx context.Context) Status {
@@ -213,6 +220,9 @@ func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 		}
 		item.State = runtimeState(item.ProducerCount, item.ConsumerCount)
 		publicName := publicStreamName(streamName)
+		if publicName == "" {
+			continue
+		}
 		if existing, ok := runtime[publicName]; ok {
 			item.ProducerCount += existing.ProducerCount
 			item.ConsumerCount += existing.ConsumerCount
@@ -225,6 +235,9 @@ func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 }
 
 func publicStreamName(streamName string) string {
+	if strings.HasPrefix(streamName, privateSourcePrefix) {
+		return ""
+	}
 	if strings.Contains(streamName, "://") {
 		return store.RedactURL(streamName)
 	}
@@ -265,17 +278,8 @@ func healthy(ctx context.Context, apiURL string) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 500
 }
 
-func yamlKey(value string) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '-'
-	}, value)
-}
-
 func quoteYAML(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	return strconv.Quote(value)
 }
 
 func localCandidates(port int) []string {

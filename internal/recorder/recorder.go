@@ -56,9 +56,11 @@ type WorkerStatus struct {
 }
 
 type worker struct {
-	camera  store.Camera
-	input   string
-	manager *Manager
+	camera          store.Camera
+	input           string
+	audioMode       store.CameraAudioMode
+	appliedRevision int64
+	manager         *Manager
 
 	mu             sync.Mutex
 	state          string
@@ -130,34 +132,74 @@ func (m *Manager) Reconcile(cameras []store.Camera) {
 }
 
 func (m *Manager) Start(camera store.Camera) error {
-	camera = recordingCamera(camera)
-	if camera.StreamName == "" {
-		return fmt.Errorf("camera stream name is required")
+	spec, err := recordingSpec(camera, m.rtspBase)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.workers[camera.StreamName]; ok {
-		return nil
+	if existing, ok := m.workers[spec.camera.StreamName]; ok {
+		if existing.audioMode == spec.audioMode && existing.appliedRevision == spec.camera.PolicyState.AppliedRevision {
+			m.mu.Unlock()
+			return nil
+		}
+		delete(m.workers, spec.camera.StreamName)
+		m.mu.Unlock()
+		existing.stopWorker()
+		m.mu.Lock()
 	}
-	input := fmt.Sprintf("%s/%s", m.rtspBase, camera.StreamName)
 	w := &worker{
-		camera:  camera,
-		input:   input,
-		manager: m,
-		state:   statusRunning,
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		camera:          spec.camera,
+		input:           spec.input,
+		audioMode:       spec.audioMode,
+		appliedRevision: spec.camera.PolicyState.AppliedRevision,
+		manager:         m,
+		state:           statusRunning,
+		stop:            make(chan struct{}),
+		done:            make(chan struct{}),
 	}
-	m.workers[camera.StreamName] = w
+	m.workers[spec.camera.StreamName] = w
+	m.mu.Unlock()
 	go w.run()
 	return nil
 }
 
 func recordingCamera(camera store.Camera) store.Camera {
+	for _, output := range camera.Outputs {
+		if output.Purpose == store.CameraOutputRecording && output.AppliedPolicy.SourceKey != "" {
+			camera.StreamName = output.StreamName
+			return camera
+		}
+	}
 	if camera.RecordingStreamName != "" {
 		camera.StreamName = camera.RecordingStreamName
 	}
 	return camera
+}
+
+type recordSpec struct {
+	camera    store.Camera
+	input     string
+	audioMode store.CameraAudioMode
+}
+
+func recordingSpec(camera store.Camera, rtspBase string) (recordSpec, error) {
+	audioMode := store.CameraAudioSource
+	for _, output := range camera.Outputs {
+		if output.Purpose == store.CameraOutputRecording && output.AppliedPolicy.SourceKey != "" {
+			camera.StreamName = output.StreamName
+			audioMode = output.AppliedPolicy.AudioMode
+			break
+		}
+	}
+	camera = recordingCamera(camera)
+	if camera.StreamName == "" {
+		return recordSpec{}, fmt.Errorf("camera recording stream name is required")
+	}
+	return recordSpec{
+		camera:    camera,
+		input:     strings.TrimRight(rtspBase, "/") + "/" + camera.StreamName,
+		audioMode: audioMode,
+	}, nil
 }
 
 func (m *Manager) Stop(streamName string) {
@@ -171,16 +213,32 @@ func (m *Manager) Stop(streamName string) {
 }
 
 func (m *Manager) StopAll() {
+	_ = m.SuspendActive()
+}
+
+func (m *Manager) SuspendActive() []store.Camera {
 	m.mu.Lock()
 	workers := make([]*worker, 0, len(m.workers))
+	cameras := make([]store.Camera, 0, len(m.workers))
 	for streamName, worker := range m.workers {
 		delete(m.workers, streamName)
 		workers = append(workers, worker)
+		cameras = append(cameras, worker.camera)
 	}
 	m.mu.Unlock()
 	for _, worker := range workers {
 		worker.stopWorker()
 	}
+	return cameras
+}
+
+func (m *Manager) RestoreActive(cameras []store.Camera) error {
+	for _, camera := range cameras {
+		if err := m.Start(camera); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) SetAfterSegmentClosed(fn func()) {
@@ -265,7 +323,7 @@ func (w *worker) runOnce() error {
 		return err
 	}
 
-	cmdArgs := BuildFFmpegArgsForCamera(w.input, outputDir, w.manager.segmentMinutes, archiveName)
+	cmdArgs := BuildFFmpegArgsForPolicy(w.input, outputDir, w.manager.segmentMinutes, archiveName, w.audioMode)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = append(os.Environ(), "TZ=Asia/Seoul")
 	stderr, err := cmd.StderrPipe()
@@ -423,6 +481,10 @@ func BuildFFmpegArgs(input, outputDir string, segmentMinutes int) []string {
 }
 
 func BuildFFmpegArgsForCamera(input, outputDir string, segmentMinutes int, archiveName string) []string {
+	return BuildFFmpegArgsForPolicy(input, outputDir, segmentMinutes, archiveName, store.CameraAudioSource)
+}
+
+func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archiveName string, audioMode store.CameraAudioMode) []string {
 	if segmentMinutes <= 0 {
 		segmentMinutes = 30
 	}
@@ -431,23 +493,31 @@ func BuildFFmpegArgsForCamera(input, outputDir string, segmentMinutes int, archi
 		filenamePattern = archiveName + "_" + filenamePattern
 	}
 	outputPattern := filepath.Join(outputDir, filenamePattern)
-	return []string{
+	args := []string{
 		"ffmpeg", "-y",
 		"-nostats",
 		"-fflags", "+genpts",
 		"-rtsp_transport", "tcp",
 		"-i", input,
 		"-c:v", "copy",
-		"-af", "asetpts=PTS-STARTPTS",
-		"-c:a", "aac",
+	}
+	switch audioMode {
+	case store.CameraAudioNone:
+		args = append(args, "-an")
+	case store.CameraAudioAAC:
+		args = append(args, "-c:a", "copy")
+	default:
+		args = append(args, "-af", "asetpts=PTS-STARTPTS", "-c:a", "aac")
+	}
+	return append(args,
 		"-f", "segment",
-		"-segment_time", strconv.Itoa(segmentMinutes * 60),
+		"-segment_time", strconv.Itoa(segmentMinutes*60),
 		"-segment_atclocktime", "1",
 		"-reset_timestamps", "1",
 		"-strftime", "1",
 		"-avoid_negative_ts", "make_zero",
 		outputPattern,
-	}
+	)
 }
 
 func RecordingArchiveName(cameraName, streamName string) string {

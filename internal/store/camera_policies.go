@@ -247,7 +247,7 @@ func validateCameraOutputs(outputs []CameraOutput) error {
 func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecrets bool) ([]CameraOutput, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT o.id,o.camera_id,o.purpose,o.stream_name,o.source_stream_id,s.source_key,
 		o.video_mode,o.max_width,o.max_height,o.max_fps,o.audio_mode,o.activation,o.applied_policy_json,
-		o.verified_video_codec,o.verified_audio_codec,o.verified_width,o.verified_height,o.verified_fps,o.verified_at,
+		o.verified_video_codec,o.verified_audio_codec,o.verified_width,o.verified_height,o.verified_fps,o.verified_transcoding,o.verified_at,
 		o.verification_error,o.created_at,o.updated_at
 		FROM camera_outputs o JOIN camera_streams s ON s.id=o.source_stream_id WHERE o.camera_id=?
 		ORDER BY CASE o.purpose WHEN 'recording' THEN 0 WHEN 'live' THEN 1 ELSE 2 END`, cameraID)
@@ -260,12 +260,13 @@ func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecre
 		var output CameraOutput
 		var maxWidth, maxHeight sql.NullInt64
 		var maxFPS sql.NullFloat64
+		var transcoding int
 		var applied, verifiedAt, createdAt, updatedAt string
 		var nullableVerifiedAt sql.NullString
 		if err := rows.Scan(&output.ID, &output.CameraID, &output.Purpose, &output.StreamName, &output.SourceStreamID, &output.SourceKey,
 			&output.VideoMode, &maxWidth, &maxHeight, &maxFPS, &output.AudioMode, &output.Activation, &applied,
 			&output.Verification.VideoCodec, &output.Verification.AudioCodec, &output.Verification.Width, &output.Verification.Height,
-			&output.Verification.FPS, &nullableVerifiedAt, &output.Verification.Error, &createdAt, &updatedAt); err != nil {
+			&output.Verification.FPS, &transcoding, &nullableVerifiedAt, &output.Verification.Error, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		if maxWidth.Valid {
@@ -281,6 +282,7 @@ func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecre
 			output.MaxFPS = &v
 		}
 		_ = json.Unmarshal([]byte(applied), &output.AppliedPolicy)
+		output.Verification.Transcoding = transcoding != 0
 		verifiedAt = nullableVerifiedAt.String
 		output.Verification.CheckedAt, _ = time.Parse(time.RFC3339Nano, verifiedAt)
 		output.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
@@ -305,7 +307,13 @@ func (d *DB) getCameraPolicyState(ctx context.Context, cameraID int64, includeSe
 	return state, err
 }
 
-func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int64, results []CameraOutputApplyResult) error {
+type CameraPolicyApplySnapshot struct {
+	CameraID int64
+	Revision int64
+	Results  []CameraOutputApplyResult
+}
+
+func validateApplyResults(results []CameraOutputApplyResult) error {
 	if len(results) != 3 {
 		return fmt.Errorf("exactly three output apply results are required")
 	}
@@ -319,19 +327,44 @@ func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int
 		}
 		seen[result.Purpose] = true
 	}
+	return nil
+}
+
+func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int64, results []CameraOutputApplyResult) error {
+	return d.MarkCameraPoliciesApplied(ctx, []CameraPolicyApplySnapshot{{CameraID: cameraID, Revision: revision, Results: results}})
+}
+
+func (d *DB) MarkCameraPoliciesApplied(ctx context.Context, snapshots []CameraPolicyApplySnapshot) error {
+	if len(snapshots) == 0 {
+		return fmt.Errorf("at least one camera apply snapshot is required")
+	}
+	for _, snapshot := range snapshots {
+		if err := validateApplyResults(snapshot.Results); err != nil {
+			return err
+		}
+	}
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	_, _, err = validateApplyRevision(ctx, tx, cameraID, revision)
+	for _, snapshot := range snapshots {
+		if err := markCameraPolicyAppliedTx(ctx, tx, snapshot); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func markCameraPolicyAppliedTx(ctx context.Context, tx *sql.Tx, snapshot CameraPolicyApplySnapshot) error {
+	_, _, err := validateApplyRevision(ctx, tx, snapshot.CameraID, snapshot.Revision)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, result := range results {
+	for _, result := range snapshot.Results {
 		if result.Policy.SourceKey == "" && result.Policy.SourceStreamID != 0 {
-			if err := tx.QueryRowContext(ctx, `SELECT source_key FROM camera_streams WHERE camera_id=? AND id=?`, cameraID, result.Policy.SourceStreamID).Scan(&result.Policy.SourceKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err := tx.QueryRowContext(ctx, `SELECT source_key FROM camera_streams WHERE camera_id=? AND id=?`, snapshot.CameraID, result.Policy.SourceStreamID).Scan(&result.Policy.SourceKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 		}
@@ -347,9 +380,9 @@ func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int
 			checkedAt = result.Verification.CheckedAt.Format(time.RFC3339Nano)
 		}
 		update, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET applied_policy_json=?,verified_video_codec=?,verified_audio_codec=?,
-			verified_width=?,verified_height=?,verified_fps=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=?`,
+			verified_width=?,verified_height=?,verified_fps=?,verified_transcoding=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=?`,
 			string(policy), result.Verification.VideoCodec, result.Verification.AudioCodec, result.Verification.Width, result.Verification.Height,
-			result.Verification.FPS, checkedAt, redactString(result.Verification.Error), now, cameraID, result.Purpose)
+			result.Verification.FPS, result.Verification.Transcoding, checkedAt, redactString(result.Verification.Error), now, snapshot.CameraID, result.Purpose)
 		if err != nil {
 			return err
 		}
@@ -360,10 +393,10 @@ func (d *DB) MarkCameraPolicyApplied(ctx context.Context, cameraID, revision int
 	if _, err := tx.ExecContext(ctx, `UPDATE camera_policy_states SET applied_revision=?,
 		apply_state=CASE WHEN desired_revision=? THEN 'applied' ELSE 'pending' END,
 		apply_state_at=?,apply_error=CASE WHEN desired_revision=? THEN '' ELSE apply_error END WHERE camera_id=?`,
-		revision, revision, now, revision, cameraID); err != nil {
+		snapshot.Revision, snapshot.Revision, now, snapshot.Revision, snapshot.CameraID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (d *DB) MarkCameraPolicyFailed(ctx context.Context, cameraID, revision int64, applyError string) error {

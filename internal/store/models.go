@@ -168,13 +168,14 @@ type CameraOutputPolicySnapshot struct {
 }
 
 type CameraOutputVerification struct {
-	VideoCodec string    `json:"videoCodec,omitempty"`
-	AudioCodec string    `json:"audioCodec,omitempty"`
-	Width      int       `json:"width,omitempty"`
-	Height     int       `json:"height,omitempty"`
-	FPS        float64   `json:"fps,omitempty"`
-	CheckedAt  time.Time `json:"checkedAt,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	VideoCodec  string    `json:"videoCodec,omitempty"`
+	AudioCodec  string    `json:"audioCodec,omitempty"`
+	Width       int       `json:"width,omitempty"`
+	Height      int       `json:"height,omitempty"`
+	FPS         float64   `json:"fps,omitempty"`
+	Transcoding bool      `json:"transcoding"`
+	CheckedAt   time.Time `json:"checkedAt,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }
 
 type CameraOutputApplyResult struct {

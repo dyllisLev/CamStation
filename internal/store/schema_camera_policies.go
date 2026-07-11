@@ -52,6 +52,7 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 			verified_width INTEGER NOT NULL DEFAULT 0,
 			verified_height INTEGER NOT NULL DEFAULT 0,
 			verified_fps REAL NOT NULL DEFAULT 0,
+			verified_transcoding INTEGER NOT NULL DEFAULT 0,
 			verified_at TEXT,
 			verification_error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -79,6 +80,9 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 		if _, err := d.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("camera policy migration failed: %w", err)
 		}
+	}
+	if err := d.addColumnIfMissing(ctx, "camera_outputs", "verified_transcoding", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 	if _, err := d.db.ExecContext(ctx, `UPDATE camera_outputs SET applied_policy_json=json_set(
 		applied_policy_json,'$.sourceKey',(SELECT source_key FROM camera_streams

@@ -70,3 +70,20 @@ func TestParseStreamRuntimeRedactsURLStreamNames(t *testing.T) {
 		}
 	}
 }
+
+func TestParseStreamRuntimeOmitsPrivateInputProducers(t *testing.T) {
+	raw := `{
+		"__camstation_source_12_recording": {"producers": [{"id": 1}], "consumers": []},
+		"camera-recording": {"producers": [{"id": 2}], "consumers": []}
+	}`
+	runtime, err := parseStreamRuntime(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := runtime["__camstation_source_12_recording"]; ok {
+		t.Fatalf("private producer exposed: %#v", runtime)
+	}
+	if _, ok := runtime["camera-recording"]; !ok {
+		t.Fatalf("public output missing: %#v", runtime)
+	}
+}
