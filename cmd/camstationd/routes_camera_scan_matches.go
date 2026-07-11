@@ -98,13 +98,11 @@ func profileTemplateMatcherStreams(streams []store.CameraProfileTemplateStream) 
 }
 
 func redactDeviceScanResult(scan cameraprofile.DeviceScanResult) cameraprofile.DeviceScanResult {
+	producerKeys := map[string]string{}
 	for channelIndex := range scan.Channels {
 		for candidateIndex := range scan.Channels[channelIndex].Candidates {
 			candidate := &scan.Channels[channelIndex].Candidates[candidateIndex]
-			if candidate.RedactedURL == "" {
-				candidate.RedactedURL = store.RedactURL(candidate.URL)
-			}
-			candidate.URL = ""
+			redactStreamCandidate(candidate, producerKeys)
 		}
 	}
 	return scan

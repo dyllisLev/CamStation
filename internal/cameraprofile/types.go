@@ -57,6 +57,7 @@ type StreamCandidate struct {
 	Source       string     `json:"source"`
 	URL          string     `json:"url,omitempty"`
 	RedactedURL  string     `json:"redactedUrl,omitempty"`
+	ProducerKey  string     `json:"producerKey,omitempty"`
 	Codec        string     `json:"codec,omitempty"`
 	Width        int        `json:"width,omitempty"`
 	Height       int        `json:"height,omitempty"`

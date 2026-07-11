@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"camstation/internal/cameraprofile"
 	"camstation/internal/store"
 )
@@ -151,16 +153,31 @@ func roleStreamName(base string, role store.CameraStreamRole) string {
 }
 
 func redactDeviceProfile(profile cameraprofile.DeviceProfile) cameraprofile.DeviceProfile {
+	producerKeys := map[string]string{}
 	for channelIndex := range profile.Channels {
 		for candidateIndex := range profile.Channels[channelIndex].Candidates {
 			candidate := &profile.Channels[channelIndex].Candidates[candidateIndex]
-			if candidate.RedactedURL == "" {
-				candidate.RedactedURL = store.RedactURL(candidate.URL)
-			}
-			candidate.URL = ""
+			redactStreamCandidate(candidate, producerKeys)
 		}
 	}
 	return profile
+}
+
+func redactStreamCandidate(candidate *cameraprofile.StreamCandidate, producerKeys map[string]string) {
+	rawURL := candidate.URL
+	candidate.ProducerKey = ""
+	if rawURL != "" {
+		key, ok := producerKeys[rawURL]
+		if !ok {
+			key = fmt.Sprintf("producer-%d", len(producerKeys)+1)
+			producerKeys[rawURL] = key
+		}
+		candidate.ProducerKey = key
+	}
+	if candidate.RedactedURL == "" {
+		candidate.RedactedURL = store.RedactURL(rawURL)
+	}
+	candidate.URL = ""
 }
 
 func sanitizeCameraSecrets(camera *store.Camera) {
