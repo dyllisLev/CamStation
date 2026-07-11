@@ -244,6 +244,12 @@ Browser/Playwright verification performed:
   - PTZ/home capability state survived migration and restart (`소방서5` home remains unavailable)
   - 202 rollback and 503 unsafe-recovery behavior were verified with non-disruptive route/coordinator tests
   - public APIs, events, runtime logs, and embedded assets contain no unredacted camera credentials
+- Live source lifecycle recovery on 2026-07-12 08:44 KST:
+  - private inputs referenced by applied live outputs are preloaded once with video and audio while public transform outputs remain on demand
+  - controlled `camstationctl.sh` restart and verify passed on `cctv2`; generated policy contained eight private live-source preload entries and no public always-output entries
+  - all eight live outputs reported one producer and one browser MSE consumer after reconnect, sustained for at least 30 seconds
+  - the post-restart runtime log contained no ordinary-live `404` or `Invalid data found when processing input` signature
+  - the legacy `cctv` server and all camera URLs, credentials, and profile settings were left unchanged
 
 ## Important Corrections Learned
 
