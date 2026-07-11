@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-06
+Last updated: 2026-07-11
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -39,6 +39,14 @@ This document records the current implementation state so the next session can c
 - Health, events, stream status, stream restart, camera probe endpoints
 - Korean default UI and language setting menu
 - Live monitoring workspace at `/live`
+- Live PTZ control for capability-advertised cameras:
+  - guarded ONVIF continuous pan/tilt/zoom and explicit Stop
+  - Stop is the final ordered command with a 2-second HTTP and device timeout backstop
+  - home navigation and confirmation-gated home-setting action
+  - camera-owned preset list/create/goto/delete
+  - `/live` toolbar capability gating and full right-panel replacement
+  - listen/talk/siren controls remain disabled until their transport or protocol is implemented
+  - final verification used one bounded real-camera movement and temporary-preset session
 - Live page based on the existing CamStation monitoring screen concept:
   - top command bar
   - live/recordings/settings navigation
@@ -185,6 +193,20 @@ Browser/Playwright verification performed:
     - delete removed the camera from the public listing
     - re-register restored `goat-yard-recording` and `goat-yard-live`
     - the original DB was restored afterward so `염소장` returned to id `6`
+- Live PTZ verification on 2026-07-11:
+  - `go test ./...`
+  - `cd web && npm run lint`
+  - `cd web && npm run build`
+  - `go build -o camstationd ./cmd/camstationd`
+  - `scripts/camstationctl.sh restart`
+  - `scripts/camstationctl.sh verify`
+  - `염소장/goat-yard` advertised continuous PTZ, home support, and 100 presets through guarded capability refresh
+  - one 20% left/Stop/right/Stop sequence ended with pan/tilt and zoom both `IDLE`
+  - one `CamStation QA` preset was created, listed, deleted, and confirmed absent
+  - home setting was not invoked; home navigation was intentionally skipped because the saved destination was not operator-confirmed
+  - `/live` showed the capability-enabled PTZ button and full replacement panel; selecting a non-PTZ camera closed the panel and disabled the button
+  - wheel zoom/reset, focus view, layout-save presence, timeline presence, and disabled listen/talk/siren states were checked in the same browser session
+  - screenshot evidence: `data/diagnostics/live-ptz-panel.png` (runtime evidence, intentionally untracked)
 
 ## Important Corrections Learned
 
