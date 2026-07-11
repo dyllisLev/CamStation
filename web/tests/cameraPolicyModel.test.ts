@@ -3,10 +3,13 @@ import test from "node:test";
 import type { Camera } from "../src/app/cameraTypes.ts";
 import {
   CAMERA_POLICY_INVALIDATION_KEYS,
+  hasDistinctLiveSource,
   draftFromCamera,
   policyMutationNotice,
+  normalizeUnavailableSources,
   recommendedStreamOutputs,
   reconcilePolicyDraft,
+  reloadedPolicyDraft,
   streamOutputUpdateRequest,
   validateStreamOutputs,
 } from "../src/pages/cameras/streamOutputPolicyModel.ts";
@@ -79,6 +82,34 @@ test("dirty draft survives same-camera refetch and exposes server revision chang
   assert.equal(reconciled.serverRevision, 8);
   assert.equal(reconciled.outputs[1].maxFPS, 15);
   assert.equal(reconciled.dirty, true);
+});
+
+test("server reload rebuilds the draft from the freshly fetched camera revision", () => {
+  const reloaded = reloadedPolicyDraft([policyCamera(9)], "fire-station-5");
+  assert.equal(reloaded?.baseRevision, 9);
+  assert.equal(reloaded?.dirty, false);
+});
+
+test("live source is available only for a distinct backend producer", () => {
+  const sameProducer = [
+    { profileToken: "main", redactedUrl: "rtsp://camera/main", roleHint: "recording", label: "main", source: "rtsp" },
+    { profileToken: "sub", redactedUrl: "rtsp://camera/main", roleHint: "live", label: "sub", source: "rtsp" },
+  ];
+  const distinctProducer = [
+    sameProducer[0],
+    { ...sameProducer[1], redactedUrl: "rtsp://camera/sub" },
+  ];
+  assert.equal(hasDistinctLiveSource(sameProducer, "main", "sub"), false);
+  assert.equal(hasDistinctLiveSource(distinctProducer, "main", "sub"), true);
+  assert.equal(hasDistinctLiveSource(distinctProducer, "main", "main"), false);
+});
+
+test("rescan keeps manual policy fields while remapping an unavailable live source", () => {
+  const outputs = recommendedStreamOutputs(true);
+  outputs[1] = { ...outputs[1], videoMode: "h264", maxFPS: 15, activation: "always" };
+  const normalized = normalizeUnavailableSources(outputs, ["recording"]);
+  assert.deepEqual(normalized[1], { ...outputs[1], sourceKey: "recording" });
+  assert.equal(outputs[1].sourceKey, "live");
 });
 
 test("recommended reset creates a local dirty draft without mutating the server snapshot", () => {

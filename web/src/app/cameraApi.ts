@@ -16,15 +16,6 @@ import type {
   UpdateStreamOutputsRequest,
   UpdateCamera,
 } from "./cameraTypes";
-import type { StreamStatus } from "./streamsViewersSystemApi";
-
-type CameraMutationResponse = {
-  readonly ok: boolean;
-  readonly camera: Camera;
-  readonly go2rtc: StreamStatus;
-  readonly warning?: string;
-};
-
 type LayoutInput = Pick<LayoutProfile, "name" | "data" | "timeline_collapsed" | "grid_cols" | "grid_rows">;
 
 export const cameraApi = {
@@ -61,14 +52,14 @@ export const cameraApi = {
       body: JSON.stringify(camera),
     }),
   createCamera: (camera: CreateCamera) =>
-    request<CameraMutationResponse>("/api/cameras", { method: "POST", body: JSON.stringify(camera) }),
+    request<StreamOutputMutationResponse>("/api/cameras", { method: "POST", body: JSON.stringify(camera) }),
   updateCamera: (streamName: string, camera: UpdateCamera) =>
-    request<CameraMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, {
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, {
       method: "PUT",
       body: JSON.stringify(camera),
     }),
   deleteCamera: (streamName: string) =>
-    request<CameraMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, { method: "DELETE" }),
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, { method: "DELETE" }),
   updateStreamOutputs: (streamName: string, input: UpdateStreamOutputsRequest) =>
     request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/stream-outputs`, {
       method: "PUT",

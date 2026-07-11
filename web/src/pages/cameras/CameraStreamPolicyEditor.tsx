@@ -1,6 +1,7 @@
 import { Loader2, RefreshCw, RotateCcw, Save, ScanSearch } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import type { Camera } from "../../app/api";
+import { api, type Camera } from "../../app/api";
 import { HttpError } from "../../app/http";
 import {
   useProbeAllCameraStreamOutputs,
@@ -16,12 +17,14 @@ import {
   policyMutationNotice,
   recommendedStreamOutputs,
   reconcilePolicyDraft,
+  reloadedPolicyDraft,
   streamOutputUpdateRequest,
   validateStreamOutputs,
   type PolicyMutationNotice,
 } from "./streamOutputPolicyModel";
 
 export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
+  const queryClient = useQueryClient();
   const save = useUpdateCameraStreamOutputs();
   const probe = useProbeCameraStreamOutputs();
   const reapply = useReapplyCameraStreamOutputs();
@@ -29,7 +32,8 @@ export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
   const [draft, setDraft] = useState(() => draftFromCamera(camera));
   const [notice, setNotice] = useState<PolicyMutationNotice | null>(null);
   const [validation, setValidation] = useState<string | null>(null);
-  const pending = save.isPending || probe.isPending || reapply.isPending || probeAll.isPending;
+  const [reloading, setReloading] = useState(false);
+  const pending = save.isPending || probe.isPending || reapply.isPending || probeAll.isPending || reloading;
   const serverChanged = draft.serverRevision !== draft.baseRevision;
   const availableSourceKeys = [...new Set((camera.streams ?? []).map((item) => item.sourceKey))];
 
@@ -37,10 +41,21 @@ export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
     setDraft((current) => reconcilePolicyDraft(current, camera));
   }, [camera]);
 
-  function reloadServer() {
-    setDraft(draftFromCamera(camera));
-    setNotice(null);
-    setValidation(null);
+  async function reloadServer() {
+    setReloading(true);
+    try {
+      await queryClient.invalidateQueries({ queryKey: ["cameras"] });
+      const cameras = await queryClient.fetchQuery({ queryKey: ["cameras"], queryFn: api.cameras, staleTime: 0 });
+      const fresh = reloadedPolicyDraft(cameras, camera.streamName);
+      if (!fresh) throw new Error("서버에서 카메라 설정을 찾을 수 없습니다.");
+      setDraft(fresh);
+      setNotice(null);
+      setValidation(null);
+    } catch (cause) {
+      setValidation(cause instanceof Error ? cause.message : "서버 설정을 다시 불러오지 못했습니다.");
+    } finally {
+      setReloading(false);
+    }
   }
 
   async function saveAndApply() {
@@ -52,7 +67,10 @@ export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
       setDraft(draftFromCamera(response.camera));
       setNotice(policyMutationNotice(response));
     } catch (cause) {
-      if (cause instanceof HttpError && cause.status === 409) setNotice(policyMutationNotice(undefined, 409));
+      if (cause instanceof HttpError && cause.status === 409) {
+        setNotice(policyMutationNotice(undefined, 409));
+        await queryClient.invalidateQueries({ queryKey: ["cameras"] });
+      }
     }
   }
 
@@ -66,7 +84,10 @@ export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
       const response = await reapply.mutateAsync({ streamName: camera.streamName, expectedDesiredRevision: draft.baseRevision });
       setNotice(policyMutationNotice(response));
     } catch (cause) {
-      if (cause instanceof HttpError && cause.status === 409) setNotice(policyMutationNotice(undefined, 409));
+      if (cause instanceof HttpError && cause.status === 409) {
+        setNotice(policyMutationNotice(undefined, 409));
+        await queryClient.invalidateQueries({ queryKey: ["cameras"] });
+      }
     }
   }
 
@@ -91,7 +112,9 @@ export function CameraStreamPolicyEditor({ camera }: { camera: Camera }) {
         {(serverChanged || notice?.state === "conflict") && (
           <div className="new-policy-warning">
             <span>서버 revision {draft.serverRevision}이 현재 초안 기준 {draft.baseRevision}과 다릅니다.</span>
-            <Button type="button" size="sm" variant="secondary" onClick={reloadServer}>서버값 다시 불러오기</Button>
+            <Button type="button" size="sm" variant="secondary" disabled={reloading} onClick={() => void reloadServer()}>
+              {reloading && <Loader2 className="animate-spin" size={14} />} 서버값 다시 불러오기
+            </Button>
           </div>
         )}
         {notice && <div className={`new-policy-notice new-${notice.state}`}>{notice.message}</div>}

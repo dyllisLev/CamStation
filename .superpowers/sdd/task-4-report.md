@@ -27,3 +27,11 @@
 
 - The API contract now uses `maxFPS` exactly; no `maxFps` compatibility shim remains in the frontend.
 - Generated embedded assets were rebuilt for verification but intentionally excluded from this source-only Task 4 commit because they were already dirty and are handled by the final integrated build.
+
+## Review follow-up
+
+- Unified camera create/update/delete response typing with the coordinator mutation contract (`saved`, `applied`, `camera`, optional `warning`) and removed the legacy required `ok/go2rtc` shape.
+- A 409 now invalidates the cameras query; the reload action explicitly fetches `GET /api/cameras` and rebuilds the draft from that fresh response instead of copying a stale prop.
+- Connection/profile rescans show and send the same policy draft. Existing manual modes and limits remain intact, while a live source deduplicated by the backend is visibly normalized to recording before validation/save.
+- Live-input availability now compares public producer identity, not only differing profile tokens, matching backend same-URL deduplication.
+- Follow-up verification: 15/15 tests, lint without warnings, and production build pass.

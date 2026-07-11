@@ -1,5 +1,5 @@
 import { Loader2, Plus, ScanSearch, Save } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Camera, CameraProfileMatch, DeviceProfile, StreamOutputSettingsTuple } from "../../app/api";
 import {
   useCameraProfileTemplates,
@@ -22,19 +22,20 @@ import { ConnectionFields } from "./CameraWorkflowFields";
 import { MatchList } from "./CameraWorkflowMatches";
 import {
   candidateLabel,
-	  defaultRoleSelection,
-	  initialForm,
-	  roleLabel,
-	  selectedCandidate,
-	  selectionReady,
-	  toScanRequest,
-	  type CameraFormState,
-	  type PreviewTarget,
-	  type RoleSelection,
-	} from "./model";
+  candidatesForChannel,
+  defaultRoleSelection,
+  initialForm,
+  roleLabel,
+  selectedCandidate,
+  selectionReady,
+  toScanRequest,
+  type CameraFormState,
+  type PreviewTarget,
+  type RoleSelection,
+} from "./model";
 import { cameraPayload, formFromCamera, type WorkflowMode } from "./CameraWorkflowModel";
 import { StreamOutputPolicyForm } from "./StreamOutputPolicyForm";
-import { draftFromCamera, recommendedStreamOutputs, validateStreamOutputs } from "./streamOutputPolicyModel";
+import { draftFromCamera, hasDistinctLiveSource, normalizeUnavailableSources, recommendedStreamOutputs, validateStreamOutputs } from "./streamOutputPolicyModel";
 import type { ProfileTemplateDraftSource } from "./profileLibraryModel";
 import { formFromDraftSource, profileInputFromForm } from "./profileLibraryModel";
 
@@ -78,22 +79,25 @@ export function CameraWorkflow({ mode, camera, onScanComplete, onProfileDraftCha
   const activePreviewPending = previewCamera.isPending || previewRegisteredCamera.isPending;
   const savePending = createCamera.isPending || updateCamera.isPending || createProfile.isPending;
   const templates = useMemo(() => profileTemplates.data ?? [], [profileTemplates.data]);
+  const resetCameraRef = useRef(camera);
+  if (resetCameraRef.current?.streamName !== camera?.streamName) resetCameraRef.current = camera;
+  const resetCamera = resetCameraRef.current;
 
   useEffect(() => {
-    setForm(mode === "edit" && camera ? formFromCamera(camera) : initialForm);
+    setForm(mode === "edit" && resetCamera ? formFromCamera(resetCamera) : initialForm);
     setScan(null);
     setMatches([]);
-    setSelectedTemplateId(mode === "edit" ? camera?.profileTemplateId : undefined);
+    setSelectedTemplateId(mode === "edit" ? resetCamera?.profileTemplateId : undefined);
     setSelection(defaultSelection);
     setPreview(null);
     setShowPassword(false);
     setConfirmDelete(false);
-    setStreamOutputs(recommendedStreamOutputs(false));
+    setStreamOutputs(mode === "edit" && resetCamera ? draftFromCamera(resetCamera).outputs : recommendedStreamOutputs(false));
     setPolicyValidation(null);
     setSaveNotice(null);
     onScanComplete?.(null);
     onProfileDraftChange?.(null);
-  }, [mode, camera, onScanComplete, onProfileDraftChange]);
+  }, [mode, resetCamera, onScanComplete, onProfileDraftChange]);
 
   useEffect(() => {
     onProfileDraftChange?.(scan && selectionReady(selection) ? { profile: scan, selection } : null);
@@ -124,7 +128,12 @@ export function CameraWorkflow({ mode, camera, onScanComplete, onProfileDraftCha
     setSelectedTemplateId(result.recommendation?.templateId);
     const nextSelection = defaultRoleSelection(result.scan);
     setSelection(nextSelection);
-    setStreamOutputs(recommendedStreamOutputs(selectionHasLiveSource(nextSelection)));
+    const hasLiveSource = selectionHasLiveSource(result.scan, nextSelection);
+    if (editMode) {
+      setStreamOutputs((current) => normalizeUnavailableSources(current, hasLiveSource ? ["recording", "live"] : ["recording"]));
+    } else {
+      setStreamOutputs(recommendedStreamOutputs(hasLiveSource));
+    }
     setPreview(null);
     onScanComplete?.(result.scan);
   }
@@ -141,12 +150,12 @@ export function CameraWorkflow({ mode, camera, onScanComplete, onProfileDraftCha
 
   async function onSave() {
     if (!scan || !selectionReady(selection)) return;
-    const availableSourceKeys = selectionHasLiveSource(selection) ? ["recording", "live"] as const : ["recording"] as const;
+    const availableSourceKeys = selectionHasLiveSource(scan, selection) ? ["recording", "live"] as const : ["recording"] as const;
     const policyError = validateStreamOutputs(streamOutputs, availableSourceKeys);
     setPolicyValidation(policyError);
     if (policyError) return;
     if (editMode) {
-      const result = await updateCamera.mutateAsync({ streamName: camera.streamName, camera: cameraPayload(mode, form, scan, selection, selectedTemplateId, camera, draftFromCamera(camera).outputs) });
+      const result = await updateCamera.mutateAsync({ streamName: camera.streamName, camera: cameraPayload(mode, form, scan, selection, selectedTemplateId, camera, streamOutputs) });
       setSaveNotice(mutationSaveNotice(result.camera, result.warning));
       return;
     }
@@ -162,14 +171,14 @@ export function CameraWorkflow({ mode, camera, onScanComplete, onProfileDraftCha
 
   async function onSaveWithNewProfile() {
     if (!scan || !selectionReady(selection)) return;
-    const availableSourceKeys = selectionHasLiveSource(selection) ? ["recording", "live"] as const : ["recording"] as const;
+    const availableSourceKeys = selectionHasLiveSource(scan, selection) ? ["recording", "live"] as const : ["recording"] as const;
     const policyError = validateStreamOutputs(streamOutputs, availableSourceKeys);
     setPolicyValidation(policyError);
     if (policyError) return;
     const created = await createProfile.mutateAsync(profileInputFromForm(formFromDraftSource({ profile: scan, selection })));
     setSelectedTemplateId(created.id);
     if (editMode) {
-      const result = await updateCamera.mutateAsync({ streamName: camera.streamName, camera: cameraPayload(mode, form, scan, selection, created.id, camera, draftFromCamera(camera).outputs) });
+      const result = await updateCamera.mutateAsync({ streamName: camera.streamName, camera: cameraPayload(mode, form, scan, selection, created.id, camera, streamOutputs) });
       setSaveNotice(mutationSaveNotice(result.camera, result.warning));
       return;
     }
@@ -242,23 +251,24 @@ export function CameraWorkflow({ mode, camera, onScanComplete, onProfileDraftCha
                 previewError={previewCamera.error?.message ?? previewRegisteredCamera.error?.message}
                 onSelectionChange={(next) => {
                   setSelection(next);
-                  if (!selectionHasLiveSource(next)) {
-                    setStreamOutputs((current) => current.map((output) => output.sourceKey === "live" ? { ...output, sourceKey: "recording" } : output) as StreamOutputSettingsTuple);
+                  if (!selectionHasLiveSource(scan, next)) {
+                    setStreamOutputs((current) => normalizeUnavailableSources(current, ["recording"]));
                   }
                 }}
                 onPreview={onPreview}
                 onClosePreview={() => setPreview(null)}
               />
-              {!editMode && (
-                <div className="new-registration-policy">
-                  <div className="new-section-title"><span>초기 스트림 정책</span><em>DB 저장 후 즉시 적용</em></div>
-                  <StreamOutputPolicyForm
-                    outputs={streamOutputs}
-                    availableSourceKeys={selectionHasLiveSource(selection) ? ["recording", "live"] : ["recording"]}
-                    onChange={(outputs) => { setStreamOutputs(outputs); setPolicyValidation(null); }}
-                  />
+              <div className="new-registration-policy">
+                <div className="new-section-title">
+                  <span>{editMode ? "재스캔 후 스트림 정책" : "초기 스트림 정책"}</span>
+                  <em>{editMode ? "새 입력과 함께 저장" : "DB 저장 후 즉시 적용"}</em>
                 </div>
-              )}
+                <StreamOutputPolicyForm
+                  outputs={streamOutputs}
+                  availableSourceKeys={selectionHasLiveSource(scan, selection) ? ["recording", "live"] : ["recording"]}
+                  onChange={(outputs) => { setStreamOutputs(outputs); setPolicyValidation(null); }}
+                />
+              </div>
             </>
           ) : editMode ? (
             <RegisteredCameraStoredProfile camera={camera} />
@@ -282,6 +292,10 @@ function mutationSaveNotice(camera: Camera, warning?: string): { warning: boolea
   return { warning: false, message: "카메라와 스트림 정책이 저장 및 적용되었습니다." };
 }
 
-function selectionHasLiveSource(selection: RoleSelection): boolean {
-  return Boolean(selection.liveProfileToken && selection.liveProfileToken !== selection.recordingProfileToken);
+function selectionHasLiveSource(profile: DeviceProfile, selection: RoleSelection): boolean {
+  return hasDistinctLiveSource(
+    candidatesForChannel(profile, selection.channelIndex),
+    selection.recordingProfileToken,
+    selection.liveProfileToken,
+  );
 }

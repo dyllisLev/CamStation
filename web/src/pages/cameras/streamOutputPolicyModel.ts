@@ -1,6 +1,7 @@
 import type {
   Camera,
   CameraSourceKey,
+  StreamCandidate,
   StreamOutputMutationResponse,
   StreamOutputSettings,
   StreamOutputSettingsTuple,
@@ -51,6 +52,34 @@ export function draftFromCamera(camera: Camera): StreamPolicyDraft {
 export function reconcilePolicyDraft(current: StreamPolicyDraft, camera: Camera): StreamPolicyDraft {
   if (current.cameraKey !== camera.streamName) return draftFromCamera(camera);
   return { ...current, serverRevision: camera.streamApplyState.desiredRevision };
+}
+
+export function reloadedPolicyDraft(cameras: readonly Camera[], cameraKey: string): StreamPolicyDraft | null {
+  const camera = cameras.find((item) => item.streamName === cameraKey);
+  return camera ? draftFromCamera(camera) : null;
+}
+
+export function hasDistinctLiveSource(
+  candidates: readonly Pick<StreamCandidate, "profileToken" | "redactedUrl" | "source">[],
+  recordingProfileToken: string,
+  liveProfileToken: string,
+): boolean {
+  if (!recordingProfileToken || !liveProfileToken || recordingProfileToken === liveProfileToken) return false;
+  const recording = candidates.find((item) => item.profileToken === recordingProfileToken);
+  const live = candidates.find((item) => item.profileToken === liveProfileToken);
+  if (!recording || !live) return false;
+  const recordingIdentity = recording.redactedUrl || recording.source;
+  const liveIdentity = live.redactedUrl || live.source;
+  return Boolean(recordingIdentity && liveIdentity && recordingIdentity !== liveIdentity);
+}
+
+export function normalizeUnavailableSources(
+  outputs: StreamOutputSettingsTuple,
+  availableSourceKeys: readonly CameraSourceKey[],
+): StreamOutputSettingsTuple {
+  return outputs.map((output) => availableSourceKeys.includes(output.sourceKey)
+    ? { ...output }
+    : { ...output, sourceKey: "recording" }) as StreamOutputSettingsTuple;
 }
 
 export function streamOutputUpdateRequest(draft: StreamPolicyDraft): UpdateStreamOutputsRequest {
