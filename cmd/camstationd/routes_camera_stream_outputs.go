@@ -259,6 +259,18 @@ func (d routeDeps) probeInputs(ctx context.Context, cameraRow store.Camera) erro
 			continue
 		}
 		result, err := d.prober.Probe(ctx, input.URL, 12*time.Second)
+		originalErr := err
+		if err != nil {
+			parsed, _ := url.Parse(input.URL)
+			if parsed != nil && (strings.EqualFold(parsed.Scheme, "rtsp") || strings.EqualFold(parsed.Scheme, "rtsps")) {
+				localURL := "rtsp://127.0.0.1:8554/" + stream.PrivateSourceName(cameraRow.ID, input.ID)
+				if fallback, fallbackErr := d.prober.Probe(ctx, localURL, 8*time.Second); fallbackErr == nil {
+					result, err = fallback, nil
+				} else {
+					err = originalErr
+				}
+			}
+		}
 		if !result.CheckedAt.IsZero() {
 			checkedAt = result.CheckedAt
 		}

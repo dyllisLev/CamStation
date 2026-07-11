@@ -49,7 +49,7 @@ func resolveOutputWithEffective(camera store.Camera, output store.CameraOutput, 
 		video = "h264"
 		videoCodec = "h264"
 	}
-	sourceName := privateSourceName(camera.ID, source.ID)
+	sourceName := PrivateSourceName(camera.ID, source.ID)
 	producer := "rtsp://127.0.0.1:8554/" + sourceName
 	if transcode || output.AudioMode != store.CameraAudioSource {
 		parts := []string{"ffmpeg:" + sourceName, "video=" + video}
@@ -174,7 +174,7 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 			usedSources[output.SourceName] = true
 		}
 		for _, source := range camera.Streams {
-			name := privateSourceName(camera.ID, source.ID)
+			name := PrivateSourceName(camera.ID, source.ID)
 			if source.URL == "" || !usedSources[name] {
 				continue
 			}
@@ -266,6 +266,7 @@ func formatFPS(fps float64) string {
 	return strconv.FormatFloat(fps, 'f', -1, 64)
 }
 
-func privateSourceName(cameraID, sourceID int64) string {
+// PrivateSourceName returns the canonical server-internal go2rtc input alias.
+func PrivateSourceName(cameraID, sourceID int64) string {
 	return fmt.Sprintf("%s%d_%d", privateSourcePrefix, cameraID, sourceID)
 }

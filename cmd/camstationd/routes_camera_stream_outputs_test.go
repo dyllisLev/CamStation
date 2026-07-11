@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,6 +35,19 @@ func (conflictPolicyApplier) ApplyExpected(context.Context, int64, int64) stream
 
 type recordingPolicyProber struct {
 	urls []string
+}
+
+type occupiedRTSPPolicyProber struct {
+	calls     []string
+	failLocal bool
+}
+
+func (p *occupiedRTSPPolicyProber) Probe(_ context.Context, rawURL string, _ time.Duration) (camera.ProbeResult, error) {
+	p.calls = append(p.calls, rawURL)
+	if strings.Contains(rawURL, "__camstation_source_") && !p.failLocal {
+		return camera.ProbeResult{Reachable: true, CheckedAt: time.Now().UTC(), Streams: []camera.Stream{{Type: "video", Codec: "h264", Profile: "High", Level: "4.1", PixelFormat: "yuv420p", BitDepth: 8, Width: 1920, Height: 1080, FPS: 20}}}, nil
+	}
+	return camera.ProbeResult{CheckedAt: time.Now().UTC()}, errors.New("Invalid data found when processing input " + rawURL)
 }
 
 func (p *recordingPolicyProber) Probe(_ context.Context, rawURL string, _ time.Duration) (camera.ProbeResult, error) {
@@ -282,6 +296,69 @@ func TestProbeCameraStreamOutputsUsesStoredHTTPFLVAndLocalRTSPWithoutChangingDes
 	for _, forbidden := range []string{"password", "secret", "127.0.0.1", "8554", "http://10.0.0.8"} {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("probe response leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestProbeInputsFallsBackFromOccupiedRawRTSPToCanonicalPrivateSource(t *testing.T) {
+	prober := &occupiedRTSPPolicyProber{}
+	server, cameraRow := newPolicyRouteServerWithProber(t, nil, prober)
+	if err := (routeDeps{db: server.db, prober: prober}).probeInputs(t.Context(), cameraRow); err != nil {
+		t.Fatal(err)
+	}
+	wantLocal := "rtsp://127.0.0.1:8554/" + stream.PrivateSourceName(cameraRow.ID, cameraRow.Streams[0].ID)
+	if len(prober.calls) != 2 || prober.calls[0] != cameraRow.Streams[0].URL || prober.calls[1] != wantLocal {
+		t.Fatalf("probe fallback calls = %#v, want raw then %q", prober.calls, wantLocal)
+	}
+	stored, err := server.db.GetCameraByStream(t.Context(), cameraRow.StreamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := stored.Streams[0]
+	if input.DetectedVideoCodec != "h264" || input.DetectedWidth != 1920 || input.DetectedError != "" {
+		t.Fatalf("fallback detection = %#v", input)
+	}
+}
+
+func TestProbeInputsDoesNotFallbackForHTTPInput(t *testing.T) {
+	prober := &occupiedRTSPPolicyProber{}
+	server, cameraRow := newPolicyRouteServerWithProber(t, nil, prober)
+	cameraRow.Streams[0].URL = "http://10.0.0.8/flv?user=admin&token=http-secret"
+	if err := server.db.ReplaceCameraStreams(t.Context(), cameraRow.ID, cameraRow.Streams); err != nil {
+		t.Fatal(err)
+	}
+	cameraRow, _ = server.db.GetCameraByStream(t.Context(), cameraRow.StreamName)
+	if err := (routeDeps{db: server.db, prober: prober}).probeInputs(t.Context(), cameraRow); err != nil {
+		t.Fatal(err)
+	}
+	if len(prober.calls) != 1 || prober.calls[0] != cameraRow.Streams[0].URL {
+		t.Fatalf("HTTP probe unexpectedly used fallback: %#v", prober.calls)
+	}
+	encoded := mustMarshalString(t, publicCameraFromStore(mustCameraByStream(t, server.db, cameraRow.StreamName)))
+	for _, forbidden := range []string{"http-secret", "127.0.0.1", "8554", "__camstation_source_"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("HTTP failure public DTO leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestProbeInputsKeepsSanitizedOriginalErrorWhenRawAndFallbackFail(t *testing.T) {
+	prober := &occupiedRTSPPolicyProber{failLocal: true}
+	server, cameraRow := newPolicyRouteServerWithProber(t, nil, prober)
+	if err := (routeDeps{db: server.db, prober: prober}).probeInputs(t.Context(), cameraRow); err != nil {
+		t.Fatal(err)
+	}
+	if len(prober.calls) != 2 {
+		t.Fatalf("probe calls = %#v", prober.calls)
+	}
+	stored := mustCameraByStream(t, server.db, cameraRow.StreamName)
+	if stored.Streams[0].DetectedError == "" || strings.Contains(stored.Streams[0].DetectedError, "127.0.0.1") || strings.Contains(stored.Streams[0].DetectedError, "__camstation_source_") {
+		t.Fatalf("stored fallback error = %q", stored.Streams[0].DetectedError)
+	}
+	encoded := mustMarshalString(t, publicCameraFromStore(stored))
+	for _, forbidden := range []string{"u:p", "127.0.0.1", "8554", "__camstation_source_"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("failed fallback public DTO leaked %q: %s", forbidden, encoded)
 		}
 	}
 }
@@ -579,3 +656,12 @@ func streamOutputRequestBody(t *testing.T, revision int64, liveMode store.Camera
 }
 
 func intTestPtr(value int) *int { return &value }
+
+func mustCameraByStream(t *testing.T, db *store.DB, streamName string) store.Camera {
+	t.Helper()
+	cameraRow, err := db.GetCameraByStream(t.Context(), streamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cameraRow
+}
