@@ -6,6 +6,16 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 type QueryValue = string | number | boolean | readonly string[] | undefined;
 
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!headers.has("Content-Type")) {
@@ -24,7 +34,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
         ? payload.error
         : `Request failed with ${response.status}`;
-    throw new Error(message);
+    throw new HttpError(response.status, message);
   }
   return payload as T;
 }

@@ -1,4 +1,4 @@
-import type { Camera, CameraStream } from "../../app/api";
+import type { Camera, CameraStream, MediaDescriptor } from "../../app/api";
 import { Badge } from "../../components/ui/badge";
 import { formatSize, roleLabel } from "./model";
 
@@ -15,7 +15,7 @@ export function RegisteredCameraStoredProfile({ camera }: { camera: Camera }) {
       </div>
       <div className="new-registered-streams">
         {(camera.streams ?? []).map((stream) => (
-          <RegisteredStream stream={stream} key={`${stream.role}-${stream.go2rtcStreamName}`} />
+          <RegisteredStream stream={stream} key={`${stream.role}-${stream.sourceKey}`} />
         ))}
         {!camera.streams?.length && (
           <div className="new-empty-inline">역할 스트림 정보가 아직 없습니다.</div>
@@ -40,27 +40,31 @@ function RegisteredStream({ stream }: { stream: CameraStream }) {
       <div>
         <div className="new-registered-stream-head">
           <strong>{roleLabel(stream.role)}</strong>
-          <Badge value={stream.state ?? "unknown"} />
+          <Badge value={stream.error ? "degraded" : stream.detected ? "running" : "unknown"} />
         </div>
-        <span>{stream.go2rtcStreamName}</span>
+        <span>{stream.sourceKey}</span>
         <em>{streamDetail(stream)}</em>
       </div>
-      <code>{stream.profileToken || "-"}</code>
+      <code>{stream.checkedAt || "미검증"}</code>
     </div>
   );
 }
 
 function streamNameForRole(camera: Camera, role: string): string | undefined {
-  return camera.streams?.find((stream) => stream.role === role)?.go2rtcStreamName;
+  return camera.streamOutputs.find((stream) => stream.purpose === role)?.streamName;
 }
 
 function streamDetail(stream: CameraStream): string {
   return [
     stream.label,
-    formatSize(stream.width, stream.height),
-    stream.codec,
-    stream.fps ? `${stream.fps}fps` : "",
+    mediaSize(stream.detected ?? stream.advertised),
+    (stream.detected ?? stream.advertised)?.videoCodec,
+    (stream.detected ?? stream.advertised)?.fps ? `${(stream.detected ?? stream.advertised)?.fps}fps` : "",
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function mediaSize(media: MediaDescriptor | null): string {
+  return formatSize(media?.width, media?.height);
 }

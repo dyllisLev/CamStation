@@ -16,7 +16,7 @@ import {
 } from "../../app/queries";
 import { cn } from "../../lib/utils";
 import { PtzControlPanel } from "./PtzControlPanel";
-import { playbackStreamName } from "./streamSelection";
+import { playbackStreamName, shouldRenderLiveTile } from "./streamSelection";
 import { useMseStream } from "./useMseStream";
 
 const GRID_COLS = 48;
@@ -390,7 +390,7 @@ export function LiveWorkspace() {
                   <div className="new-camera-list">
                     {rows.map((camera) => (
                       <button
-                        key={camera.id}
+                        key={camera.streamName}
                         className={cn(
                           "new-camera-row",
                           camera.streamName === selectedCamera?.streamName && "new-active-row",
@@ -512,6 +512,7 @@ function CameraGrid({
                   onToggleZoom={() => onToggleZoom(camera)}
                   videoViewport={item.videoZoom}
                   onVideoViewportChange={(viewport) => onVideoViewportChange(camera.streamName, viewport)}
+                  suspended={!shouldRenderLiveTile(camera.streamName, zoomedCamera?.streamName ?? null)}
                 />
               </div>
             );
@@ -543,6 +544,7 @@ function CameraTile({
   onToggleZoom,
   videoViewport,
   onVideoViewportChange,
+  suspended = false,
 }: {
   camera: Camera;
   selected: boolean;
@@ -551,6 +553,7 @@ function CameraTile({
   onToggleZoom: () => void;
   videoViewport?: VideoViewport;
   onVideoViewportChange: (viewport: VideoViewport) => void;
+  suspended?: boolean;
 }) {
   return (
     <article
@@ -561,8 +564,10 @@ function CameraTile({
         onToggleZoom();
       }}
     >
-      {camera.state === "streaming" ? (
+      {camera.state === "streaming" && !suspended ? (
         <LiveVideo streamName={playbackStreamName(camera, zoomed)} viewport={videoViewport} onViewportChange={onVideoViewportChange} />
+      ) : suspended ? (
+        <div className="new-offline-layer">집중보기 중 라이브 연결 중지</div>
       ) : (
         <div className="new-offline-layer">연결 없음</div>
       )}

@@ -1,4 +1,4 @@
-import type { Camera, CreateCamera, DeviceProfile } from "../../app/api";
+import type { Camera, CreateCamera, DeviceProfile, StreamOutputSettingsTuple } from "../../app/api";
 import { streamSelections, toScanRequest, type CameraFormState, type RoleSelection } from "./model";
 
 export type WorkflowMode = "create" | "edit";
@@ -24,6 +24,7 @@ export function cameraPayload(
   selection: RoleSelection,
   selectedTemplateId: number | undefined,
   camera: Camera | null,
+  streamOutputs?: StreamOutputSettingsTuple,
 ): CreateCamera {
   const streamName = mode === "edit" && camera ? camera.streamName : form.streamName.trim();
   return {
@@ -34,5 +35,6 @@ export function cameraPayload(
     profile: scan,
     channelIndex: selection.channelIndex,
     streamSelections: streamSelections(selection),
+    ...(streamOutputs ? { streamOutputs } : {}),
   };
 }

@@ -5,13 +5,12 @@ export type Health = {
 };
 
 export type Camera = {
-  id: number;
   name: string;
-  redactedUrl: string;
   streamName: string;
   layoutKey?: string;
   recordingStreamName?: string;
   liveStreamName?: string;
+  focusStreamName?: string;
   state: "streaming" | "offline" | "degraded" | "unknown" | string;
   manufacturer?: string;
   model?: string;
@@ -25,6 +24,8 @@ export type Camera = {
   lastScan?: Record<string, unknown>;
   controlCapabilities: CameraControlCapabilities;
   streams?: CameraStream[];
+  streamOutputs: CameraStreamOutput[];
+  streamApplyState: CameraStreamApplyState;
   lastProbe?: {
     readonly reachable?: boolean;
     readonly duration?: number;
@@ -67,20 +68,105 @@ export type CameraPreset = { readonly token: string; readonly name: string };
 export type PTZMoveVector = { readonly pan: number; readonly tilt: number; readonly zoom: number };
 
 export type CameraStream = {
-  id?: number;
-  camera_id?: number;
+  sourceKey: CameraSourceKey;
   role: "recording" | "live" | "snapshot" | string;
   label: string;
-  source: string;
-  redactedUrl?: string;
-  go2rtcStreamName: string;
-  codec?: string;
+  advertised: MediaDescriptor | null;
+  detected: MediaDescriptor | null;
+  checkedAt?: string;
+  error?: string;
+};
+
+export type CameraSourceKey = "recording" | "live";
+export type StreamPurpose = "recording" | "live" | "focus";
+export type VideoMode = "auto" | "copy" | "h264";
+export type AudioMode = "source" | "none" | "aac";
+export type ActivationMode = "on_demand" | "always";
+
+export type MediaDescriptor = {
+  videoCodec?: string;
+  audioCodec?: string;
+  profile?: string;
+  level?: string;
+  pixelFormat?: string;
+  bitDepth?: number;
   width?: number;
   height?: number;
   fps?: number;
-  bitrateKbps?: number;
-  profileToken?: string;
-  state?: string;
+};
+
+export type StreamOutputSettings = {
+  purpose: StreamPurpose;
+  sourceKey: CameraSourceKey;
+  videoMode: VideoMode;
+  maxWidth: number | null;
+  maxHeight: number | null;
+  maxFPS: number | null;
+  audioMode: AudioMode;
+  activation: ActivationMode;
+};
+
+export type StreamOutputSettingsTuple = [StreamOutputSettings, StreamOutputSettings, StreamOutputSettings];
+
+export type CameraStreamOutput = {
+  purpose: StreamPurpose;
+  sourceKey: CameraSourceKey;
+  streamName: string;
+  desired: StreamOutputSettings;
+  applied: StreamOutputSettings | null;
+  source: {
+    label: string;
+    advertised: MediaDescriptor | null;
+    detected: MediaDescriptor | null;
+    checkedAt?: string;
+    error?: string;
+  };
+  effective: ({
+    videoCodec?: string;
+    audioCodec?: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+    transcoding: boolean;
+  }) | null;
+  verification: {
+    state: "unverified" | "healthy" | "degraded";
+    checkedAt?: string;
+    error?: string;
+  };
+  runtime: {
+    state: "idle" | "starting" | "running";
+    producerCount: number;
+    consumerCount: number;
+    viewerCount: number;
+  };
+};
+
+export type CameraStreamApplyState = {
+  desiredRevision: number;
+  appliedRevision: number;
+  state: "applied" | "pending" | "apply_failed";
+  appliedAt?: string;
+  error?: string;
+};
+
+export type UpdateStreamOutputsRequest = {
+  expectedDesiredRevision: number;
+  outputs: StreamOutputSettingsTuple;
+};
+
+export type StreamOutputMutationResponse = {
+  saved: boolean;
+  applied: boolean;
+  camera: Camera;
+  warning?: string;
+};
+
+export type BulkStreamOutputProbeResponse = {
+  saved: boolean;
+  applied: boolean;
+  cameras: Camera[];
+  warning?: string;
 };
 
 export type StreamCandidate = {
@@ -245,6 +331,7 @@ export type CreateCamera = {
   profile?: DeviceProfile;
   channelIndex?: number;
   streamSelections?: CameraStreamSelection[];
+  streamOutputs?: StreamOutputSettingsTuple;
 };
 
 export type UpdateCamera = CreateCamera;

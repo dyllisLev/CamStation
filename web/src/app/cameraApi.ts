@@ -7,10 +7,13 @@ import type {
   CameraPreviewRequest,
   CameraPreviewResponse,
   CameraScanRequest,
+  BulkStreamOutputProbeResponse,
   CreateCamera,
   Health,
   LayoutProfile,
   TimelineData,
+  StreamOutputMutationResponse,
+  UpdateStreamOutputsRequest,
   UpdateCamera,
 } from "./cameraTypes";
 import type { StreamStatus } from "./streamsViewersSystemApi";
@@ -66,6 +69,22 @@ export const cameraApi = {
     }),
   deleteCamera: (streamName: string) =>
     request<CameraMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, { method: "DELETE" }),
+  updateStreamOutputs: (streamName: string, input: UpdateStreamOutputsRequest) =>
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/stream-outputs`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  probeStreamOutputs: (streamName: string) =>
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/stream-outputs/probe`, {
+      method: "POST",
+    }),
+  reapplyStreamOutputs: (streamName: string, expectedDesiredRevision: number) =>
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/stream-outputs/reapply`, {
+      method: "POST",
+      body: JSON.stringify({ expectedDesiredRevision }),
+    }),
+  probeAllStreamOutputs: () =>
+    request<BulkStreamOutputProbeResponse>("/api/cameras/stream-outputs/probe", { method: "POST" }),
   cameraProfiles: () => request<CameraProfileTemplate[]>("/api/camera-profiles"),
   cameraProfile: (id: number) => request<CameraProfileTemplate>(`/api/camera-profiles/${encodeURIComponent(String(id))}`),
   createCameraProfile: (profile: CameraProfileTemplateInput) =>

@@ -206,7 +206,7 @@ export function StreamsPage() {
 
 function buildStreamRows(cameras: readonly Camera[], runtime: Readonly<Record<string, StreamRuntime>>): readonly StreamRow[] {
   const cameraRows = cameras.flatMap((camera) => {
-    const streamNames = camera.streams?.map((stream) => stream.go2rtcStreamName).filter((streamName) => streamName !== "") ?? [];
+    const streamNames = camera.streamOutputs.map((output) => output.streamName).filter((streamName) => streamName !== "");
     const names = streamNames.length > 0 ? streamNames : [camera.streamName].filter((streamName) => streamName !== "");
     return names.map((streamName) => ({
       streamName,

@@ -8,9 +8,11 @@ import {
   type LayoutProfile,
   type UpdateCamera,
 } from "./api";
+import { CAMERA_POLICY_INVALIDATION_KEYS } from "../pages/cameras/streamOutputPolicyModel";
 
 export * from "./backupQueries";
 export * from "./cameraControlQueries";
+export * from "./cameraPolicyQueries";
 export * from "./eventsIncidentsQueries";
 export * from "./recordingsQueries";
 export * from "./settingsJobsQueries";
@@ -149,12 +151,7 @@ export function useCreateCamera() {
   return useMutation({
     mutationFn: (camera: CreateCamera) => api.createCamera(camera),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
-        queryClient.invalidateQueries({ queryKey: ["events"] }),
-        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
-      ]);
+      await Promise.all(CAMERA_POLICY_INVALIDATION_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
     },
   });
 }
@@ -164,12 +161,7 @@ export function useUpdateCamera() {
   return useMutation({
     mutationFn: ({ streamName, camera }: { streamName: string; camera: UpdateCamera }) => api.updateCamera(streamName, camera),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
-        queryClient.invalidateQueries({ queryKey: ["events"] }),
-        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
-      ]);
+      await Promise.all(CAMERA_POLICY_INVALIDATION_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
     },
   });
 }
@@ -180,10 +172,7 @@ export function useDeleteCamera() {
     mutationFn: (streamName: string) => api.deleteCamera(streamName),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["cameras"] }),
-        queryClient.invalidateQueries({ queryKey: ["events"] }),
-        queryClient.invalidateQueries({ queryKey: ["stream-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["recorder-status"] }),
+        ...CAMERA_POLICY_INVALIDATION_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
         queryClient.invalidateQueries({ queryKey: ["timeline"] }),
       ]);
     },

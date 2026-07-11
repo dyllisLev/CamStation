@@ -7,11 +7,11 @@ import { roleLabel } from "./model";
 
 type RegisteredCameraTableProps = {
   cameras: Camera[];
-  selectedCameraId: number | null;
-  onSelectCamera: (cameraId: number) => void;
+  selectedStreamName: string | null;
+  onSelectCamera: (streamName: string) => void;
 };
 
-export function RegisteredCameraTable({ cameras, selectedCameraId, onSelectCamera }: RegisteredCameraTableProps) {
+export function RegisteredCameraTable({ cameras, selectedStreamName, onSelectCamera }: RegisteredCameraTableProps) {
   return (
     <Panel>
       <PanelHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -38,9 +38,9 @@ export function RegisteredCameraTable({ cameras, selectedCameraId, onSelectCamer
               {cameras.map((camera) => (
                 <CameraRow
                   camera={camera}
-                  selected={camera.id === selectedCameraId}
-                  onSelect={() => onSelectCamera(camera.id)}
-                  key={camera.id}
+                  selected={camera.streamName === selectedStreamName}
+                  onSelect={() => onSelectCamera(camera.streamName)}
+                  key={camera.streamName}
                 />
               ))}
               {cameras.length === 0 && (
@@ -77,8 +77,8 @@ function CameraRow({ camera, selected, onSelect }: { camera: Camera; selected: b
       <td className="px-3 py-3" data-label="스트림">
         <div className="new-table-value new-camera-streams">
           {streams.map((stream) => (
-            <span key={stream.go2rtcStreamName}>
-              {roleLabel(stream.role)} <em>{stream.go2rtcStreamName}</em>
+            <span key={stream.sourceKey}>
+              {roleLabel(stream.role)} <em>{stream.sourceKey}</em>
             </span>
           ))}
           {streams.length === 0 && <span>기본 <em>{camera.streamName}</em></span>}

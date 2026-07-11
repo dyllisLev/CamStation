@@ -90,7 +90,7 @@ function ControlRoomDashboard() {
                     const recordingState = worker?.state ?? "stopped";
                     const recentError = worker?.lastError ?? (camera.lastProbe?.reachable === false ? "probe failed" : "-");
                     return (
-                      <tr key={camera.id}>
+                      <tr key={camera.streamName}>
                         <td className="px-3 py-3">
                           <div className="font-semibold text-slate-100">{camera.name}</div>
                           <div className="mt-1 font-mono text-xs text-slate-500">{camera.streamName}</div>

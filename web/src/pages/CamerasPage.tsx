@@ -4,6 +4,7 @@ import { useCameras } from "../app/queries";
 import { Button } from "../components/ui/button";
 import { CameraWorkflow } from "./cameras/CameraWorkflow";
 import { CameraSummary } from "./cameras/CameraSummary";
+import { CameraStreamPolicyEditor } from "./cameras/CameraStreamPolicyEditor";
 import { ProfileLibrary } from "./cameras/ProfileLibrary";
 import type { ProfileTemplateDraftSource } from "./cameras/profileLibraryModel";
 import { RegisteredCameraTable } from "./cameras/RegisteredCameraTable";
@@ -15,16 +16,16 @@ export function CamerasPage() {
   const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
   const [lastProfile, setLastProfile] = useState<DeviceProfile | null>(null);
   const [profileDraftSource, setProfileDraftSource] = useState<ProfileTemplateDraftSource | null>(null);
-  const [selectedCameraId, setSelectedCameraId] = useState<number | null>(null);
+  const [selectedStreamName, setSelectedStreamName] = useState<string | null>(null);
   const [workflowMode, setWorkflowMode] = useState<CameraWorkflowMode>("edit");
   const selectedCamera = useMemo<Camera | null>(() => {
     if (rows.length === 0) return null;
-    return rows.find((camera) => camera.id === selectedCameraId) ?? rows[0];
-  }, [rows, selectedCameraId]);
+    return rows.find((camera) => camera.streamName === selectedStreamName) ?? rows[0];
+  }, [rows, selectedStreamName]);
   const activeMode: CameraWorkflowMode = workflowMode === "edit" && selectedCamera ? "edit" : "create";
 
-  function selectCamera(cameraId: number) {
-    setSelectedCameraId(cameraId);
+  function selectCamera(streamName: string) {
+    setSelectedStreamName(streamName);
     setWorkflowMode("edit");
   }
 
@@ -33,7 +34,7 @@ export function CamerasPage() {
       <CameraSummary cameras={rows} profile={lastProfile} />
       <RegisteredCameraTable
         cameras={rows}
-        selectedCameraId={selectedCamera?.id ?? null}
+        selectedStreamName={selectedCamera?.streamName ?? null}
         onSelectCamera={selectCamera}
       />
       <div className="new-camera-actions">
@@ -52,10 +53,11 @@ export function CamerasPage() {
         onScanComplete={setLastProfile}
         onProfileDraftChange={setProfileDraftSource}
         onDeleted={() => {
-          setSelectedCameraId(null);
+          setSelectedStreamName(null);
           setWorkflowMode("create");
         }}
       />
+      {activeMode === "edit" && selectedCamera && <CameraStreamPolicyEditor camera={selectedCamera} />}
       <ProfileLibrary draftSource={profileDraftSource} />
     </div>
   );
