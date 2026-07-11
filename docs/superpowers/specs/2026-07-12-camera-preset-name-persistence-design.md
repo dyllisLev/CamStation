@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS camera_preset_names (
 
 The preset token remains the device identity used by goto and delete. The
 stored name is only the operator-facing label. Names use the route's existing
-trim, UTF-8, control-character, and 64-character validation.
+trim, UTF-8, and 64-rune validation.
 
 ## Request and response flow
 
