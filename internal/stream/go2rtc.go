@@ -114,8 +114,8 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command(g.binary, "-config", g.configPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = newRedactingLineWriter(os.Stdout)
+	cmd.Stderr = newRedactingLineWriter(os.Stderr)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

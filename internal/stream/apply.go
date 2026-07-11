@@ -83,36 +83,71 @@ func (c *ApplyCoordinator) Apply(ctx context.Context) PolicyApplyResult {
 				CameraID: camera.ID, Revision: camera.PolicyState.DesiredRevision, Results: cameraResults,
 			})
 		}
+		appliedCameras := camerasWithAppliedResults(cameras, results, now)
+		if err := c.recorders.RestoreActive(freshActiveCameras(active, appliedCameras)); err != nil {
+			_ = c.recorders.SuspendActive()
+			rollbackErr := runtimeTx.Rollback(ctx)
+			restoreErr := c.recorders.RestoreActive(active)
+			c.markFailed(ctx, cameras, err)
+			return PolicyApplyResult{Pending: true, Error: handoffError(err, rollbackErr, restoreErr).Error()}
+		}
 		if len(snapshots) > 0 {
 			if err := c.db.MarkCameraPoliciesApplied(ctx, snapshots); err != nil {
+				_ = c.recorders.SuspendActive()
 				rollbackErr := runtimeTx.Rollback(ctx)
-				_ = c.recorders.RestoreActive(active)
+				restoreErr := c.recorders.RestoreActive(active)
 				c.markFailed(ctx, cameras, err)
-				if rollbackErr != nil {
-					err = fmt.Errorf("%v; runtime rollback failed: %w", err, rollbackErr)
-				}
-				return PolicyApplyResult{Pending: true, Error: err.Error()}
+				return PolicyApplyResult{Pending: true, Error: handoffError(err, rollbackErr, restoreErr).Error()}
 			}
 		}
 		commitErr := runtimeTx.Commit()
 		fresh, err := c.db.ListCameras(ctx, true)
 		if err != nil {
-			_ = c.recorders.RestoreActive(active)
 			if commitErr != nil {
 				err = fmt.Errorf("%v; last-good commit failed: %w", err, commitErr)
 			}
-			return PolicyApplyResult{Applied: true, Error: err.Error()}
-		}
-		if err := c.recorders.RestoreActive(freshActiveCameras(active, fresh)); err != nil {
-			return PolicyApplyResult{Applied: true, Error: err.Error()}
+			return PolicyApplyResult{Applied: commitErr == nil || lastGoodInvariantPreserved(commitErr), Error: err.Error()}
 		}
 		if commitErr != nil {
-			return PolicyApplyResult{Applied: true, Error: commitErr.Error()}
+			return PolicyApplyResult{Applied: lastGoodInvariantPreserved(commitErr), Error: commitErr.Error()}
 		}
 		if !newerRevisionExists(cameras, fresh) {
 			return PolicyApplyResult{Applied: true}
 		}
 	}
+}
+
+func camerasWithAppliedResults(cameras []store.Camera, results map[int64][]store.CameraOutputApplyResult, appliedAt time.Time) []store.Camera {
+	applied := make([]store.Camera, len(cameras))
+	for i, camera := range cameras {
+		camera.Outputs = append([]store.CameraOutput(nil), camera.Outputs...)
+		byPurpose := make(map[store.CameraOutputPurpose]store.CameraOutputApplyResult, len(results[camera.ID]))
+		for _, result := range results[camera.ID] {
+			byPurpose[result.Purpose] = result
+		}
+		for j := range camera.Outputs {
+			if result, ok := byPurpose[camera.Outputs[j].Purpose]; ok {
+				camera.Outputs[j].AppliedPolicy = result.Policy
+				camera.Outputs[j].Verification = result.Verification
+			}
+		}
+		camera.PolicyState.AppliedRevision = camera.PolicyState.DesiredRevision
+		camera.PolicyState.ApplyState = store.CameraApplyApplied
+		camera.PolicyState.ApplyStateAt = appliedAt
+		camera.PolicyState.ApplyError = ""
+		applied[i] = camera
+	}
+	return applied
+}
+
+func handoffError(primary, rollback, restore error) error {
+	if rollback != nil {
+		primary = fmt.Errorf("%v; runtime rollback failed: %w", primary, rollback)
+	}
+	if restore != nil {
+		primary = fmt.Errorf("%v; recorder restore failed: %w", primary, restore)
+	}
+	return primary
 }
 
 func (c *ApplyCoordinator) markFailed(ctx context.Context, cameras []store.Camera, applyErr error) {
@@ -224,13 +259,37 @@ type go2RTCConfigTransaction struct {
 	done              bool
 }
 
+type lastGoodCommitError struct {
+	err           error
+	invariantSafe bool
+}
+
+func (e *lastGoodCommitError) Error() string { return e.err.Error() }
+func (e *lastGoodCommitError) Unwrap() error { return e.err }
+
+func lastGoodInvariantPreserved(err error) bool {
+	var commitErr *lastGoodCommitError
+	return errors.As(err, &commitErr) && commitErr.invariantSafe
+}
+
 func (t *go2RTCConfigTransaction) Commit() error {
 	if t.done {
 		return fmt.Errorf("config transaction already completed")
 	}
 	t.done = true
 	defer t.g.applyMu.Unlock()
-	return writeFileAtomic(t.g.configPath+".last-good", t.current)
+	lastGoodPath := t.g.configPath + ".last-good"
+	if err := writeFileAtomic(lastGoodPath, t.current); err != nil {
+		invalidateErr := os.Remove(lastGoodPath)
+		if invalidateErr == nil || errors.Is(invalidateErr, os.ErrNotExist) {
+			return &lastGoodCommitError{err: err, invariantSafe: true}
+		}
+		return &lastGoodCommitError{
+			err:           fmt.Errorf("%v; stale last-good invalidation failed: %w", err, invalidateErr),
+			invariantSafe: false,
+		}
+	}
+	return nil
 }
 
 func (t *go2RTCConfigTransaction) Rollback(ctx context.Context) error {

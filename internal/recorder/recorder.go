@@ -136,11 +136,16 @@ func (m *Manager) Start(camera store.Camera) error {
 	if err != nil {
 		return err
 	}
+	m.startSpec(spec)
+	return nil
+}
+
+func (m *Manager) startSpec(spec recordSpec) {
 	m.mu.Lock()
 	if existing, ok := m.workers[spec.camera.StreamName]; ok {
 		if existing.audioMode == spec.audioMode && existing.appliedRevision == spec.camera.PolicyState.AppliedRevision {
 			m.mu.Unlock()
-			return nil
+			return
 		}
 		delete(m.workers, spec.camera.StreamName)
 		m.mu.Unlock()
@@ -160,7 +165,6 @@ func (m *Manager) Start(camera store.Camera) error {
 	m.workers[spec.camera.StreamName] = w
 	m.mu.Unlock()
 	go w.run()
-	return nil
 }
 
 func recordingCamera(camera store.Camera) store.Camera {
@@ -233,10 +237,16 @@ func (m *Manager) SuspendActive() []store.Camera {
 }
 
 func (m *Manager) RestoreActive(cameras []store.Camera) error {
+	specs := make([]recordSpec, 0, len(cameras))
 	for _, camera := range cameras {
-		if err := m.Start(camera); err != nil {
+		spec, err := recordingSpec(camera, m.rtspBase)
+		if err != nil {
 			return err
 		}
+		specs = append(specs, spec)
+	}
+	for _, spec := range specs {
+		m.startSpec(spec)
 	}
 	return nil
 }

@@ -152,6 +152,7 @@ func redactValue(value any) any {
 }
 
 func redactString(value string) string {
+	value = RedactText(value)
 	value = discordWebhookRE.ReplaceAllString(value, "[redacted-discord-webhook]")
 	value = credentialURLRE.ReplaceAllString(value, "[redacted-url]")
 	return cameraURLRE.ReplaceAllString(value, "[redacted-camera-url]")

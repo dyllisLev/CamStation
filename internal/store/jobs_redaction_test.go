@@ -183,3 +183,29 @@ func TestJobs_CreateJob_rejectsSecretLikeKind(t *testing.T) {
 		t.Fatalf("secret-like kind persisted %d jobs, want 0", count)
 	}
 }
+
+func TestRedactTextMasksEmbeddedCameraURLUserinfoAndCredentialQueries(t *testing.T) {
+	input := "producer failed rtsp://admin:rtsp-secret@192.0.2.10/main " +
+		"http://192.0.2.20/flv?channel=0&user=admin&password=flv-secret&token=query-secret"
+	got := RedactText(input)
+	for _, secret := range []string{"admin:rtsp-secret", "user=admin", "flv-secret", "query-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("RedactText leaked %q in %q", secret, got)
+		}
+	}
+	for _, want := range []string{"rtsp://redacted:redacted@192.0.2.10/main", "channel=0", "user=redacted", "password=redacted", "token=redacted"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RedactText output %q missing %q", got, want)
+		}
+	}
+}
+
+func TestRedactTextMasksNestedCameraURLInGo2RTCAPIError(t *testing.T) {
+	input := "restart failed at http://127.0.0.1:1984/api/streams?src=rtsp://operator:warning-secret@camera.internal:554/main"
+	got := RedactText(input)
+	for _, forbidden := range []string{"operator", "warning-secret", "/api/streams"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("nested URL leaked %q in %q", forbidden, got)
+		}
+	}
+}

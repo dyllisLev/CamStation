@@ -72,3 +72,18 @@ func TestSuspendActiveReturnsOnlyRunningWorkers(t *testing.T) {
 		t.Fatalf("workers still active: %+v", manager.workers)
 	}
 }
+
+func TestRestoreActivePrevalidatesAllCamerasBeforeStartingAnyWorker(t *testing.T) {
+	manager := New(nil, t.TempDir(), t.TempDir(), 5)
+	t.Cleanup(manager.StopAll)
+	err := manager.RestoreActive([]store.Camera{
+		{ID: 1, StreamName: "valid"},
+		{ID: 2},
+	})
+	if err == nil {
+		t.Fatal("expected malformed second camera to fail validation")
+	}
+	if workers := manager.Status().Workers; len(workers) != 0 {
+		t.Fatalf("partial workers started: %+v", workers)
+	}
+}

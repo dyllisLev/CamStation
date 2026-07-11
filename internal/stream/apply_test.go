@@ -134,7 +134,7 @@ func TestApplyCoordinatorRestoresFreshRecordersWhenLastGoodCommitFails(t *testin
 	camera.Outputs = threeOutputs(output)
 	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 5, AppliedRevision: 4}
 	db := &fakePolicyStore{camera: camera}
-	runtime := &fakePolicyRuntime{commitErr: errors.New("last-good write failed")}
+	runtime := &fakePolicyRuntime{commitErr: &lastGoodCommitError{err: errors.New("last-good write failed"), invariantSafe: true}}
 	recorder := &fakeRecorderHandoff{active: []store.Camera{{ID: 1, StreamName: "old-recording"}}}
 
 	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
@@ -143,6 +143,58 @@ func TestApplyCoordinatorRestoresFreshRecordersWhenLastGoodCommitFails(t *testin
 	}
 	if recorder.restores != 1 || len(recorder.active) != 1 || recorder.active[0].PolicyState.AppliedRevision != 5 {
 		t.Fatalf("fresh active recorder not restored: %+v", recorder)
+	}
+}
+
+func TestApplyCoordinatorDoesNotReportAppliedWhenLastGoodInvariantIsUnsafe(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 10, AppliedRevision: 9}
+	db := &fakePolicyStore{camera: camera}
+	runtime := &fakePolicyRuntime{commitErr: errors.New("last-good invariant unknown")}
+	recorder := &fakeRecorderHandoff{active: []store.Camera{{ID: 1, StreamName: "old-recording"}}}
+
+	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
+	if result.Applied || !strings.Contains(result.Error, "invariant unknown") {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(recorder.active) != 1 || recorder.active[0].PolicyState.AppliedRevision != 10 {
+		t.Fatalf("DB-aligned recorder stopped: %+v", recorder.active)
+	}
+}
+
+func TestLastGoodFinalizeFailureInvalidatesStaleConfigAndStartupUsesCurrentApplied(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go2rtc.yaml")
+	if err := os.WriteFile(path, []byte("revision-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".last-good", []byte("revision-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := NewGo2RTC(path)
+	tx, err := g.prepareConfig(t.Context(), []byte("revision-2\n"), func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path + ".last-good"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path+".last-good", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = tx.Commit()
+	if err == nil || !lastGoodInvariantPreserved(err) {
+		t.Fatalf("commit error = %v, want safe invalidation warning", err)
+	}
+	camera := store.Camera{PolicyState: store.CameraPolicyState{
+		DesiredRevision: 3, AppliedRevision: 2, ApplyState: store.CameraApplyPending,
+	}}
+	config, preserve, err := g.startupConfig([]store.Camera{camera})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preserve || string(config) != "revision-2\n" {
+		t.Fatalf("startup selected stale revision: config=%q preserve=%v", config, preserve)
 	}
 }
 
@@ -156,6 +208,44 @@ func TestApplyCoordinatorAppliesEmptyConfigAfterFinalCameraDeletion(t *testing.T
 	}
 	if len(recorder.active) != 0 {
 		t.Fatalf("deleted recorder restored: %+v", recorder.active)
+	}
+}
+
+func TestApplyCoordinatorKeepsNewRecorderRunningWhenFreshRevisionReadFails(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 6, AppliedRevision: 5}
+	db := &fakePolicyStore{camera: camera, listErrAfter: 1}
+	runtime := &fakePolicyRuntime{}
+	recorder := &fakeRecorderHandoff{active: []store.Camera{{ID: 1, StreamName: "old-recording"}}}
+
+	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
+	if !result.Applied || !strings.Contains(result.Error, "fresh list failed") {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(recorder.active) != 1 || recorder.active[0].PolicyState.AppliedRevision != 6 {
+		t.Fatalf("new applied recorder not running: %+v", recorder.active)
+	}
+}
+
+func TestApplyCoordinatorRollsBackBeforeDBCommitWhenNewRecorderRestorePartiallyFails(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 8, AppliedRevision: 7}
+	db := &fakePolicyStore{camera: camera}
+	runtime := &fakePolicyRuntime{}
+	old := store.Camera{ID: 1, StreamName: "old-recording", PolicyState: store.CameraPolicyState{AppliedRevision: 7}}
+	recorder := &fakeRecorderHandoff{active: []store.Camera{old}, failRestoreOnce: true}
+
+	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
+	if result.Applied || !strings.Contains(result.Error, "restore failed") {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(db.appliedRevisions) != 0 || runtime.rollbacks != 1 {
+		t.Fatalf("DB/runtime advanced: revisions=%v runtime=%+v", db.appliedRevisions, runtime)
+	}
+	if recorder.suspends != 2 || recorder.restores != 2 || len(recorder.active) != 1 || recorder.active[0].PolicyState.AppliedRevision != 7 {
+		t.Fatalf("old recorder set not recovered: %+v", recorder)
 	}
 }
 
@@ -178,11 +268,17 @@ type fakePolicyStore struct {
 	onApplied        func(int64)
 	bulkErr          error
 	empty            bool
+	listCalls        int
+	listErrAfter     int
 }
 
 func (f *fakePolicyStore) ListCameras(context.Context, bool) ([]store.Camera, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCalls++
+	if f.listErrAfter > 0 && f.listCalls > f.listErrAfter {
+		return nil, errors.New("fresh list failed")
+	}
 	if f.empty {
 		return nil, nil
 	}
@@ -253,6 +349,7 @@ func (f *fakeRuntimeTransaction) Rollback(context.Context) error {
 type fakeRecorderHandoff struct {
 	active             []store.Camera
 	suspends, restores int
+	failRestoreOnce    bool
 }
 
 func (f *fakeRecorderHandoff) SuspendActive() []store.Camera {
@@ -265,5 +362,9 @@ func (f *fakeRecorderHandoff) SuspendActive() []store.Camera {
 func (f *fakeRecorderHandoff) RestoreActive(cameras []store.Camera) error {
 	f.restores++
 	f.active = append([]store.Camera(nil), cameras...)
+	if f.failRestoreOnce {
+		f.failRestoreOnce = false
+		return errors.New("restore failed")
+	}
 	return nil
 }

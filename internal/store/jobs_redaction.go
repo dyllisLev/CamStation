@@ -7,10 +7,25 @@ import (
 
 var discordWebhookPattern = regexp.MustCompile(`(?i)https?://(?:ptb\.|canary\.)?(?:discord(?:app)?\.com)/api/webhooks/[^\s"'<>]+`)
 var credentialURLPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/\s"'<>@]+:[^@\s"'<>]+@`)
+var embeddedURLPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+var credentialQueryPattern = regexp.MustCompile(`(?i)([?&](?:user|username|password|passwd|pwd|token)=)[^&\s"'<>]*`)
 
 func RedactText(value string) string {
+	value = discordWebhookPattern.ReplaceAllString(value, "[redacted]")
 	value = credentialURLPattern.ReplaceAllString(value, "${1}redacted:redacted@")
-	return discordWebhookPattern.ReplaceAllString(value, "[redacted]")
+	value = embeddedURLPattern.ReplaceAllStringFunc(value, func(raw string) string {
+		trimmed, suffix := trimURLPunctuation(raw)
+		return RedactURL(trimmed) + suffix
+	})
+	return credentialQueryPattern.ReplaceAllString(value, "${1}redacted")
+}
+
+func trimURLPunctuation(value string) (string, string) {
+	cut := len(value)
+	for cut > 0 && strings.ContainsRune("),.;]}", rune(value[cut-1])) {
+		cut--
+	}
+	return value[:cut], value[cut:]
 }
 
 func sanitizeJob(job Job) Job {
