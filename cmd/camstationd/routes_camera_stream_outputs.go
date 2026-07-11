@@ -260,7 +260,7 @@ func (d routeDeps) probeInputs(ctx context.Context, cameraRow store.Camera) erro
 		}
 		result, err := d.prober.Probe(ctx, input.URL, 12*time.Second)
 		originalErr := err
-		if err != nil {
+		if err != nil && cameraRow.PolicyState.DesiredRevision == cameraRow.PolicyState.AppliedRevision && cameraRow.PolicyState.ApplyState == store.CameraApplyApplied {
 			parsed, _ := url.Parse(input.URL)
 			if parsed != nil && (strings.EqualFold(parsed.Scheme, "rtsp") || strings.EqualFold(parsed.Scheme, "rtsps")) {
 				localURL := "rtsp://127.0.0.1:8554/" + stream.PrivateSourceName(cameraRow.ID, input.ID)

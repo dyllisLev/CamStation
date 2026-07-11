@@ -320,6 +320,36 @@ func TestProbeInputsFallsBackFromOccupiedRawRTSPToCanonicalPrivateSource(t *test
 	}
 }
 
+func TestProbeInputsDoesNotFallbackToOldAliasWhenChangedURLWasRolledBack(t *testing.T) {
+	prober := &occupiedRTSPPolicyProber{}
+	server, cameraRow := newPolicyRouteServerWithProber(t, nil, prober)
+	cameraRow.Streams[0].URL = "rtsp://u:p@10.0.0.8/changed"
+	if err := server.db.ReplaceCameraStreams(t.Context(), cameraRow.ID, cameraRow.Streams); err != nil {
+		t.Fatal(err)
+	}
+	cameraRow = mustCameraByStream(t, server.db, cameraRow.StreamName)
+	if cameraRow.PolicyState.DesiredRevision == cameraRow.PolicyState.AppliedRevision || cameraRow.PolicyState.ApplyState != store.CameraApplyPending {
+		t.Fatalf("test requires pending desired graph: %#v", cameraRow.PolicyState)
+	}
+	if err := server.db.MarkCameraPolicyFailed(t.Context(), cameraRow.ID, cameraRow.PolicyState.DesiredRevision, "runtime apply failed; previous alias restored"); err != nil {
+		t.Fatal(err)
+	}
+	cameraRow = mustCameraByStream(t, server.db, cameraRow.StreamName)
+	if cameraRow.PolicyState.ApplyState != store.CameraApplyFailed {
+		t.Fatalf("test requires rolled-back apply state: %#v", cameraRow.PolicyState)
+	}
+	if err := (routeDeps{db: server.db, prober: prober}).probeInputs(t.Context(), cameraRow); err != nil {
+		t.Fatal(err)
+	}
+	if len(prober.calls) != 1 || prober.calls[0] != cameraRow.Streams[0].URL {
+		t.Fatalf("pending graph used old private alias: %#v", prober.calls)
+	}
+	stored := mustCameraByStream(t, server.db, cameraRow.StreamName)
+	if stored.Streams[0].DetectedError == "" || stored.Streams[0].DetectedVideoCodec != "" {
+		t.Fatalf("pending raw failure was hidden by old alias: %#v", stored.Streams[0])
+	}
+}
+
 func TestProbeInputsDoesNotFallbackForHTTPInput(t *testing.T) {
 	prober := &occupiedRTSPPolicyProber{}
 	server, cameraRow := newPolicyRouteServerWithProber(t, nil, prober)
