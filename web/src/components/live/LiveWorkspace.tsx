@@ -10,10 +10,12 @@ import {
   useCameras,
   useCreateLayout,
   useLayouts,
+  useRefreshCameraControls,
   useTimeline,
   useUpdateLayout,
 } from "../../app/queries";
 import { cn } from "../../lib/utils";
+import { PtzControlPanel } from "./PtzControlPanel";
 import { useMseStream } from "./useMseStream";
 
 const GRID_COLS = 48;
@@ -41,6 +43,7 @@ export function LiveWorkspace() {
   const layoutsQuery = useLayouts();
   const createLayout = useCreateLayout();
   const updateLayout = useUpdateLayout();
+  const refreshCameraControls = useRefreshCameraControls();
   const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
   const layouts = useMemo(() => layoutsQuery.data ?? [], [layoutsQuery.data]);
   const [layout, setLayout] = useState<MonitorLayoutItem[]>([]);
@@ -49,17 +52,81 @@ export function LiveWorkspace() {
   const [dirty, setDirty] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [sideHidden, setSideHidden] = useState(false);
+  const [ptzPanelOpen, setPtzPanelOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [zoomedStream, setZoomedStream] = useState<string | null>(null);
   const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
   const selectedCamera = rows.find((camera) => camera.streamName === selectedStream) ?? rows[0];
   const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
+  const refreshAttemptedRef = useRef(new Set<string>());
+  const ptzStopRef = useRef<() => Promise<void>>(async () => undefined);
+  const selectedControls = selectedCamera?.controlCapabilities;
+  const ptzEnabled = Boolean(
+    selectedCamera?.state === "streaming" &&
+      selectedControls?.ptz.support === "supported" &&
+      selectedControls.ptz.available,
+  );
+  const ptzDisabledReason = !selectedCamera
+    ? "카메라를 선택하세요."
+    : selectedCamera.state !== "streaming"
+      ? "카메라가 온라인 상태가 아닙니다."
+      : selectedControls?.ptz.support === "unknown" || !selectedControls
+        ? "PTZ 지원 여부를 확인하지 못했습니다."
+        : selectedControls.ptz.support === "unsupported"
+          ? "이 카메라는 PTZ를 지원하지 않습니다."
+          : "PTZ 제어를 사용할 수 없습니다.";
+
+  const registerPtzStop = useCallback((stop: () => Promise<void>) => {
+    ptzStopRef.current = stop;
+  }, []);
+
+  const closePtzPanel = useCallback(async () => {
+    await ptzStopRef.current();
+    setPtzPanelOpen(false);
+  }, []);
+
+  const toggleSidePanel = useCallback(async () => {
+    if (!sideHidden && ptzPanelOpen) await closePtzPanel();
+    setSideHidden((value) => !value);
+  }, [closePtzPanel, ptzPanelOpen, sideHidden]);
+
+  const hideSidePanel = useCallback(async () => {
+    if (ptzPanelOpen) await closePtzPanel();
+    setSideHidden(true);
+  }, [closePtzPanel, ptzPanelOpen]);
 
   useEffect(() => {
     if (selectedStream || rows.length === 0) return;
     setSelectedStream(rows[0].streamName);
   }, [rows, selectedStream]);
+
+  useEffect(() => {
+    const streamName = selectedCamera?.streamName;
+    if (!streamName || selectedCamera.controlCapabilities?.discoveredAt) return;
+    if (refreshAttemptedRef.current.has(streamName)) return;
+    refreshAttemptedRef.current.add(streamName);
+    refreshCameraControls.mutate({ streamName });
+  }, [refreshCameraControls, selectedCamera]);
+
+  const previousSelectedStreamRef = useRef(selectedStream);
+  useEffect(() => {
+    if (previousSelectedStreamRef.current !== selectedStream) {
+      previousSelectedStreamRef.current = selectedStream;
+      if (ptzPanelOpen) void closePtzPanel();
+    }
+  }, [closePtzPanel, ptzPanelOpen, selectedStream]);
+
+  useEffect(() => {
+    if (ptzPanelOpen && (!ptzEnabled || sideHidden)) void closePtzPanel();
+  }, [closePtzPanel, ptzEnabled, ptzPanelOpen, sideHidden]);
+
+  useEffect(
+    () => () => {
+      void ptzStopRef.current();
+    },
+    [],
+  );
 
   useEffect(() => {
     const handler = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -206,7 +273,25 @@ export function LiveWorkspace() {
           <SaveAll size={14} />
           새 이름 저장
         </button>
-        <button className="new-ghost" type="button" onClick={() => setSideHidden((value) => !value)}>
+        <button
+          className={ptzEnabled ? "new-primary" : "new-ghost"}
+          type="button"
+          disabled={!ptzEnabled}
+          title={ptzEnabled ? "선택 카메라 PTZ 제어" : ptzDisabledReason}
+          aria-describedby={ptzEnabled ? undefined : "ptz-disabled-reason"}
+          onClick={() => {
+            setSideHidden(false);
+            setPtzPanelOpen(true);
+          }}
+        >
+          PTZ 제어
+        </button>
+        {!ptzEnabled && (
+          <span id="ptz-disabled-reason" className="new-sr-only">
+            {ptzDisabledReason}
+          </span>
+        )}
+        <button className="new-ghost" type="button" onClick={() => void toggleSidePanel()}>
           {sideHidden ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
           {sideHidden ? "우측 패널 보기" : "우측 패널 숨기기"}
         </button>
@@ -250,55 +335,77 @@ export function LiveWorkspace() {
         </main>
         {!sideHidden && (
           <aside className="new-side-panel" aria-label="운영 패널">
-            <section className="new-panel-card">
-              <div className="new-section-title">
-                <span>
-                  저장된 배치 <em>{Math.max(layouts.length, 1)} profiles</em>
-                </span>
-                <button className="new-icon-button" type="button" onClick={() => setSideHidden(true)} aria-label="우측 패널 숨기기">
-                  <ChevronLeft size={14} />
-                </button>
-              </div>
-              <div className="new-layout-list">
-                {layouts.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={cn("new-layout-row", item.id === currentId && "new-active-row")}
-                    onClick={() => loadLayout(item.id)}
-                  >
-                    <span>{item.name}</span>
-                    <em>{item.id === currentId && dirty ? "편집됨" : formatShortTime(item.updated_at)}</em>
-                  </button>
-                ))}
-                {layouts.length === 0 && (
-                  <button type="button" className="new-layout-row new-active-row">
-                    <span>기본</span>
-                    <em>미저장</em>
-                  </button>
-                )}
-              </div>
-            </section>
-            <section className="new-panel-card">
-              <div className="new-section-title">
-                <span className="new-title-with-icon"><CameraIcon size={14} /> 카메라 상태</span>
-                <em>{onlineCount} / {rows.length} online</em>
-              </div>
-              <div className="new-camera-list">
-                {rows.map((camera) => (
-                  <button
-                    key={camera.id}
-                    className={cn("new-camera-row", camera.streamName === selectedCamera?.streamName && "new-active-row")}
-                    type="button"
-                    onClick={() => setSelectedStream(camera.streamName)}
-                  >
-                    <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
-                    <span>{camera.name}</span>
-                    <em>{camera.state === "streaming" ? "live" : camera.state}</em>
-                  </button>
-                ))}
-              </div>
-            </section>
+            {ptzPanelOpen && ptzEnabled && selectedCamera ? (
+              <PtzControlPanel
+                camera={selectedCamera}
+                onBack={() => setPtzPanelOpen(false)}
+                onStopReady={registerPtzStop}
+              />
+            ) : (
+              <>
+                <section className="new-panel-card">
+                  <div className="new-section-title">
+                    <span>
+                      저장된 배치 <em>{Math.max(layouts.length, 1)} profiles</em>
+                    </span>
+                    <button
+                      className="new-icon-button"
+                      type="button"
+                      onClick={() => void hideSidePanel()}
+                      aria-label="우측 패널 숨기기"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                  </div>
+                  <div className="new-layout-list">
+                    {layouts.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={cn("new-layout-row", item.id === currentId && "new-active-row")}
+                        onClick={() => loadLayout(item.id)}
+                      >
+                        <span>{item.name}</span>
+                        <em>{item.id === currentId && dirty ? "편집됨" : formatShortTime(item.updated_at)}</em>
+                      </button>
+                    ))}
+                    {layouts.length === 0 && (
+                      <button type="button" className="new-layout-row new-active-row">
+                        <span>기본</span>
+                        <em>미저장</em>
+                      </button>
+                    )}
+                  </div>
+                </section>
+                <section className="new-panel-card">
+                  <div className="new-section-title">
+                    <span className="new-title-with-icon">
+                      <CameraIcon size={14} /> 카메라 상태
+                    </span>
+                    <em>
+                      {onlineCount} / {rows.length} online
+                    </em>
+                  </div>
+                  <div className="new-camera-list">
+                    {rows.map((camera) => (
+                      <button
+                        key={camera.id}
+                        className={cn(
+                          "new-camera-row",
+                          camera.streamName === selectedCamera?.streamName && "new-active-row",
+                        )}
+                        type="button"
+                        onClick={() => setSelectedStream(camera.streamName)}
+                      >
+                        <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
+                        <span>{camera.name}</span>
+                        <em>{camera.state === "streaming" ? "live" : camera.state}</em>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </>
+            )}
           </aside>
         )}
       </section>
