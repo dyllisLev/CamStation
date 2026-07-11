@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -11,84 +13,153 @@ func (d *DB) ReplaceCameraStreams(ctx context.Context, cameraID int64, streams [
 		return err
 	}
 	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM camera_streams WHERE camera_id = ?`, cameraID); err != nil {
+	now := time.Now().UTC()
+	if err := upsertCameraStreamsTx(ctx, tx, cameraID, streams, now); err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	recordingStream := ""
-	liveStream := ""
-	for _, stream := range streams {
-		if stream.Go2RTCStreamName == "" || stream.URL == "" {
-			continue
+	recordingName, liveName := "", ""
+	for i := range streams {
+		normalizeCameraStream(&streams[i])
+		if streams[i].Role == CameraStreamRoleRecording && recordingName == "" {
+			recordingName = streams[i].Go2RTCStreamName
 		}
-		if stream.Role == "" {
-			stream.Role = CameraStreamRoleRecording
-		}
-		if stream.State == "" {
-			stream.State = "unknown"
-		}
-		if stream.Role == CameraStreamRoleRecording && recordingStream == "" {
-			recordingStream = stream.Go2RTCStreamName
-		}
-		if stream.Role == CameraStreamRoleLive && liveStream == "" {
-			liveStream = stream.Go2RTCStreamName
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO camera_streams(
-				camera_id, role, label, source, url, go2rtc_stream_name, codec, width, height, fps,
-				bitrate_kbps, profile_token, state, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			cameraID,
-			stream.Role,
-			stream.Label,
-			stream.Source,
-			stream.URL,
-			stream.Go2RTCStreamName,
-			stream.Codec,
-			stream.Width,
-			stream.Height,
-			stream.FPS,
-			stream.BitrateKbps,
-			stream.ProfileToken,
-			stream.State,
-			now.Format(time.RFC3339Nano),
-			now.Format(time.RFC3339Nano),
-		); err != nil {
-			return err
+		if streams[i].Role == CameraStreamRoleLive && liveName == "" {
+			liveName = streams[i].Go2RTCStreamName
 		}
 	}
-	if liveStream == "" {
-		liveStream = recordingStream
+	if liveName == "" {
+		liveName = recordingName
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE cameras
-		 SET recording_stream_name = ?, live_stream_name = ?, updated_at = ?
-		 WHERE id = ?`,
-		recordingStream,
-		liveStream,
-		now.Format(time.RFC3339Nano),
-		cameraID,
-	); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE cameras SET recording_stream_name=?,live_stream_name=?,updated_at=? WHERE id=?`,
+		recordingName, liveName, now.Format(time.RFC3339Nano), cameraID); err != nil {
+		return err
+	}
+	// A legacy first replacement upgrades the live default to the newly discovered live input.
+	_, _ = tx.ExecContext(ctx, `UPDATE camera_outputs SET source_stream_id=(
+		SELECT id FROM camera_streams WHERE camera_id=? AND source_key='live'
+	) WHERE camera_id=? AND purpose='live' AND EXISTS(
+		SELECT 1 FROM camera_policy_states WHERE camera_id=? AND desired_revision=1
+	) AND EXISTS(SELECT 1 FROM camera_streams WHERE camera_id=? AND source_key='live')`, cameraID, cameraID, cameraID, cameraID)
+	if err := deleteMissingCameraStreamsTx(ctx, tx, cameraID, streams); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
+func upsertCameraStreamsTx(ctx context.Context, tx *sql.Tx, cameraID int64, streams []CameraStream, now time.Time) error {
+	for _, stream := range streams {
+		normalizeCameraStream(&stream)
+		if stream.URL == "" || stream.Go2RTCStreamName == "" {
+			continue
+		}
+		var detectedAt any
+		if !stream.DetectedCheckedAt.IsZero() {
+			detectedAt = stream.DetectedCheckedAt.Format(time.RFC3339Nano)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO camera_streams(
+			camera_id,role,source_key,label,source,url,go2rtc_stream_name,codec,width,height,fps,bitrate_kbps,
+			profile_token,state,detected_video_codec,detected_audio_codec,detected_profile,detected_level,
+			detected_pixel_format,detected_bit_depth,detected_width,detected_height,detected_fps,detected_checked_at,
+			detected_error,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(camera_id,source_key) DO UPDATE SET
+			role=excluded.role,label=excluded.label,source=excluded.source,url=excluded.url,
+			go2rtc_stream_name=excluded.go2rtc_stream_name,codec=excluded.codec,width=excluded.width,height=excluded.height,
+			fps=excluded.fps,bitrate_kbps=excluded.bitrate_kbps,profile_token=excluded.profile_token,state=excluded.state,
+			detected_video_codec=excluded.detected_video_codec,detected_audio_codec=excluded.detected_audio_codec,
+			detected_profile=excluded.detected_profile,detected_level=excluded.detected_level,
+			detected_pixel_format=excluded.detected_pixel_format,detected_bit_depth=excluded.detected_bit_depth,
+			detected_width=excluded.detected_width,detected_height=excluded.detected_height,detected_fps=excluded.detected_fps,
+			detected_checked_at=excluded.detected_checked_at,detected_error=excluded.detected_error,updated_at=excluded.updated_at`,
+			cameraID, stream.Role, stream.SourceKey, stream.Label, stream.Source, stream.URL, stream.Go2RTCStreamName,
+			stream.Codec, stream.Width, stream.Height, stream.FPS, stream.BitrateKbps, stream.ProfileToken, stream.State,
+			stream.DetectedVideoCodec, stream.DetectedAudioCodec, stream.DetectedProfile, stream.DetectedLevel,
+			stream.DetectedPixelFormat, stream.DetectedBitDepth, stream.DetectedWidth, stream.DetectedHeight, stream.DetectedFPS,
+			detectedAt, redactString(stream.DetectedError), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeCameraStream(stream *CameraStream) {
+	if stream.Role == "" {
+		stream.Role = CameraStreamRoleRecording
+	}
+	if stream.SourceKey == "" {
+		stream.SourceKey = string(stream.Role)
+	}
+	if stream.State == "" {
+		stream.State = "unknown"
+	}
+}
+
+func deleteMissingCameraStreamsTx(ctx context.Context, tx *sql.Tx, cameraID int64, streams []CameraStream) error {
+	keep := map[string]bool{}
+	for i := range streams {
+		normalizeCameraStream(&streams[i])
+		keep[streams[i].SourceKey] = true
+	}
+	if len(keep) == 0 {
+		return fmt.Errorf("at least one camera input is required")
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,source_key FROM camera_streams WHERE camera_id=?`, cameraID)
+	if err != nil {
+		return err
+	}
+	var remove []int64
+	ids := map[string]int64{}
+	var first int64
+	for rows.Next() {
+		var id int64
+		var key string
+		if err := rows.Scan(&id, &key); err != nil {
+			rows.Close()
+			return err
+		}
+		if keep[key] {
+			ids[key] = id
+			if first == 0 {
+				first = id
+			}
+		} else {
+			remove = append(remove, id)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	recording := ids["recording"]
+	if recording == 0 {
+		recording = first
+	}
+	live := ids["live"]
+	if live == 0 {
+		live = recording
+	}
+	for _, id := range remove {
+		if _, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET source_stream_id=CASE WHEN purpose='live' THEN ? ELSE ? END WHERE camera_id=? AND source_stream_id=?`, live, recording, cameraID, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM camera_streams WHERE id=?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *DB) ListCameraStreams(ctx context.Context, cameraID int64, includeSecrets bool) ([]CameraStream, error) {
-	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, camera_id, role, label, source, url, go2rtc_stream_name, codec, width, height, fps,
-		        bitrate_kbps, profile_token, state, created_at, updated_at
-		 FROM camera_streams
-		 WHERE camera_id = ?
-		 ORDER BY CASE role WHEN 'recording' THEN 0 WHEN 'live' THEN 1 WHEN 'snapshot' THEN 2 ELSE 3 END, id`,
-		cameraID,
-	)
+	rows, err := d.db.QueryContext(ctx, `SELECT id,camera_id,role,source_key,label,source,url,go2rtc_stream_name,
+		codec,width,height,fps,bitrate_kbps,profile_token,state,detected_video_codec,detected_audio_codec,
+		detected_profile,detected_level,detected_pixel_format,detected_bit_depth,detected_width,detected_height,
+		detected_fps,detected_checked_at,detected_error,created_at,updated_at
+		FROM camera_streams WHERE camera_id=?
+		ORDER BY CASE role WHEN 'recording' THEN 0 WHEN 'live' THEN 1 WHEN 'snapshot' THEN 2 ELSE 3 END,id`, cameraID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	streams := make([]CameraStream, 0)
 	for rows.Next() {
 		stream, err := scanCameraStream(rows, includeSecrets)

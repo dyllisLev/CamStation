@@ -79,10 +79,12 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 func scanCameraStream(row scanner, includeSecrets bool) (CameraStream, error) {
 	var stream CameraStream
 	var createdAt, updatedAt string
+	var detectedAt sql.NullString
 	if err := row.Scan(
 		&stream.ID,
 		&stream.CameraID,
 		&stream.Role,
+		&stream.SourceKey,
 		&stream.Label,
 		&stream.Source,
 		&stream.URL,
@@ -94,6 +96,17 @@ func scanCameraStream(row scanner, includeSecrets bool) (CameraStream, error) {
 		&stream.BitrateKbps,
 		&stream.ProfileToken,
 		&stream.State,
+		&stream.DetectedVideoCodec,
+		&stream.DetectedAudioCodec,
+		&stream.DetectedProfile,
+		&stream.DetectedLevel,
+		&stream.DetectedPixelFormat,
+		&stream.DetectedBitDepth,
+		&stream.DetectedWidth,
+		&stream.DetectedHeight,
+		&stream.DetectedFPS,
+		&detectedAt,
+		&stream.DetectedError,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -101,9 +114,11 @@ func scanCameraStream(row scanner, includeSecrets bool) (CameraStream, error) {
 	}
 	stream.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	stream.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	stream.DetectedCheckedAt, _ = time.Parse(time.RFC3339Nano, detectedAt.String)
 	stream.RedactedURL = RedactURL(stream.URL)
 	if !includeSecrets {
 		stream.URL = ""
+		stream.DetectedError = redactString(stream.DetectedError)
 	}
 	return stream, nil
 }

@@ -106,6 +106,9 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 	if err != nil {
 		return Camera{}, err
 	}
+	if err := d.ensureCameraPolicyDefaults(ctx); err != nil {
+		return Camera{}, err
+	}
 	return d.GetCameraByStream(ctx, camera.StreamName)
 }
 
@@ -138,6 +141,14 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 			return nil, err
 		}
 		cameras[i].Streams = streams
+		cameras[i].Outputs, err = d.listCameraOutputs(ctx, cameras[i].ID, includeSecrets)
+		if err != nil {
+			return nil, err
+		}
+		cameras[i].PolicyState, err = d.getCameraPolicyState(ctx, cameras[i].ID, includeSecrets)
+		if err != nil {
+			return nil, err
+		}
 		applyRoleStreamNames(&cameras[i])
 	}
 	return cameras, nil
@@ -163,6 +174,14 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 		return Camera{}, err
 	}
 	camera.Streams = streams
+	camera.Outputs, err = d.listCameraOutputs(ctx, camera.ID, true)
+	if err != nil {
+		return Camera{}, err
+	}
+	camera.PolicyState, err = d.getCameraPolicyState(ctx, camera.ID, true)
+	if err != nil {
+		return Camera{}, err
+	}
 	applyRoleStreamNames(&camera)
 	return camera, nil
 }

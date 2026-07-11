@@ -34,6 +34,8 @@ type Camera struct {
 	LastScanJSON        map[string]any            `json:"lastScan,omitempty"`
 	ControlCapabilities CameraControlCapabilities `json:"controlCapabilities"`
 	Streams             []CameraStream            `json:"streams,omitempty"`
+	Outputs             []CameraOutput            `json:"outputs,omitempty"`
+	PolicyState         CameraPolicyState         `json:"policyState"`
 	CreatedAt           time.Time                 `json:"createdAt"`
 	UpdatedAt           time.Time                 `json:"updatedAt"`
 }
@@ -91,23 +93,122 @@ const (
 )
 
 type CameraStream struct {
-	ID               int64            `json:"id"`
-	CameraID         int64            `json:"camera_id"`
-	Role             CameraStreamRole `json:"role"`
-	Label            string           `json:"label"`
-	Source           string           `json:"source"`
-	URL              string           `json:"url,omitempty"`
-	RedactedURL      string           `json:"redactedUrl"`
-	Go2RTCStreamName string           `json:"go2rtcStreamName"`
-	Codec            string           `json:"codec,omitempty"`
-	Width            int              `json:"width,omitempty"`
-	Height           int              `json:"height,omitempty"`
-	FPS              float64          `json:"fps,omitempty"`
-	BitrateKbps      int              `json:"bitrateKbps,omitempty"`
-	ProfileToken     string           `json:"profileToken,omitempty"`
-	State            string           `json:"state,omitempty"`
-	CreatedAt        time.Time        `json:"createdAt,omitempty"`
-	UpdatedAt        time.Time        `json:"updatedAt,omitempty"`
+	ID                  int64            `json:"id"`
+	CameraID            int64            `json:"camera_id"`
+	Role                CameraStreamRole `json:"role"`
+	SourceKey           string           `json:"sourceKey"`
+	Label               string           `json:"label"`
+	Source              string           `json:"source"`
+	URL                 string           `json:"url,omitempty"`
+	RedactedURL         string           `json:"redactedUrl"`
+	Go2RTCStreamName    string           `json:"go2rtcStreamName"`
+	Codec               string           `json:"codec,omitempty"`
+	Width               int              `json:"width,omitempty"`
+	Height              int              `json:"height,omitempty"`
+	FPS                 float64          `json:"fps,omitempty"`
+	BitrateKbps         int              `json:"bitrateKbps,omitempty"`
+	ProfileToken        string           `json:"profileToken,omitempty"`
+	State               string           `json:"state,omitempty"`
+	DetectedVideoCodec  string           `json:"detectedVideoCodec,omitempty"`
+	DetectedAudioCodec  string           `json:"detectedAudioCodec,omitempty"`
+	DetectedProfile     string           `json:"detectedProfile,omitempty"`
+	DetectedLevel       string           `json:"detectedLevel,omitempty"`
+	DetectedPixelFormat string           `json:"detectedPixelFormat,omitempty"`
+	DetectedBitDepth    int              `json:"detectedBitDepth,omitempty"`
+	DetectedWidth       int              `json:"detectedWidth,omitempty"`
+	DetectedHeight      int              `json:"detectedHeight,omitempty"`
+	DetectedFPS         float64          `json:"detectedFps,omitempty"`
+	DetectedCheckedAt   time.Time        `json:"detectedCheckedAt,omitempty"`
+	DetectedError       string           `json:"detectedError,omitempty"`
+	CreatedAt           time.Time        `json:"createdAt,omitempty"`
+	UpdatedAt           time.Time        `json:"updatedAt,omitempty"`
+}
+
+type CameraOutputPurpose string
+
+const (
+	CameraOutputRecording CameraOutputPurpose = "recording"
+	CameraOutputLive      CameraOutputPurpose = "live"
+	CameraOutputFocus     CameraOutputPurpose = "focus"
+)
+
+type CameraVideoMode string
+
+const (
+	CameraVideoAuto CameraVideoMode = "auto"
+	CameraVideoCopy CameraVideoMode = "copy"
+	CameraVideoH264 CameraVideoMode = "h264"
+)
+
+type CameraAudioMode string
+
+const (
+	CameraAudioSource CameraAudioMode = "source"
+	CameraAudioNone   CameraAudioMode = "none"
+	CameraAudioAAC    CameraAudioMode = "aac"
+)
+
+type CameraActivation string
+
+const (
+	CameraActivationOnDemand CameraActivation = "on_demand"
+	CameraActivationAlways   CameraActivation = "always"
+)
+
+type CameraOutputPolicySnapshot struct {
+	SourceStreamID int64            `json:"sourceStreamId,omitempty"`
+	VideoMode      CameraVideoMode  `json:"videoMode,omitempty"`
+	MaxWidth       *int             `json:"maxWidth,omitempty"`
+	MaxHeight      *int             `json:"maxHeight,omitempty"`
+	MaxFPS         *float64         `json:"maxFps,omitempty"`
+	AudioMode      CameraAudioMode  `json:"audioMode,omitempty"`
+	Activation     CameraActivation `json:"activation,omitempty"`
+}
+
+type CameraOutputVerification struct {
+	VideoCodec string    `json:"videoCodec,omitempty"`
+	AudioCodec string    `json:"audioCodec,omitempty"`
+	Width      int       `json:"width,omitempty"`
+	Height     int       `json:"height,omitempty"`
+	FPS        float64   `json:"fps,omitempty"`
+	CheckedAt  time.Time `json:"checkedAt,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+type CameraOutput struct {
+	ID             int64                      `json:"id"`
+	CameraID       int64                      `json:"cameraId"`
+	Purpose        CameraOutputPurpose        `json:"purpose"`
+	StreamName     string                     `json:"streamName"`
+	SourceStreamID int64                      `json:"sourceStreamId"`
+	SourceKey      string                     `json:"sourceKey"`
+	VideoMode      CameraVideoMode            `json:"videoMode"`
+	MaxWidth       *int                       `json:"maxWidth,omitempty"`
+	MaxHeight      *int                       `json:"maxHeight,omitempty"`
+	MaxFPS         *float64                   `json:"maxFps,omitempty"`
+	AudioMode      CameraAudioMode            `json:"audioMode"`
+	Activation     CameraActivation           `json:"activation"`
+	AppliedPolicy  CameraOutputPolicySnapshot `json:"appliedPolicy"`
+	Verification   CameraOutputVerification   `json:"verification"`
+	CreatedAt      time.Time                  `json:"createdAt"`
+	UpdatedAt      time.Time                  `json:"updatedAt"`
+}
+
+type CameraApplyState string
+
+const (
+	CameraApplyApplied CameraApplyState = "applied"
+	CameraApplyPending CameraApplyState = "pending"
+	CameraApplyFailed  CameraApplyState = "apply_failed"
+)
+
+type CameraPolicyState struct {
+	CameraID        int64            `json:"cameraId"`
+	DesiredRevision int64            `json:"desiredRevision"`
+	AppliedRevision int64            `json:"appliedRevision"`
+	ApplyState      CameraApplyState `json:"applyState"`
+	ApplyStateAt    time.Time        `json:"applyStateAt"`
+	ApplyError      string           `json:"applyError,omitempty"`
 }
 
 type LayoutItem struct {

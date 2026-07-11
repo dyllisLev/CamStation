@@ -194,6 +194,9 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if err := d.ensureCameraProfileSchema(ctx); err != nil {
 		return err
 	}
+	if err := d.ensureCameraPolicySchema(ctx); err != nil {
+		return err
+	}
 	if err := d.ensureViewerSystemSchema(ctx); err != nil {
 		return err
 	}
