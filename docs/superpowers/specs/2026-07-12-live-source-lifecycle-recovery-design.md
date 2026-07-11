@@ -16,9 +16,8 @@ Keep the existing policy control plane and change only media-source lifecycle an
 
 1. Private camera inputs used by applied live outputs are preloaded by go2rtc. The camera producer is established once at daemon/go2rtc startup and remains shared across public outputs.
 2. Public output activation remains independent. `on_demand` still controls expensive transform FFmpeg processes; `always` still preloads the public output itself.
-3. Outputs that require H.264 conversion, resize, FPS limiting, or audio conversion continue to use the bounded server-generated FFmpeg pipeline.
-4. Copy outputs without a transform use the shared private producer directly. Video-only copy should use go2rtc track selection rather than an FFmpeg copy process when supported by the deployed go2rtc version.
-5. Recording, live, and focus keep their server-owned public names and continue to share a single private producer for the same source row.
+3. Existing public-output producer selection remains unchanged in this recovery. Outputs that currently require H.264 conversion, resize, FPS limiting, audio conversion, or audio removal keep their bounded server-generated FFmpeg pipeline.
+4. Recording, live, and focus keep their server-owned public names and continue to share a single private producer for the same source row.
 
 The official go2rtc documentation specifically identifies preload as appropriate for cameras that take a long time to start. Preloading the private input, rather than every transformed output, keeps camera sessions stable without forcing all software encoders to run continuously.
 
@@ -35,11 +34,11 @@ The official go2rtc documentation specifically identifies preload as appropriate
 
 ## Configuration Rendering
 
-The renderer will calculate the set of private sources referenced by applied live outputs and add those private source names to `preload` with video tracks. Existing public-output preload entries for `activation=always` remain.
+The renderer will calculate the set of private sources referenced by applied live outputs and add those private source names to `preload` with `video&audio`. Preloading both available tracks lets a single-source camera share the same producer with later recording/focus consumers without reopening the camera solely to add audio. Existing public-output preload entries for `activation=always` remain.
 
 Preload entries must be deduplicated. They must never contain raw camera URLs or public output aliases in place of the canonical private source identity.
 
-For direct video-only copy, the public output producer will select only the video track from the private source using a go2rtc-native local source reference. If the deployed version cannot express this without FFmpeg, the existing safe FFmpeg copy path remains; source preloading is the required recovery, while FFmpeg elimination is an optional verified optimization.
+Eliminating FFmpeg from video-only copy outputs is deliberately deferred. It is not required to fix the producer lifecycle failure and would change a second runtime variable in the same recovery.
 
 ## Failure Handling
 
@@ -56,7 +55,7 @@ Automated regression coverage must prove:
 - multiple outputs sharing one source do not create multiple private preload entries;
 - raw camera URLs and credentials do not enter public names or test diagnostics;
 - transform outputs retain their existing FFmpeg policy and short-GOP flags;
-- direct copy behavior does not add an unnecessary FFmpeg process when native video-track selection is verified;
+- existing direct-copy and FFmpeg output selection is unchanged;
 - full Go tests, web build, and daemon build pass.
 
 Runtime verification on `cctv2` must use the managed lifecycle script and record KST evidence for all eight live outputs. Acceptance requires each healthy camera to acquire a producer and render in `/live`, no ordinary reconnect 404, no extra camera connection per recording/live/focus output sharing the same source, and no disruption to the legacy `cctv` server.
@@ -67,3 +66,4 @@ Runtime verification on `cctv2` must use the managed lifecycle script and record
 - Changing camera credentials, URLs, profiles, or the legacy `cctv` server
 - Adding a new streaming dependency or custom retry daemon
 - Keeping all software H.264 encoders running when nobody is viewing
+- Optimizing video-only copy outputs to remove their existing FFmpeg wrapper
