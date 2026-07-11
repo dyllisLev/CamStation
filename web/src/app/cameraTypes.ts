@@ -180,6 +180,7 @@ export type StreamCandidate = {
   fps?: number;
   bitrateKbps?: number;
   profileToken?: string;
+  producerKey?: string;
 };
 
 export type CameraStreamSelection = {

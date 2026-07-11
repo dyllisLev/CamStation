@@ -64,7 +64,7 @@ export function reloadedPolicyDraft(cameras: readonly Camera[], cameraKey: strin
 }
 
 export function hasDistinctLiveSource(
-  candidates: readonly Pick<StreamCandidate, "profileToken" | "redactedUrl" | "source">[],
+  candidates: readonly Pick<StreamCandidate, "profileToken" | "producerKey">[],
   recordingProfileToken: string,
   liveProfileToken: string,
 ): boolean {
@@ -72,9 +72,7 @@ export function hasDistinctLiveSource(
   const recording = candidates.find((item) => item.profileToken === recordingProfileToken);
   const live = candidates.find((item) => item.profileToken === liveProfileToken);
   if (!recording || !live) return false;
-  const recordingIdentity = recording.redactedUrl || recording.source;
-  const liveIdentity = live.redactedUrl || live.source;
-  return Boolean(recordingIdentity && liveIdentity && recordingIdentity !== liveIdentity);
+  return Boolean(recording.producerKey && live.producerKey && recording.producerKey !== live.producerKey);
 }
 
 export function normalizeUnavailableSources(

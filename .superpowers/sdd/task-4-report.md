@@ -35,5 +35,5 @@
 - Connection/profile rescans show and send the same policy draft. Existing manual modes and limits remain intact, while a live source deduplicated by the backend is visibly normalized to recording before validation/save.
 - Live-input availability now compares public producer identity, not only differing profile tokens, matching backend same-URL deduplication.
 - Workflow and policy editor instances are keyed by mode plus stable camera `streamName`, so late async results from camera A cannot mutate camera B's local draft after selection changes.
-- Candidate identity comparison is deliberately conservative: equal or unavailable public producer identities fall back to recording. Credential-redaction ambiguity can suppress an otherwise distinct live source, but cannot generate the backend `sourceKey=live` 400 failure.
+- Candidate identity uses the server-issued opaque `producerKey`, derived from exact raw producer equality without exposing the URL. Equal or unavailable keys conservatively fall back to recording, so credential redaction cannot cause a `sourceKey=live` 400 or overwrite a valid policy based on URL guessing.
 - Follow-up verification: 16/16 tests, lint without warnings, and production build pass.

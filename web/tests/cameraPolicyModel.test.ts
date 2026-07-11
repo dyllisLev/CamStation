@@ -99,16 +99,17 @@ test("server reload rebuilds the draft from the freshly fetched camera revision"
 
 test("live source is available only for a distinct backend producer", () => {
   const sameProducer = [
-    { profileToken: "main", redactedUrl: "rtsp://camera/main", roleHint: "recording", label: "main", source: "rtsp" },
-    { profileToken: "sub", redactedUrl: "rtsp://camera/main", roleHint: "live", label: "sub", source: "rtsp" },
+    { profileToken: "main", producerKey: "producer-a", redactedUrl: "rtsp://camera/main", roleHint: "recording", label: "main", source: "rtsp" },
+    { profileToken: "sub", producerKey: "producer-a", redactedUrl: "rtsp://camera/main", roleHint: "live", label: "sub", source: "rtsp" },
   ];
   const distinctProducer = [
     sameProducer[0],
-    { ...sameProducer[1], redactedUrl: "rtsp://camera/sub" },
+    { ...sameProducer[1], producerKey: "producer-b" },
   ];
   assert.equal(hasDistinctLiveSource(sameProducer, "main", "sub"), false);
   assert.equal(hasDistinctLiveSource(distinctProducer, "main", "sub"), true);
   assert.equal(hasDistinctLiveSource(distinctProducer, "main", "main"), false);
+  assert.equal(hasDistinctLiveSource(distinctProducer.map(({ producerKey: _, ...item }) => item), "main", "sub"), false);
 });
 
 test("rescan keeps manual policy fields while remapping an unavailable live source", () => {
