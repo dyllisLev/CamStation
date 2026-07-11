@@ -1,15 +1,11 @@
 package cameraprofile
 
 import (
-	"crypto/rand"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"math"
 	"net/url"
 	"strings"
-	"time"
 )
 
 func derivedVStarcamURI(req ScanRequest, index int) string {
@@ -82,52 +78,6 @@ func xmlDocument(raw string) string {
 		return trimmed
 	}
 	return "<root>" + raw + "</root>"
-}
-
-func deviceURL(req ScanRequest) string {
-	return fmt.Sprintf("http://%s:%d/onvif/device_service", req.Host, req.ONVIFPort)
-}
-
-func mediaURL(req ScanRequest) string {
-	return fmt.Sprintf("http://%s:%d/onvif/media_service", req.Host, req.ONVIFPort)
-}
-
-func ptzURL(req ScanRequest) string {
-	return fmt.Sprintf("http://%s:%d/onvif/ptz_services", req.Host, req.ONVIFPort)
-}
-
-func soapEnvelope(username, password, inner string) (string, error) {
-	security := ""
-	if username != "" {
-		nonce := make([]byte, 16)
-		if _, err := rand.Read(nonce); err != nil {
-			return "", err
-		}
-		created := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-		sum := sha1.Sum([]byte(string(nonce) + created + password))
-		security = fmt.Sprintf(`<SOAP-ENV:Header>
-  <wsse:Security SOAP-ENV:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
-    <wsse:UsernameToken>
-      <wsse:Username>%s</wsse:Username>
-      <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">%s</wsse:Password>
-      <wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">%s</wsse:Nonce>
-      <wsu:Created>%s</wsu:Created>
-    </wsse:UsernameToken>
-  </wsse:Security>
-</SOAP-ENV:Header>`, xmlEscape(username), base64.StdEncoding.EncodeToString(sum[:]), base64.StdEncoding.EncodeToString(nonce), created)
-	}
-	return fmt.Sprintf(`<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope" xmlns:tds="http://www.onvif.org/ver10/device/wsdl" xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
-%s
-<SOAP-ENV:Body>%s</SOAP-ENV:Body>
-</SOAP-ENV:Envelope>`, security, inner), nil
-}
-
-func xmlEscape(value string) string {
-	var buf strings.Builder
-	if err := xml.EscapeText(&buf, []byte(value)); err != nil {
-		return value
-	}
-	return buf.String()
 }
 
 func roundFPS(value float64) float64 {

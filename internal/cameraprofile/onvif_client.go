@@ -1,14 +1,14 @@
 package cameraprofile
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"camstation/internal/onvif"
 )
 
 type NetworkScannerClient struct {
@@ -20,11 +20,11 @@ func NewNetworkScannerClient() NetworkScannerClient {
 }
 
 func (c NetworkScannerClient) DeviceInformation(ctx context.Context, req ScanRequest) (string, error) {
-	return c.soap(ctx, deviceURL(req), "http://www.onvif.org/ver10/device/wsdl/GetDeviceInformation", `<tds:GetDeviceInformation/>`, req)
+	return c.call(ctx, req, onvif.ServiceDevice, "http://www.onvif.org/ver10/device/wsdl/GetDeviceInformation", `<tds:GetDeviceInformation/>`)
 }
 
 func (c NetworkScannerClient) Hostname(ctx context.Context, req ScanRequest) (string, error) {
-	response, err := c.soap(ctx, deviceURL(req), "http://www.onvif.org/ver10/device/wsdl/GetHostname", `<tds:GetHostname/>`, req)
+	response, err := c.call(ctx, req, onvif.ServiceDevice, "http://www.onvif.org/ver10/device/wsdl/GetHostname", `<tds:GetHostname/>`)
 	if err != nil {
 		return "", err
 	}
@@ -32,7 +32,7 @@ func (c NetworkScannerClient) Hostname(ctx context.Context, req ScanRequest) (st
 }
 
 func (c NetworkScannerClient) Profiles(ctx context.Context, req ScanRequest) (string, error) {
-	return c.soap(ctx, mediaURL(req), "http://www.onvif.org/ver10/media/wsdl/GetProfiles", `<trt:GetProfiles/>`, req)
+	return c.call(ctx, req, onvif.ServiceMedia, "http://www.onvif.org/ver10/media/wsdl/GetProfiles", `<trt:GetProfiles/>`)
 }
 
 func (c NetworkScannerClient) StreamURI(ctx context.Context, req ScanRequest, token string) (string, error) {
@@ -42,8 +42,8 @@ func (c NetworkScannerClient) StreamURI(ctx context.Context, req ScanRequest, to
     <tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport>
   </trt:StreamSetup>
   <trt:ProfileToken>%s</trt:ProfileToken>
-</trt:GetStreamUri>`, xmlEscape(token))
-	response, err := c.soap(ctx, mediaURL(req), "http://www.onvif.org/ver10/media/wsdl/GetStreamUri", body, req)
+</trt:GetStreamUri>`, onvif.Escape(token))
+	response, err := c.call(ctx, req, onvif.ServiceMedia, "http://www.onvif.org/ver10/media/wsdl/GetStreamUri", body)
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +55,7 @@ func (c NetworkScannerClient) StreamURI(ctx context.Context, req ScanRequest, to
 }
 
 func (c NetworkScannerClient) PTZSummary(ctx context.Context, req ScanRequest, _ string) (PTZSummary, error) {
-	response, err := c.soap(ctx, ptzURL(req), "http://www.onvif.org/ver20/ptz/wsdl/GetNodes", `<tptz:GetNodes/>`, req)
+	response, err := c.call(ctx, req, onvif.ServicePTZ, "http://www.onvif.org/ver20/ptz/wsdl/GetNodes", `<tptz:GetNodes/>`)
 	if err != nil {
 		return PTZSummary{}, err
 	}
@@ -63,32 +63,10 @@ func (c NetworkScannerClient) PTZSummary(ctx context.Context, req ScanRequest, _
 	return PTZSummary{Supported: strings.Contains(response, "PTZNode"), MaxPresets: maxPresets}, nil
 }
 
-func (c NetworkScannerClient) soap(ctx context.Context, endpoint, action, inner string, req ScanRequest) (string, error) {
-	client := c.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
+func (c NetworkScannerClient) call(ctx context.Context, req ScanRequest, service onvif.Service, action, body string) (string, error) {
+	target := onvif.Target{
+		Host: req.Host, Port: req.ONVIFPort,
+		Username: req.Username, Password: req.Password,
 	}
-	envelope, err := soapEnvelope(req.Username, req.Password, inner)
-	if err != nil {
-		return "", err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader([]byte(envelope)))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	httpReq.Header.Set("SOAPAction", action)
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	payload, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return string(payload), fmt.Errorf("ONVIF %s returned %s", endpoint, resp.Status)
-	}
-	return string(payload), nil
+	return onvif.NewClient(c.HTTPClient).Call(ctx, target, service, action, body)
 }
