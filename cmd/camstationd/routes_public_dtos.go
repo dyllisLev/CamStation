@@ -130,11 +130,14 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 	streams := make([]publicCameraStream, 0, len(camera.Streams))
 	bySourceKey := make(map[string]store.CameraStream, len(camera.Streams))
 	for _, input := range camera.Streams {
+		if !isPublicCameraSourceKey(input.SourceKey) {
+			continue
+		}
 		bySourceKey[input.SourceKey] = input
 		streams = append(streams, publicCameraStream{
 			SourceKey: input.SourceKey, Role: input.Role, Label: input.Label,
 			Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input),
-			CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: store.RedactText(input.DetectedError),
+			CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: publicPolicyError(input.DetectedError),
 		})
 	}
 	var status stream.Status
@@ -143,11 +146,13 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 	}
 	outputs := make([]publicCameraStreamOutput, 0, len(camera.Outputs))
 	for _, output := range camera.Outputs {
-		input := bySourceKey[output.SourceKey]
-		desired := publicSettings(output.Purpose, output.SourceKey, output.VideoMode, output.MaxWidth, output.MaxHeight, output.MaxFPS, output.AudioMode, output.Activation)
+		sourceKey := canonicalPublicSourceKey(output.SourceKey, output.Purpose, bySourceKey)
+		input := bySourceKey[sourceKey]
+		desired := publicSettings(output.Purpose, sourceKey, output.VideoMode, output.MaxWidth, output.MaxHeight, output.MaxFPS, output.AudioMode, output.Activation)
 		var applied *publicStreamOutputSettings
 		if camera.PolicyState.AppliedRevision > 0 && output.AppliedPolicy.SourceKey != "" {
-			value := publicSettings(output.Purpose, output.AppliedPolicy.SourceKey, output.AppliedPolicy.VideoMode, output.AppliedPolicy.MaxWidth, output.AppliedPolicy.MaxHeight, output.AppliedPolicy.MaxFPS, output.AppliedPolicy.AudioMode, output.AppliedPolicy.Activation)
+			appliedSourceKey := canonicalPublicSourceKey(output.AppliedPolicy.SourceKey, output.Purpose, bySourceKey)
+			value := publicSettings(output.Purpose, appliedSourceKey, output.AppliedPolicy.VideoMode, output.AppliedPolicy.MaxWidth, output.AppliedPolicy.MaxHeight, output.AppliedPolicy.MaxFPS, output.AppliedPolicy.AudioMode, output.AppliedPolicy.Activation)
 			applied = &value
 		}
 		verificationState := "unverified"
@@ -162,14 +167,14 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 		}
 		runtime := status.Streams[output.StreamName]
 		outputs = append(outputs, publicCameraStreamOutput{
-			Purpose: output.Purpose, SourceKey: output.SourceKey, StreamName: output.StreamName, Desired: desired, Applied: applied,
-			Source:       publicStreamOutputSource{Label: input.Label, Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input), CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: store.RedactText(input.DetectedError)},
+			Purpose: output.Purpose, SourceKey: sourceKey, StreamName: output.StreamName, Desired: desired, Applied: applied,
+			Source:       publicStreamOutputSource{Label: input.Label, Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input), CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: publicPolicyError(input.DetectedError)},
 			Effective:    effective,
-			Verification: publicStreamOutputVerification{State: verificationState, CheckedAt: formatPublicTime(output.Verification.CheckedAt), Error: store.RedactText(output.Verification.Error)},
+			Verification: publicStreamOutputVerification{State: verificationState, CheckedAt: formatPublicTime(output.Verification.CheckedAt), Error: publicPolicyError(output.Verification.Error)},
 			Runtime:      publicStreamOutputRuntime{State: defaultRuntimeState(runtime.State), ProducerCount: runtime.ProducerCount, ConsumerCount: runtime.ConsumerCount, ViewerCount: runtime.ViewerCount},
 		})
 	}
-	applyState := publicCameraStreamApplyState{DesiredRevision: camera.PolicyState.DesiredRevision, AppliedRevision: camera.PolicyState.AppliedRevision, State: camera.PolicyState.ApplyState, Error: store.RedactText(camera.PolicyState.ApplyError)}
+	applyState := publicCameraStreamApplyState{DesiredRevision: camera.PolicyState.DesiredRevision, AppliedRevision: camera.PolicyState.AppliedRevision, State: camera.PolicyState.ApplyState, Error: publicPolicyError(camera.PolicyState.ApplyError)}
 	if camera.PolicyState.AppliedRevision > 0 {
 		applyState.AppliedAt = formatPublicTime(camera.PolicyState.AppliedAt)
 	}
@@ -199,6 +204,28 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 		CreatedAt:           camera.CreatedAt,
 		UpdatedAt:           camera.UpdatedAt,
 	}
+}
+
+func isPublicCameraSourceKey(sourceKey string) bool {
+	return sourceKey == "recording" || sourceKey == "live"
+}
+
+func canonicalPublicSourceKey(sourceKey string, purpose store.CameraOutputPurpose, inputs map[string]store.CameraStream) string {
+	if isPublicCameraSourceKey(sourceKey) {
+		if _, ok := inputs[sourceKey]; ok {
+			return sourceKey
+		}
+	}
+	if purpose == store.CameraOutputLive {
+		if _, ok := inputs["live"]; ok {
+			return "live"
+		}
+	}
+	return "recording"
+}
+
+func publicPolicyError(value string) string {
+	return redactInternalRuntimeText(store.RedactText(value))
 }
 
 func publicSettings(purpose store.CameraOutputPurpose, sourceKey string, video store.CameraVideoMode, maxWidth, maxHeight *int, maxFPS *float64, audio store.CameraAudioMode, activation store.CameraActivation) publicStreamOutputSettings {
@@ -239,7 +266,7 @@ func publicJSONMap(input map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(input))
 	for key, value := range input {
-		if strings.EqualFold(key, "url") {
+		if strings.EqualFold(key, "url") || isSecretJSONKey(key) {
 			continue
 		}
 		out[key] = publicJSONValue(value)
@@ -261,12 +288,22 @@ func publicJSONValue(value any) any {
 		}
 		return out
 	case string:
-		if strings.Contains(typed, "://") {
-			return store.RedactURL(typed)
-		}
-		return typed
+		return publicPolicyError(typed)
 	default:
 		return value
+	}
+}
+
+func isSecretJSONKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "profiletoken" || key == "profile_token" {
+		return false
+	}
+	switch key {
+	case "user", "username", "password", "passwd", "pwd", "token", "access_token", "auth", "authorization", "secret", "client_secret":
+		return true
+	default:
+		return strings.Contains(key, "password") || strings.Contains(key, "secret") || strings.Contains(key, "authorization")
 	}
 }
 
@@ -287,8 +324,10 @@ func publicGo2RTCStatus(status stream.Status) publicStreamStatus {
 }
 
 func redactInternalRuntimeText(value string) string {
-	internalHost := "127.0.0.1" + ":1984"
-	value = strings.ReplaceAll(value, "http://"+internalHost, "[internal-go2rtc]")
-	value = strings.ReplaceAll(value, internalHost, "[internal-go2rtc]")
+	for _, internalHost := range []string{"127.0.0.1:1984", "127.0.0.1:8554", "localhost:1984", "localhost:8554"} {
+		value = strings.ReplaceAll(value, "http://"+internalHost, "[internal-go2rtc]")
+		value = strings.ReplaceAll(value, "rtsp://"+internalHost, "[internal-go2rtc]")
+		value = strings.ReplaceAll(value, internalHost, "[internal-go2rtc]")
+	}
 	return value
 }

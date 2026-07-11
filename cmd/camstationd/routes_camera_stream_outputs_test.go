@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,6 +82,57 @@ func TestPublicCameraStreamPolicyDTOHasStableKeysAndNoPrivateInputIdentity(t *te
 	for _, forbidden := range []string{`"id":`, "sourceStreamId", "camera_id", "go2rtcStreamName", "redactedUrl", "rtsp://", "10.0.0.5", "private-source"} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("public DTO leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestPublicCameraFiltersLegacySourceKeysAndNormalizesOutputReferences(t *testing.T) {
+	cameraRow := store.Camera{
+		StreamName: "legacy", RecordingStreamName: "legacy-recording", LiveStreamName: "legacy-live", FocusStreamName: "legacy-focus",
+		Streams: []store.CameraStream{
+			{SourceKey: "recording", Role: store.CameraStreamRoleRecording, Label: "main"},
+			{SourceKey: "snapshot", Role: store.CameraStreamRoleSnapshot, Label: "snapshot"},
+			{SourceKey: "recording-44", Role: store.CameraStreamRoleRecording, Label: "duplicate"},
+		},
+		Outputs: []store.CameraOutput{
+			{Purpose: store.CameraOutputRecording, StreamName: "legacy-recording", SourceKey: "recording", VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand},
+			{Purpose: store.CameraOutputLive, StreamName: "legacy-live", SourceKey: "snapshot", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand, AppliedPolicy: store.CameraOutputPolicySnapshot{SourceKey: "recording-44", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand}},
+			{Purpose: store.CameraOutputFocus, StreamName: "legacy-focus", SourceKey: "recording-44", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+		},
+		PolicyState: store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyPending},
+	}
+	public := publicCameraFromStore(cameraRow)
+	if len(public.Streams) != 1 || public.Streams[0].SourceKey != "recording" {
+		t.Fatalf("public legacy sources = %#v", public.Streams)
+	}
+	for _, output := range public.StreamOutputs {
+		if output.SourceKey != "recording" || output.Desired.SourceKey != "recording" || (output.Applied != nil && output.Applied.SourceKey != "recording") {
+			t.Fatalf("unsupported source key escaped: %#v", output)
+		}
+	}
+}
+
+func TestPublicCameraRedactsPolicyErrorsAndSecretJSONKeys(t *testing.T) {
+	internal := "rtsp://admin:secret@127.0.0.1:8554/private?token=querysecret"
+	cameraRow := store.Camera{
+		StreamName: "redaction", LastProbeJSON: map[string]any{
+			"username": "admin", "profileToken": "PROFILE_000", "nested": map[string]any{"password": "secret", "token": "abc", "safe": internal},
+		},
+		Streams: []store.CameraStream{{SourceKey: "recording", Role: store.CameraStreamRoleRecording, DetectedError: "probe " + internal}},
+		Outputs: []store.CameraOutput{
+			{Purpose: store.CameraOutputRecording, SourceKey: "recording", VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand, Verification: store.CameraOutputVerification{Error: "verify " + internal}},
+			{Purpose: store.CameraOutputLive, SourceKey: "recording", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+			{Purpose: store.CameraOutputFocus, SourceKey: "recording", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+		},
+		PolicyState: store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyFailed, ApplyError: "apply " + internal},
+	}
+	encoded := mustMarshalString(t, publicCameraFromStore(cameraRow))
+	if !strings.Contains(encoded, `"profileToken":"PROFILE_000"`) {
+		t.Fatalf("public camera removed non-secret profile token: %s", encoded)
+	}
+	for _, forbidden := range []string{"admin", "secret", "querysecret", "127.0.0.1", "8554", "username", "password", `"token"`} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("public camera leaked %q: %s", forbidden, encoded)
 		}
 	}
 }
@@ -218,13 +270,35 @@ func TestReapplyKeepsDesiredRevision(t *testing.T) {
 		return stream.PolicyApplyResult{Applied: true}
 	}))
 	before := camera.PolicyState.DesiredRevision
-	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/"+camera.StreamName+"/stream-outputs/reapply", "", trustedConsoleHeaders())
+	body := fmt.Sprintf(`{"expectedDesiredRevision":%d}`, before)
+	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/"+camera.StreamName+"/stream-outputs/reapply", body, trustedConsoleHeaders())
 	if status != http.StatusOK || applyCalls != 1 {
 		t.Fatalf("reapply = status %d calls %d", status, applyCalls)
 	}
 	after, _ := server.db.GetCameraByStream(t.Context(), camera.StreamName)
 	if after.PolicyState.DesiredRevision != before {
 		t.Fatalf("reapply revision = %d, want %d", after.PolicyState.DesiredRevision, before)
+	}
+}
+
+func TestReapplyRejectsMissingAndStaleDesiredRevision(t *testing.T) {
+	applyCalls := 0
+	server, camera := newPolicyRouteServer(t, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
+		applyCalls++
+		return stream.PolicyApplyResult{Applied: true}
+	}))
+	for _, body := range []string{"{}", fmt.Sprintf(`{"expectedDesiredRevision":%d}`, camera.PolicyState.DesiredRevision-1), fmt.Sprintf(`{"expectedDesiredRevision":%d,"unknown":true}`, camera.PolicyState.DesiredRevision)} {
+		status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPost, "/api/cameras/"+camera.StreamName+"/stream-outputs/reapply", body, trustedConsoleHeaders())
+		if body == "{}" || strings.Contains(body, "unknown") {
+			if status != http.StatusBadRequest {
+				t.Fatalf("body %s status = %d", body, status)
+			}
+		} else if status != http.StatusConflict {
+			t.Fatalf("stale reapply status = %d", status)
+		}
+	}
+	if applyCalls != 0 {
+		t.Fatalf("stale reapply called apply %d times", applyCalls)
 	}
 }
 
@@ -280,7 +354,7 @@ func TestStreamOutputMutationsRequireManagementGuard(t *testing.T) {
 	requests := []struct{ method, path, body string }{
 		{http.MethodPut, "/api/cameras/" + camera.StreamName + "/stream-outputs", streamOutputRequestBody(t, camera.PolicyState.DesiredRevision, store.CameraVideoH264)},
 		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/stream-outputs/probe", ""},
-		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/stream-outputs/reapply", ""},
+		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/stream-outputs/reapply", fmt.Sprintf(`{"expectedDesiredRevision":%d}`, camera.PolicyState.DesiredRevision)},
 		{http.MethodPost, "/api/cameras/stream-outputs/probe", ""},
 	}
 	for _, request := range requests {
@@ -306,6 +380,36 @@ func TestPolicyApplyHTTPStatusDistinguishesWarningsAndUnsafeRecovery(t *testing.
 	}
 	if status, _ := policyApplyHTTPStatus(stream.PolicyApplyResult{Pending: true}, nil); status != http.StatusServiceUnavailable {
 		t.Fatalf("deleted final camera rollback status = %d", status)
+	}
+}
+
+func TestDeleteReturns503WhenApplyFailsEvenWithOtherAppliedCamera(t *testing.T) {
+	server, camera := newPolicyRouteServer(t, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
+		return stream.PolicyApplyResult{Pending: true, Error: "runtime apply failed"}
+	}))
+	second, err := server.db.SaveCameraConfiguration(t.Context(), store.Camera{
+		Name: "Second", StreamName: "delete-second", State: "streaming",
+		Streams: []store.CameraStream{{SourceKey: "recording", Role: store.CameraStreamRoleRecording, URL: "rtsp://u:p@10.0.0.9/main", Go2RTCStreamName: "delete-second-input"}},
+		Outputs: []store.CameraOutput{
+			{Purpose: store.CameraOutputRecording, SourceKey: "recording", VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand},
+			{Purpose: store.CameraOutputLive, SourceKey: "recording", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+			{Purpose: store.CameraOutputFocus, SourceKey: "recording", VideoMode: store.CameraVideoAuto, MaxWidth: intTestPtr(1920), MaxHeight: intTestPtr(1080), AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]store.CameraOutputApplyResult, 0, 3)
+	for _, output := range second.Outputs {
+		results = append(results, store.CameraOutputApplyResult{Purpose: output.Purpose, Policy: store.CameraOutputPolicySnapshot{SourceKey: output.SourceKey, VideoMode: output.VideoMode, MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS, AudioMode: output.AudioMode, Activation: output.Activation}})
+	}
+	if err := server.db.MarkCameraPolicyApplied(t.Context(), second.ID, second.PolicyState.DesiredRevision, results); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _ := requestJSONWithHeaders(t, server.handler, http.MethodDelete, "/api/cameras/"+camera.StreamName, "", trustedConsoleHeaders())
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("delete failed apply status = %d, want 503", status)
 	}
 }
 

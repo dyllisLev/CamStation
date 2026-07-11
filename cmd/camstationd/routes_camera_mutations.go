@@ -199,6 +199,10 @@ func (d routeDeps) registerCameraMutationRoutes(mux *http.ServeMux) {
 				return
 			}
 			code, warning := policyApplyHTTPStatus(result, cameras)
+			if !result.Applied {
+				code = http.StatusServiceUnavailable
+				warning = "camera deletion was saved but runtime removal could not be verified"
+			}
 			response := map[string]any{"saved": true, "applied": result.Applied, "camera": publicDeleted}
 			if warning != "" {
 				response["warning"] = warning

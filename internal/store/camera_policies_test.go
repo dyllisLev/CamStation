@@ -53,6 +53,9 @@ func TestCameraPolicyLegacyMigrationIsIdempotent(t *testing.T) {
 	if err := db.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatalf("idempotent policy migration: %v", err)
+	}
 	first, err := db.ListCameras(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +136,7 @@ func TestSaveCameraConfigurationRejectsInvalidPoliciesAtomically(t *testing.T) {
 		{"odd dimensions", func(c *Camera, _ *DB) { c.Outputs[1].MaxWidth, c.Outputs[1].MaxHeight = intPtr(1279), intPtr(720) }},
 		{"out of range dimensions", func(c *Camera, _ *DB) { c.Outputs[1].MaxWidth, c.Outputs[1].MaxHeight = intPtr(7682), intPtr(4320) }},
 		{"invalid fps", func(c *Camera, _ *DB) { c.Outputs[1].MaxFPS = floatPtr(61) }},
+		{"fractional fps", func(c *Camera, _ *DB) { c.Outputs[1].MaxFPS = floatPtr(29.97) }},
 		{"invalid audio enum", func(c *Camera, _ *DB) { c.Outputs[1].AudioMode = "bogus" }},
 		{"invalid activation enum", func(c *Camera, _ *DB) { c.Outputs[1].Activation = "bogus" }},
 	}
@@ -344,6 +348,74 @@ func TestCameraStreamNamesComeFromImmutableOutputRows(t *testing.T) {
 	}
 }
 
+func TestCameraPolicyMigrationCanonicalizesLegacyOutputSourcesAndBackfillsAppliedAt(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.SaveCameraConfiguration(t.Context(), Camera{
+		Name: "legacy sources", StreamName: "legacy-sources", State: "unknown",
+		Streams: []CameraStream{
+			{SourceKey: "recording", Role: CameraStreamRoleRecording, URL: "rtsp://u:p@host/main", Go2RTCStreamName: "legacy-main"},
+			{SourceKey: "snapshot", Role: CameraStreamRoleSnapshot, URL: "http://host/snapshot", Go2RTCStreamName: "legacy-snapshot"},
+			{SourceKey: "recording-44", Role: CameraStreamRoleRecording, URL: "rtsp://u:p@host/duplicate", Go2RTCStreamName: "legacy-duplicate"},
+		},
+		Outputs: []CameraOutput{
+			{Purpose: CameraOutputRecording, SourceKey: "recording", VideoMode: CameraVideoCopy, AudioMode: CameraAudioSource, Activation: CameraActivationOnDemand},
+			{Purpose: CameraOutputLive, SourceKey: "snapshot", VideoMode: CameraVideoAuto, AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
+			{Purpose: CameraOutputFocus, SourceKey: "recording-44", VideoMode: CameraVideoAuto, AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backfillAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if _, err := db.db.ExecContext(t.Context(), `UPDATE camera_policy_states SET applied_revision=1,apply_state='applied',apply_state_at=?,applied_at=NULL WHERE camera_id=?`, backfillAt.Format(time.RFC3339Nano), camera.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	for _, output := range got.Outputs {
+		if output.SourceKey != "recording" && output.SourceKey != "live" {
+			t.Fatalf("legacy output source not canonicalized: %#v", output)
+		}
+	}
+	if !got.PolicyState.AppliedAt.Equal(backfillAt) {
+		t.Fatalf("appliedAt = %v, want %v", got.PolicyState.AppliedAt, backfillAt)
+	}
+}
+
+func TestCameraPolicyMigrationCreatesRecordingSourceForSnapshotOnlyLegacyCamera(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.SaveCameraConfiguration(t.Context(), Camera{
+		Name: "snapshot only", StreamName: "snapshot-only", URL: "rtsp://u:p@host/fallback", State: "unknown",
+		Streams: []CameraStream{{SourceKey: "snapshot", Role: CameraStreamRoleSnapshot, URL: "http://host/snapshot", Go2RTCStreamName: "snapshot-only-input"}},
+		Outputs: []CameraOutput{
+			{Purpose: CameraOutputRecording, SourceKey: "snapshot", VideoMode: CameraVideoCopy, AudioMode: CameraAudioSource, Activation: CameraActivationOnDemand},
+			{Purpose: CameraOutputLive, SourceKey: "snapshot", VideoMode: CameraVideoAuto, AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
+			{Purpose: CameraOutputFocus, SourceKey: "snapshot", VideoMode: CameraVideoAuto, AudioMode: CameraAudioNone, Activation: CameraActivationOnDemand},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	foundRecording := false
+	for _, input := range got.Streams {
+		foundRecording = foundRecording || input.SourceKey == "recording"
+	}
+	if !foundRecording {
+		t.Fatalf("snapshot-only migration inputs = %#v", got.Streams)
+	}
+	for _, output := range got.Outputs {
+		if output.SourceKey != "recording" {
+			t.Fatalf("snapshot-only output not retargeted: %#v", output)
+		}
+	}
+}
+
 func TestReplaceCameraStreamsAdvancesRevisionOnlyForGraphChanges(t *testing.T) {
 	db := openMigratedStore(t)
 	camera := mustCamera(t, db, "replace-revision")
@@ -399,6 +471,27 @@ func TestUpdateCameraStreamDetectionsCannotOverwriteConcurrentSourceEdit(t *test
 	}
 }
 
+func TestUpdateCameraStreamDetectionsKeepsNewestCheckedAtForSameSource(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "detection-time-race")
+	newer := append([]CameraStream(nil), camera.Streams...)
+	newer[0].DetectedVideoCodec = "new-h264"
+	newer[0].DetectedCheckedAt = time.Now().UTC().Add(time.Minute)
+	if err := db.UpdateCameraStreamDetections(t.Context(), camera.ID, newer); err != nil {
+		t.Fatal(err)
+	}
+	stale := append([]CameraStream(nil), camera.Streams...)
+	stale[0].DetectedVideoCodec = "stale-hevc"
+	stale[0].DetectedCheckedAt = newer[0].DetectedCheckedAt.Add(-time.Minute)
+	if err := db.UpdateCameraStreamDetections(t.Context(), camera.ID, stale); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	if got.Streams[0].DetectedVideoCodec != "new-h264" || !got.Streams[0].DetectedCheckedAt.Equal(newer[0].DetectedCheckedAt) {
+		t.Fatalf("new detection overwritten: %#v", got.Streams[0])
+	}
+}
+
 func TestUpdateCameraOutputVerificationsDiscardsStaleAppliedRevision(t *testing.T) {
 	db := openMigratedStore(t)
 	camera := mustCamera(t, db, "verification-race")
@@ -426,6 +519,33 @@ func TestUpdateCameraOutputVerificationsDiscardsStaleAppliedRevision(t *testing.
 	for _, output := range got.Outputs {
 		if output.Verification.VideoCodec == "stale-codec" {
 			t.Fatalf("stale verification overwrote revision %d: %#v", got.PolicyState.AppliedRevision, output)
+		}
+	}
+}
+
+func TestUpdateCameraOutputVerificationsKeepsNewestCheckedAtWithinRevision(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "verification-time-race")
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	camera = mustGetCamera(t, db, camera.StreamName)
+	checkedAt := time.Now().UTC().Add(time.Minute)
+	newer, stale := map[CameraOutputPurpose]CameraOutputVerification{}, map[CameraOutputPurpose]CameraOutputVerification{}
+	for _, purpose := range []CameraOutputPurpose{CameraOutputRecording, CameraOutputLive, CameraOutputFocus} {
+		newer[purpose] = CameraOutputVerification{VideoCodec: "new-h264", CheckedAt: checkedAt}
+		stale[purpose] = CameraOutputVerification{VideoCodec: "stale-hevc", CheckedAt: checkedAt.Add(-time.Minute)}
+	}
+	if err := db.UpdateCameraOutputVerifications(t.Context(), camera.ID, camera.PolicyState.AppliedRevision, newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateCameraOutputVerifications(t.Context(), camera.ID, camera.PolicyState.AppliedRevision, stale); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	for _, output := range got.Outputs {
+		if output.Verification.VideoCodec != "new-h264" || !output.Verification.CheckedAt.Equal(checkedAt) {
+			t.Fatalf("new verification overwritten: %#v", output.Verification)
 		}
 	}
 }

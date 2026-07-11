@@ -61,11 +61,15 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 	if backupRunner == nil {
 		backupRunner = buildBackupRunner(db)
 	}
+	return routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, recordingsDir, tempDir, maxStorageBytes, recordingEnabled, backupRunner, stream.NewApplyCoordinator(db, streamer, recorderManager))
+}
+
+func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunner *backup.Runner, applier policyApplier) (http.Handler, error) {
 	return routeDeps{
 		db:               db,
 		prober:           prober,
 		streamer:         streamer,
-		policyApplier:    stream.NewApplyCoordinator(db, streamer, recorderManager),
+		policyApplier:    applier,
 		recorderManager:  recorderManager,
 		cleaner:          cleaner,
 		backupRunner:     backupRunner,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -234,7 +235,7 @@ func validateCameraOutputs(outputs []CameraOutput) error {
 		if output.MaxWidth != nil && (*output.MaxWidth < 2 || *output.MaxWidth > 7680 || *output.MaxWidth%2 != 0 || *output.MaxHeight < 2 || *output.MaxHeight > 4320 || *output.MaxHeight%2 != 0) {
 			return fmt.Errorf("output %s dimensions are invalid", output.Purpose)
 		}
-		if output.MaxFPS != nil && (*output.MaxFPS < 1 || *output.MaxFPS > 60) {
+		if output.MaxFPS != nil && (*output.MaxFPS < 1 || *output.MaxFPS > 60 || math.Trunc(*output.MaxFPS) != *output.MaxFPS) {
 			return fmt.Errorf("output %s fps is invalid", output.Purpose)
 		}
 		if output.VideoMode == CameraVideoCopy && (output.MaxWidth != nil || output.MaxFPS != nil) {
@@ -437,6 +438,13 @@ func (d *DB) UpdateCameraOutputVerifications(ctx context.Context, cameraID, expe
 	if currentAppliedRevision != expectedAppliedRevision {
 		return nil
 	}
+	var outputCount int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM camera_outputs WHERE camera_id=?`, cameraID).Scan(&outputCount); err != nil {
+		return err
+	}
+	if outputCount != 3 {
+		return sql.ErrNoRows
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, purpose := range []CameraOutputPurpose{CameraOutputRecording, CameraOutputLive, CameraOutputFocus} {
 		verification, ok := verifications[purpose]
@@ -446,15 +454,14 @@ func (d *DB) UpdateCameraOutputVerifications(ctx context.Context, cameraID, expe
 		var checkedAt any
 		if !verification.CheckedAt.IsZero() {
 			checkedAt = verification.CheckedAt.Format(time.RFC3339Nano)
+		} else {
+			return fmt.Errorf("output verification checked time is required")
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET verified_video_codec=?,verified_audio_codec=?,verified_width=?,verified_height=?,verified_fps=?,verified_transcoding=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=?`,
+		_, err := tx.ExecContext(ctx, `UPDATE camera_outputs SET verified_video_codec=?,verified_audio_codec=?,verified_width=?,verified_height=?,verified_fps=?,verified_transcoding=?,verified_at=?,verification_error=?,updated_at=? WHERE camera_id=? AND purpose=? AND (verified_at IS NULL OR verified_at < ?)`,
 			verification.VideoCodec, verification.AudioCodec, verification.Width, verification.Height, verification.FPS,
-			verification.Transcoding, checkedAt, redactString(verification.Error), now, cameraID, purpose)
+			verification.Transcoding, checkedAt, redactString(verification.Error), now, cameraID, purpose, checkedAt)
 		if err != nil {
 			return err
-		}
-		if affected, _ := result.RowsAffected(); affected != 1 {
-			return sql.ErrNoRows
 		}
 	}
 	return tx.Commit()

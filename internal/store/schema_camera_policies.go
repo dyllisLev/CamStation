@@ -95,7 +95,43 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 		AND COALESCE(json_extract(applied_policy_json,'$.sourceStreamId'),0) != 0`); err != nil {
 		return fmt.Errorf("camera applied source-key migration failed: %w", err)
 	}
-	return d.ensureCameraPolicyDefaults(ctx)
+	if err := d.ensureCameraPolicyDefaults(ctx); err != nil {
+		return err
+	}
+	return d.canonicalizeCameraPolicySources(ctx)
+}
+
+func (d *DB) canonicalizeCameraPolicySources(ctx context.Context) error {
+	statements := []string{
+		`UPDATE camera_streams AS stream SET source_key='recording'
+		 WHERE stream.id=(SELECT candidate.id FROM camera_streams candidate WHERE candidate.camera_id=stream.camera_id AND candidate.role='recording' ORDER BY candidate.id LIMIT 1)
+		 AND NOT EXISTS(SELECT 1 FROM camera_streams existing WHERE existing.camera_id=stream.camera_id AND existing.source_key='recording')`,
+		`UPDATE camera_streams AS stream SET source_key='live'
+		 WHERE stream.id=(SELECT candidate.id FROM camera_streams candidate WHERE candidate.camera_id=stream.camera_id AND candidate.role='live' ORDER BY candidate.id LIMIT 1)
+		 AND NOT EXISTS(SELECT 1 FROM camera_streams existing WHERE existing.camera_id=stream.camera_id AND existing.source_key='live')`,
+		`INSERT INTO camera_streams(camera_id,role,source_key,label,source,url,go2rtc_stream_name,state,created_at,updated_at)
+		 SELECT camera.id,'recording','recording','recording','legacy',
+		 COALESCE(NULLIF(camera.url,''),(SELECT source.url FROM camera_streams source WHERE source.camera_id=camera.id ORDER BY source.id LIMIT 1)),
+		 camera.stream_name || '-source-recording',camera.state,camera.created_at,camera.updated_at
+		 FROM cameras camera
+		 WHERE NOT EXISTS(SELECT 1 FROM camera_streams existing WHERE existing.camera_id=camera.id AND existing.source_key='recording')
+		 AND COALESCE(NULLIF(camera.url,''),(SELECT source.url FROM camera_streams source WHERE source.camera_id=camera.id ORDER BY source.id LIMIT 1)) IS NOT NULL`,
+		`UPDATE camera_outputs AS output SET source_stream_id=COALESCE(
+		 CASE WHEN output.purpose='live' THEN (SELECT id FROM camera_streams WHERE camera_id=output.camera_id AND source_key='live' LIMIT 1) END,
+		 (SELECT id FROM camera_streams WHERE camera_id=output.camera_id AND source_key='recording' LIMIT 1),
+		 (SELECT id FROM camera_streams WHERE camera_id=output.camera_id AND source_key='live' LIMIT 1))
+		 WHERE (SELECT source_key FROM camera_streams WHERE id=output.source_stream_id) NOT IN ('recording','live')`,
+		`UPDATE camera_outputs SET applied_policy_json=json_set(applied_policy_json,'$.sourceKey',
+		 (SELECT source_key FROM camera_streams WHERE id=camera_outputs.source_stream_id))
+		 WHERE COALESCE(json_extract(applied_policy_json,'$.sourceKey'),'') NOT IN ('','recording','live')`,
+		`UPDATE camera_policy_states SET applied_at=apply_state_at WHERE applied_revision>0 AND applied_at IS NULL`,
+	}
+	for _, statement := range statements {
+		if _, err := d.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("camera policy canonicalization failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (d *DB) ensureCameraPolicyDefaults(ctx context.Context) error {

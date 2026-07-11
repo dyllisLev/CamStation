@@ -62,6 +62,7 @@ func main() {
 	prober := camera.NewFFProbe()
 	streamer := stream.NewGo2RTC("./data/go2rtc.yaml")
 	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
+	policyCoordinator := stream.NewApplyCoordinator(db, streamer, recorderManager)
 	cleaner := cleanup.New(db, *recordingsDir)
 	backupRunner := backup.NewRunner(db)
 	maxStorageBytes := gbToBytes(*maxStorageGB)
@@ -118,24 +119,13 @@ func main() {
 	}
 	recorderManager.SetAfterSegmentClosed(runAutomaticCleanup)
 	go runAutomaticCleanup()
-	if cameras, err := db.ListCameras(ctx, true); err == nil && len(cameras) > 0 {
-		if err := streamer.Ensure(ctx, cameras); err != nil {
-			_ = db.AppendEvent(ctx, store.Event{
-				Source:  "go2rtc",
-				Level:   "error",
-				Message: "go2rtc start failed",
-				Details: map[string]any{"error": err.Error()},
-			})
-		}
-		if *recordingEnabled {
-			recorderManager.Reconcile(cameras)
-			_ = db.AppendEvent(ctx, store.Event{
-				Source:  "recorder",
-				Level:   "info",
-				Message: "recorder workers started",
-				Details: map[string]any{"cameras": len(cameras), "input": "go2rtc-local-rtsp"},
-			})
-		}
+	if err := startCameraPolicies(ctx, db, streamer, policyCoordinator, recorderManager, *recordingEnabled); err != nil {
+		_ = db.AppendEvent(ctx, store.Event{
+			Source:  "go2rtc",
+			Level:   "error",
+			Message: "go2rtc start failed",
+			Details: map[string]any{"error": err.Error()},
+		})
 	}
 
 	if *probeOnly {
@@ -170,7 +160,7 @@ func main() {
 
 	startBackupScheduler(ctx, db, backupRunner, *recordingsDir)
 
-	mux, err := routes(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled, backupRunner)
+	mux, err := routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled, backupRunner, policyCoordinator)
 	if err != nil {
 		log.Fatalf("build routes: %v", err)
 	}

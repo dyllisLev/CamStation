@@ -20,6 +20,10 @@ type updateStreamOutputsRequest struct {
 	Outputs                 []publicStreamOutputSettings `json:"outputs"`
 }
 
+type reapplyStreamOutputsRequest struct {
+	ExpectedDesiredRevision *int64 `json:"expectedDesiredRevision"`
+}
+
 func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/cameras/{streamName}/stream-outputs", func(w http.ResponseWriter, r *http.Request) {
 		if !requireCameraManagementRequest(w, r) {
@@ -98,6 +102,17 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 		cameraRow, err := d.db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
 		if err != nil {
 			writeSafeError(w, http.StatusNotFound, err)
+			return
+		}
+		var req reapplyStreamOutputsRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil || req.ExpectedDesiredRevision == nil {
+			writeSafeError(w, http.StatusBadRequest, fmt.Errorf("expected desired revision is required"))
+			return
+		}
+		if *req.ExpectedDesiredRevision != cameraRow.PolicyState.DesiredRevision {
+			writeSafeError(w, http.StatusConflict, store.ErrDesiredRevisionMismatch)
 			return
 		}
 		release, err := withCameraNetworkSlot(r.Context())

@@ -56,11 +56,13 @@ func (d *DB) UpdateCameraStreamDetections(ctx context.Context, cameraID int64, s
 		var checkedAt any
 		if !stream.DetectedCheckedAt.IsZero() {
 			checkedAt = stream.DetectedCheckedAt.Format(time.RFC3339Nano)
+		} else {
+			return fmt.Errorf("camera detection checked time is required")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE camera_streams SET detected_video_codec=?,detected_audio_codec=?,detected_profile=?,detected_level=?,detected_pixel_format=?,detected_bit_depth=?,detected_width=?,detected_height=?,detected_fps=?,detected_checked_at=?,detected_error=?,updated_at=? WHERE camera_id=? AND source_key=? AND url=?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE camera_streams SET detected_video_codec=?,detected_audio_codec=?,detected_profile=?,detected_level=?,detected_pixel_format=?,detected_bit_depth=?,detected_width=?,detected_height=?,detected_fps=?,detected_checked_at=?,detected_error=?,updated_at=? WHERE camera_id=? AND source_key=? AND url=? AND (detected_checked_at IS NULL OR detected_checked_at < ?)`,
 			stream.DetectedVideoCodec, stream.DetectedAudioCodec, stream.DetectedProfile, stream.DetectedLevel,
 			stream.DetectedPixelFormat, stream.DetectedBitDepth, stream.DetectedWidth, stream.DetectedHeight, stream.DetectedFPS,
-			checkedAt, redactString(stream.DetectedError), now, cameraID, stream.SourceKey, stream.URL); err != nil {
+			checkedAt, redactString(stream.DetectedError), now, cameraID, stream.SourceKey, stream.URL, checkedAt); err != nil {
 			return err
 		}
 	}
