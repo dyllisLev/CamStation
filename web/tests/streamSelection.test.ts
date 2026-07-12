@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { playbackStreamName, shouldRenderLiveTile } from "../src/components/live/streamSelection.ts";
+import { playbackStreamCandidates, playbackStreamName, shouldRenderLiveTile } from "../src/components/live/streamSelection.ts";
 
 const dualStreamCamera = {
   streamName: "yard",
@@ -26,4 +26,20 @@ test("focused camera suspends only its normal live tile", () => {
 test("focus view falls back through live to the stable stream name", () => {
   assert.equal(playbackStreamName({ streamName: "single", liveStreamName: "single-live" }, true), "single-live");
   assert.equal(playbackStreamName({ streamName: "legacy" }, true), "legacy");
+});
+
+test("normal playback falls back from live to focus without duplicates", () => {
+  assert.deepEqual(playbackStreamCandidates(dualStreamCamera), ["yard-live", "yard-focus"]);
+  assert.deepEqual(
+    playbackStreamCandidates({ ...dualStreamCamera, focusStreamName: "yard-live" }),
+    ["yard-live"],
+  );
+});
+
+test("focused playback falls back from focus to live", () => {
+  assert.deepEqual(playbackStreamCandidates(dualStreamCamera, true), ["yard-focus", "yard-live"]);
+});
+
+test("stable stream is used only without role outputs", () => {
+  assert.deepEqual(playbackStreamCandidates({ streamName: "legacy" }), ["legacy"]);
 });
