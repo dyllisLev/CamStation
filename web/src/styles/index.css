@@ -1964,10 +1964,72 @@ iframe {
   gap: 8px;
 }
 
-.new-layout-row,
+.new-layout-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  min-height: 40px;
+  border: 1px solid #1d303d;
+  border-radius: 7px;
+  color: var(--new-muted);
+  background: #08131b;
+  overflow: hidden;
+  transition: border-color .12s, background-color .12s, color .12s;
+}
+
+.new-layout-load {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.new-layout-delete {
+  width: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid #1d303d;
+  color: var(--new-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.new-layout-delete:hover {
+  color: var(--new-danger);
+  background: color-mix(in oklch, var(--new-danger), transparent 90%);
+}
+
+.new-layout-delete:disabled {
+  cursor: wait;
+  opacity: .45;
+}
+
+.new-layout-row-empty {
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.new-layout-row:hover,
+.new-camera-row:hover {
+  color: var(--new-fg);
+  border-color: color-mix(in oklch, var(--new-accent), var(--new-border) 62%);
+  background: color-mix(in oklch, var(--new-surface), black 4%);
+}
+
 .new-camera-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 10px;
   min-height: 40px;
@@ -1980,17 +2042,6 @@ iframe {
   font-size: 12px;
   cursor: pointer;
   transition: border-color .12s, background-color .12s, color .12s;
-}
-
-.new-layout-row:hover,
-.new-camera-row:hover {
-  color: var(--new-fg);
-  border-color: color-mix(in oklch, var(--new-accent), var(--new-border) 62%);
-  background: color-mix(in oklch, var(--new-surface), black 4%);
-}
-
-.new-camera-row {
-  grid-template-columns: auto 1fr auto;
 }
 
 .new-active-row {

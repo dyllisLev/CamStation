@@ -1,4 +1,4 @@
-import { Camera as CameraIcon, ChevronLeft, Expand, Eye, LayoutDashboard, PanelRightClose, PanelRightOpen, Save, SaveAll } from "lucide-react";
+import { Camera as CameraIcon, ChevronLeft, Expand, Eye, LayoutDashboard, PanelRightClose, PanelRightOpen, Save, SaveAll, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode, WheelEvent } from "react";
 import GridLayout from "react-grid-layout/legacy";
@@ -9,6 +9,7 @@ import { withAppBase } from "../../app/basePath";
 import {
   useCameras,
   useCreateLayout,
+  useDeleteLayout,
   useLayouts,
   useRefreshCameraControls,
   useTimeline,
@@ -21,6 +22,7 @@ import {
   GRID_ROWS,
   mergeWithCameras,
   resolveInitialLayout,
+  resolveLayoutAfterDelete,
   type MonitorLayoutItem,
   type VideoViewport,
 } from "./liveLayoutState";
@@ -39,6 +41,7 @@ export function LiveWorkspace() {
   const cameras = useCameras();
   const layoutsQuery = useLayouts();
   const createLayout = useCreateLayout();
+  const deleteLayout = useDeleteLayout();
   const updateLayout = useUpdateLayout();
   const refreshCameraControls = useRefreshCameraControls();
   const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
@@ -223,6 +226,23 @@ export function LiveWorkspace() {
     localStorage.setItem(LAST_LAYOUT_KEY, saved.id);
   }
 
+  async function deleteSavedLayout(id: string, name: string) {
+    if (!window.confirm(`‘${name}’ 배치를 삭제할까요?`)) return;
+    try {
+      await deleteLayout.mutateAsync(id);
+      const resolved = resolveLayoutAfterDelete(id, currentId, layouts, rows);
+      if (!resolved) return;
+      setCurrentId(resolved.currentId);
+      setLayout(resolved.layout);
+      if (resolved.timelineCollapsed !== undefined) setTimelineCollapsed(resolved.timelineCollapsed);
+      setDirty(false);
+      if (resolved.currentId) localStorage.setItem(LAST_LAYOUT_KEY, resolved.currentId);
+      else localStorage.removeItem(LAST_LAYOUT_KEY);
+    } catch {
+      window.alert("저장된 배치를 삭제하지 못했습니다.");
+    }
+  }
+
   function toggleTimeline() {
     const next = !timelineCollapsed;
     setTimelineCollapsed(next);
@@ -358,21 +378,31 @@ export function LiveWorkspace() {
                   </div>
                   <div className="new-layout-list">
                     {layouts.map((item) => (
-                      <button
+                      <div
                         key={item.id}
-                        type="button"
                         className={cn("new-layout-row", item.id === currentId && "new-active-row")}
-                        onClick={() => loadLayout(item.id)}
                       >
-                        <span>{item.name}</span>
-                        <em>{item.id === currentId && dirty ? "편집됨" : formatShortTime(item.updated_at)}</em>
-                      </button>
+                        <button type="button" className="new-layout-load" onClick={() => loadLayout(item.id)}>
+                          <span>{item.name}</span>
+                          <em>{item.id === currentId && dirty ? "편집됨" : formatShortTime(item.updated_at)}</em>
+                        </button>
+                        <button
+                          type="button"
+                          className="new-layout-delete"
+                          aria-label={`${item.name} 배치 삭제`}
+                          title="배치 삭제"
+                          disabled={deleteLayout.isPending}
+                          onClick={() => void deleteSavedLayout(item.id, item.name)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     ))}
                     {layouts.length === 0 && (
-                      <button type="button" className="new-layout-row new-active-row">
+                      <div className="new-layout-row new-layout-row-empty new-active-row">
                         <span>기본</span>
                         <em>미저장</em>
-                      </button>
+                      </div>
                     )}
                   </div>
                 </section>

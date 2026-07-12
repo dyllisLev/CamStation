@@ -29,6 +29,8 @@ export const cameraApi = {
       method: "PUT",
       body: JSON.stringify(layout),
     }),
+  deleteLayout: (id: string) =>
+    request<void>(`/api/layouts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   timeline: (camera: string, date: string) =>
     request<TimelineData>(`/api/timeline${queryString({ cam: camera, date })}`),
   scanCamera: (camera: CameraScanRequest) =>

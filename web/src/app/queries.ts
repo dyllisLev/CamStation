@@ -138,6 +138,16 @@ export function useUpdateLayout() {
   });
 }
 
+export function useDeleteLayout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteLayout(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["layouts"] });
+    },
+  });
+}
+
 export function useStreamStatus() {
   return useQuery({
     queryKey: ["stream-status"],
