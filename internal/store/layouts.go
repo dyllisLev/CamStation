@@ -121,6 +121,21 @@ func (d *DB) GetLayout(ctx context.Context, id string) (LayoutProfile, error) {
 	return scanLayout(row)
 }
 
+func (d *DB) DeleteLayout(ctx context.Context, id string) error {
+	result, err := d.db.ExecContext(ctx, `DELETE FROM layouts WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete layout: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete layout rows: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("layout %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 func scanLayout(row scanner) (LayoutProfile, error) {
 	var layout LayoutProfile
 	var dataJSON string
