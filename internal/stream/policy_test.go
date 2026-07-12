@@ -183,6 +183,34 @@ func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
 	}
 }
 
+func TestPrivateInputProducerUsesRestartableCopyRelay(t *testing.T) {
+	for _, tc := range []struct {
+		name, rawURL, want string
+	}{
+		{
+			name:   "rtsp",
+			rawURL: "rtsp://user:pass@192.0.2.1/live",
+			want:   "ffmpeg:rtsp://user:pass@192.0.2.1/live#video=copy#audio=copy#timeout=5",
+		},
+		{
+			name:   "rtsps",
+			rawURL: "rtsps://user:pass@192.0.2.1/live",
+			want:   "ffmpeg:rtsps://user:pass@192.0.2.1/live#video=copy#audio=copy#timeout=5",
+		},
+		{
+			name:   "http-flv",
+			rawURL: "http://192.0.2.1/flv?user=test&password=secret",
+			want:   "ffmpeg:http://192.0.2.1/flv?user=test&password=secret#video=copy#audio=copy",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := privateInputProducer(tc.rawURL); got != tc.want {
+				t.Fatalf("producer = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRenderPolicyConfigUsesShortFixedGOPForSoftwareH264(t *testing.T) {
 	camera, output := policyFixture("hevc", "yuv420p", 8, 3840, 2160, 10)
 	camera.Outputs = []store.CameraOutput{output}

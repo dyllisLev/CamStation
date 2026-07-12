@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -192,7 +193,7 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 			if source.URL == "" || !usedSources[name] {
 				continue
 			}
-			fmt.Fprintf(&buf, "  %s:\n    - %s\n", quoteYAML(name), quoteYAML(source.URL))
+			fmt.Fprintf(&buf, "  %s:\n    - %s\n", quoteYAML(name), quoteYAML(privateInputProducer(source.URL)))
 			wrote = true
 		}
 		for i, output := range camera.Outputs {
@@ -207,6 +208,15 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 		buf.WriteString("  {}\n")
 	}
 	return buf.Bytes(), results, nil
+}
+
+func privateInputProducer(rawURL string) string {
+	producer := "ffmpeg:" + rawURL + "#video=copy#audio=copy"
+	parsed, err := url.Parse(rawURL)
+	if err == nil && (strings.EqualFold(parsed.Scheme, "rtsp") || strings.EqualFold(parsed.Scheme, "rtsps")) {
+		producer += "#timeout=5"
+	}
+	return producer
 }
 
 func renderStartupConfig(cameras []store.Camera) ([]byte, error) {
