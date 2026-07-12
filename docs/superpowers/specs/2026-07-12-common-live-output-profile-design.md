@@ -29,7 +29,7 @@ The common live output settings are:
 | Activation | `always` |
 | Encoder GOP | Existing server default, 20 frames |
 
- Recording and focus output policies remain unchanged.
+Recording and focus output policies remain unchanged.
 
 The maximum dimensions are a cap, not a resize target. A camera whose selected live source is 640x360 remains 640x360; only larger sources are reduced, preserving the current quality of cameras such as `2-live` while bounding uncapped 1080p encoders.
 
