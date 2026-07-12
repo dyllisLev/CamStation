@@ -70,6 +70,10 @@ This document records the current implementation state so the next session can c
   - right panel with saved layouts and camera status
   - bottom two-row timeline shell
 - MSE live video playback without browser video controls
+- Browser MSE errors, initial-media silence, and media stalls trigger bounded reconnects
+- Normal tiles fall back from the live output to the browser-safe focus output without mutating camera policy
+- Tile status reflects browser media receipt and identifies fallback playback
+- go2rtc URL-only producer placeholders are reported idle instead of running
 - Video progress/control overlays hidden and avoided by direct MSE `<video>` use
 - Camera tile movement and resizing through `react-grid-layout`
 - Visible resize handles
