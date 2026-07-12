@@ -15,29 +15,25 @@ import {
   useUpdateLayout,
 } from "../../app/queries";
 import { cn } from "../../lib/utils";
+import {
+  clampLayout,
+  GRID_COLS,
+  GRID_ROWS,
+  mergeWithCameras,
+  resolveInitialLayout,
+  type MonitorLayoutItem,
+  type VideoViewport,
+} from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
 import { playbackStreamName, shouldRenderLiveTile } from "./streamSelection";
 import { useMseStream } from "./useMseStream";
 
-const GRID_COLS = 48;
-const GRID_ROWS = 48;
 const GRID_MARGIN: [number, number] = [4, 4];
 const LAST_LAYOUT_KEY = "camstation-live-layout-id";
 const TIMELINE_KEY = "camstation-live-timeline-collapsed";
 const DEFAULT_VIDEO_VIEWPORT: VideoViewport = { scale: 1, tx: 0, ty: 0 };
 
 type TimelineRange = { ts_start: number; ts_end: number };
-type VideoViewport = { scale: number; tx: number; ty: number };
-type MonitorLayoutItem = {
-  i: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  minW?: number;
-  minH?: number;
-  videoZoom?: VideoViewport;
-};
 
 export function LiveWorkspace() {
   const cameras = useCameras();
@@ -60,6 +56,7 @@ export function LiveWorkspace() {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
   const selectedCamera = rows.find((camera) => camera.streamName === selectedStream) ?? rows[0];
   const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
+  const layoutInitializedRef = useRef(false);
   const refreshAttemptedRef = useRef(new Set<string>());
   const ptzStopRef = useRef<() => Promise<void>>(async () => undefined);
   const selectedControls = selectedCamera?.controlCapabilities;
@@ -145,17 +142,14 @@ export function LiveWorkspace() {
   }, [zoomedStream]);
 
   useEffect(() => {
-    if (rows.length === 0 || layout.length > 0) return;
-    const savedId = localStorage.getItem(LAST_LAYOUT_KEY);
-    const saved = layouts.find((item) => item.id === savedId) ?? layouts[0];
-    if (saved) {
-      setCurrentId(saved.id);
-      setLayout(mergeWithCameras(saved.data, rows));
-      setTimelineCollapsed(saved.timeline_collapsed);
-      return;
-    }
-    setLayout(defaultLayout(rows));
-  }, [layout.length, layouts, rows]);
+    if (layoutInitializedRef.current || !cameras.isSuccess || !layoutsQuery.isSuccess) return;
+    const resolved = resolveInitialLayout(rows, layouts, localStorage.getItem(LAST_LAYOUT_KEY), true);
+    if (!resolved) return;
+    layoutInitializedRef.current = true;
+    setCurrentId(resolved.currentId);
+    setLayout(resolved.layout);
+    if (resolved.timelineCollapsed !== undefined) setTimelineCollapsed(resolved.timelineCollapsed);
+  }, [cameras.isSuccess, layouts, layoutsQuery.isSuccess, rows]);
 
   const onlineCount = rows.filter((camera) => camera.state === "streaming").length;
 
@@ -331,7 +325,11 @@ export function LiveWorkspace() {
               onVideoViewportChange={handleVideoViewportChange}
             />
           ) : (
-            <div className="new-empty">카메라와 배치 정보를 불러오는 중입니다.</div>
+            <div className="new-empty">
+              {cameras.isError || layoutsQuery.isError
+                ? "라이브 배치 정보를 불러오지 못했습니다."
+                : "카메라와 배치 정보를 불러오는 중입니다."}
+            </div>
           )}
         </main>
         {!sideHidden && (
@@ -808,43 +806,6 @@ function TimelineBar({
       <span className="new-cursor" style={{ left: `${pctInDay(cursorTs, dayStart, dayEnd)}%` }} />
     </div>
   );
-}
-
-function defaultLayout(cameras: Camera[]): MonitorLayoutItem[] {
-  return cameras.map((camera, index) => ({
-    i: camera.streamName,
-    x: index === 0 ? 0 : 24 + ((index - 1) % 2) * 12,
-    y: index === 0 ? 0 : Math.floor((index - 1) / 2) * 12,
-    w: index === 0 ? 24 : 12,
-    h: index === 0 ? 24 : 12,
-    minW: 8,
-    minH: 8,
-  }));
-}
-
-function mergeWithCameras(saved: MonitorLayoutItem[], cameras: Camera[]): MonitorLayoutItem[] {
-  const savedMap = new Map(saved.map((item) => [item.i, item]));
-  return cameras.map((camera, index) => savedMap.get(camera.streamName) ?? defaultLayout([camera]).map((item) => ({
-    ...item,
-    x: 24 + (index % 2) * 12,
-    y: Math.floor(index / 2) * 12,
-  }))[0]);
-}
-
-function clampLayout(layout: MonitorLayoutItem[]): MonitorLayoutItem[] {
-  return layout.map((item) => {
-    const minW = item.minW ?? 1;
-    const minH = item.minH ?? 1;
-    const w = Math.min(Math.max(item.w, minW), GRID_COLS);
-    const h = Math.min(Math.max(item.h, minH), GRID_ROWS);
-    return {
-      ...item,
-      w,
-      h,
-      x: Math.min(Math.max(item.x, 0), GRID_COLS - w),
-      y: Math.min(Math.max(item.y, 0), GRID_ROWS - h),
-    };
-  });
 }
 
 function clampVideoViewport(viewport: { scale: number; tx: number; ty: number }, width: number, height: number) {
