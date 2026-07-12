@@ -250,6 +250,13 @@ Browser/Playwright verification performed:
   - all eight live outputs reported one producer and one browser MSE consumer after reconnect, sustained for at least 30 seconds
   - the post-restart runtime log contained no ordinary-live `404` or `Invalid data found when processing input` signature
   - the legacy `cctv` server and all camera URLs, credentials, and profile settings were left unchanged
+- Common camera source relay recovery on 2026-07-12 09:31 KST:
+  - every private camera input now uses an FFmpeg video/audio copy relay; RTSP/RTSPS inputs add a five-second input timeout while HTTP-FLV keeps its protocol-native input path
+  - full Go tests, daemon build, controlled `camstationctl.sh` restart, and managed verify passed on `cctv2`
+  - all eight private live-source byte counters increased across the final sample and all eight public live outputs had one browser MSE consumer
+  - a bounded 소방서1 relay termination produced a replacement and stable byte growth in 11.18 seconds without restarting camstationd or go2rtc
+  - local output probes received H.264 640x360 from 소방서1 in 9.7 seconds after fault recovery and from 소방서5 in 2.0 seconds
+  - post-restart logs contained no stale-connection or invalid-input signature; the legacy `cctv` server and camera settings were untouched
 
 ## Important Corrections Learned
 
