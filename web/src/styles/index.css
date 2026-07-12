@@ -1451,6 +1451,20 @@ iframe {
   pointer-events: none;
 }
 
+.new-fallback-badge {
+  position: absolute;
+  right: 8px;
+  top: 36px;
+  z-index: 3;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklch, var(--new-accent), transparent 55%);
+  border-radius: 4px;
+  background: rgb(0 0 0 / 72%);
+  color: var(--new-accent);
+  font: 10px/1.4 var(--new-font-mono);
+  pointer-events: none;
+}
+
 .new-live-video::-webkit-media-controls,
 .new-live-video::-webkit-media-controls-enclosure,
 .new-live-video::-webkit-media-controls-panel,

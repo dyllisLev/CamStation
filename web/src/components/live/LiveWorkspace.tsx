@@ -27,8 +27,8 @@ import {
   type VideoViewport,
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
-import { playbackStreamName, shouldRenderLiveTile } from "./streamSelection";
-import { useMseStream } from "./useMseStream";
+import { playbackStreamCandidates, shouldRenderLiveTile } from "./streamSelection";
+import { useMseStream, type MsePlaybackPhase } from "./useMseStream";
 
 const GRID_MARGIN: [number, number] = [4, 4];
 const LAST_LAYOUT_KEY = "camstation-live-layout-id";
@@ -583,24 +583,34 @@ function CameraTile({
   onVideoViewportChange: (viewport: VideoViewport) => void;
   suspended?: boolean;
 }) {
+  const [playback, setPlayback] = useState<{ phase: MsePlaybackPhase; usingFallback: boolean }>({
+    phase: "connecting",
+    usingFallback: false,
+  });
+  const browserPlaying = playback.phase === "playing";
+  const playbackUnavailable = !suspended && !browserPlaying;
+
   return (
     <article
-      className={cn("new-camera-tile", selected && "new-selected", zoomed && "new-zoomed", camera.state !== "streaming" && "new-offline")}
+      className={cn("new-camera-tile", selected && "new-selected", zoomed && "new-zoomed", playbackUnavailable && "new-offline")}
       onClick={onSelect}
       onDoubleClick={(event) => {
         event.stopPropagation();
         onToggleZoom();
       }}
     >
-      {camera.state === "streaming" && !suspended ? (
-        <LiveVideo streamName={playbackStreamName(camera, zoomed)} viewport={videoViewport} onViewportChange={onVideoViewportChange} />
-      ) : suspended ? (
-        <div className="new-offline-layer">집중보기 중 라이브 연결 중지</div>
+      {!suspended ? (
+        <LiveVideo
+          streamNames={playbackStreamCandidates(camera, zoomed)}
+          viewport={videoViewport}
+          onViewportChange={onVideoViewportChange}
+          onPlaybackChange={setPlayback}
+        />
       ) : (
-        <div className="new-offline-layer">연결 없음</div>
+        <div className="new-offline-layer">집중보기 중 라이브 연결 중지</div>
       )}
       <div className="new-tile-head cam-drag-handle">
-        <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
+        <span className={cn("new-state", playbackUnavailable && "new-danger")} />
         <strong>{camera.name}</strong>
         <span className="new-cam-id">{camera.name}</span>
       </div>
@@ -620,19 +630,33 @@ function CameraTile({
 }
 
 function LiveVideo({
-  streamName,
+  streamNames,
   viewport,
   onViewportChange,
+  onPlaybackChange,
 }: {
-  streamName: string;
+  streamNames: readonly string[];
   viewport?: VideoViewport;
   onViewportChange: (viewport: VideoViewport) => void;
+  onPlaybackChange: (playback: { phase: MsePlaybackPhase; usingFallback: boolean }) => void;
 }) {
-  const { videoRef, connected } = useMseStream(streamName);
+  const { videoRef, connected, phase, usingFallback } = useMseStream(streamNames);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
   const zoomed = currentViewport.scale > 1.001;
+  const statusCopy =
+    phase === "fallback"
+      ? "대체 스트림 연결 중..."
+      : phase === "retrying"
+        ? "영상 입력 재연결 중..."
+        : phase === "unsupported"
+          ? "이 브라우저는 라이브 재생을 지원하지 않습니다."
+          : "연결 중...";
+
+  useEffect(() => {
+    onPlaybackChange({ phase, usingFallback });
+  }, [onPlaybackChange, phase, usingFallback]);
 
   const applyViewport = useCallback((next: VideoViewport) => {
     const frame = frameRef.current;
@@ -728,7 +752,8 @@ function LiveVideo({
           transform: `scale(${currentViewport.scale}) translate(${currentViewport.tx / currentViewport.scale}px, ${currentViewport.ty / currentViewport.scale}px)`,
         }}
       />
-      {!connected && <div className="new-offline-layer">연결 중...</div>}
+      {!connected && <div className="new-offline-layer">{statusCopy}</div>}
+      {connected && usingFallback && <div className="new-fallback-badge">대체 스트림</div>}
       {zoomed && <div className="new-zoom-badge">{currentViewport.scale.toFixed(1)}x</div>}
     </div>
   );
