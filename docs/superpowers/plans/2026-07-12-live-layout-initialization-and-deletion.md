@@ -139,7 +139,7 @@ git commit -m "feat: delete saved layouts from store"
 
 - [ ] **Step 1: Extend route characterization with failing DELETE assertions**
 
-Immediately after the existing layout creation assertions in `TestRouteCharacterization`, add:
+Immediately after the existing layout creation assertions in `TestRoutesPreserveCoreAPISurface`, add:
 
 ```go
 	layoutID, ok := layout["id"].(string)
@@ -167,9 +167,9 @@ Immediately after the existing layout creation assertions in `TestRouteCharacter
 
 - [ ] **Step 2: Run the route test and verify RED**
 
-Run: `go test ./cmd/camstationd -run TestRouteCharacterization -count=1`
+Run: `go test ./cmd/camstationd -run TestRoutesPreserveCoreAPISurface -count=1`
 
-Expected: FAIL with `405 Method Not Allowed` for the first DELETE.
+Expected: FAIL because the unmatched DELETE falls through to the SPA response instead of returning `204 No Content`.
 
 - [ ] **Step 3: Register the DELETE handler**
 

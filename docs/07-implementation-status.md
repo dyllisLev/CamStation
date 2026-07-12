@@ -62,6 +62,8 @@ This document records the current implementation state so the next session can c
   - saved layout selector
   - layout save
   - save as new layout
+  - saved layout deletion with confirmation and deterministic fallback selection
+  - saved layout initialization waits for both camera and layout queries, preventing camera-first navigation races
   - right panel toggle
   - timeline toggle
   - fullscreen toggle
@@ -79,6 +81,7 @@ This document records the current implementation state so the next session can c
   - `GET /api/layouts`
   - `POST /api/layouts`
   - `PUT /api/layouts/{id}`
+  - `DELETE /api/layouts/{id}`
 - Layout state saves:
   - tile position
   - tile size
