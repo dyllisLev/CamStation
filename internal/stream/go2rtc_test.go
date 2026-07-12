@@ -87,3 +87,20 @@ func TestParseStreamRuntimeOmitsPrivateInputProducers(t *testing.T) {
 		t.Fatalf("public output missing: %#v", runtime)
 	}
 }
+
+func TestParseStreamRuntimeDoesNotCountConfiguredProducerPlaceholder(t *testing.T) {
+	raw := `{
+		"failed-live": {"producers": [{"url": "ffmpeg:private-source"}], "consumers": []},
+		"active-live": {"producers": [{"id": 7, "format_name": "rtsp", "protocol": "rtsp+tcp", "medias": ["video, recvonly, H264"]}], "consumers": []}
+	}`
+	runtime, err := parseStreamRuntime(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime["failed-live"]; got.ProducerCount != 0 || got.State != "idle" {
+		t.Fatalf("failed-live runtime = %#v, want zero producers and idle", got)
+	}
+	if got := runtime["active-live"]; got.ProducerCount != 1 || got.State != "running" {
+		t.Fatalf("active-live runtime = %#v, want one producer and running", got)
+	}
+}

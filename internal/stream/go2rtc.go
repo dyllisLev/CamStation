@@ -198,11 +198,16 @@ func fetchStreamRuntime(ctx context.Context, apiURL string) (map[string]StreamRu
 	return parseStreamRuntime(resp.Body)
 }
 
+type go2RTCProducer struct {
+	ID         int      `json:"id"`
+	FormatName string   `json:"format_name"`
+	Protocol   string   `json:"protocol"`
+	Medias     []string `json:"medias"`
+}
+
 func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 	var payload map[string]struct {
-		Producers []struct {
-			ID int `json:"id"`
-		} `json:"producers"`
+		Producers []go2RTCProducer `json:"producers"`
 		Consumers []struct {
 			ID         int    `json:"id"`
 			FormatName string `json:"format_name"`
@@ -217,7 +222,7 @@ func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 	runtime := make(map[string]StreamRuntime, len(payload))
 	for streamName, stream := range payload {
 		item := StreamRuntime{
-			ProducerCount: len(stream.Producers),
+			ProducerCount: activeProducerCount(stream.Producers),
 			ConsumerCount: len(stream.Consumers),
 		}
 		for _, consumer := range stream.Consumers {
@@ -239,6 +244,16 @@ func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
 		runtime[publicName] = item
 	}
 	return runtime, nil
+}
+
+func activeProducerCount(producers []go2RTCProducer) int {
+	count := 0
+	for _, producer := range producers {
+		if producer.ID != 0 || producer.FormatName != "" || producer.Protocol != "" || len(producer.Medias) > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func publicStreamName(streamName string) string {
