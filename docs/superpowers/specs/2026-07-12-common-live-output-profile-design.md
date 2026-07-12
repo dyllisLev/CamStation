@@ -23,13 +23,15 @@ The common live output settings are:
 | Purpose | `live` |
 | Source | Preserve each camera's selected live source |
 | Video mode | `h264` |
-| Maximum dimensions | `640x360` |
+| Maximum dimensions | `1280x720` |
 | Maximum frame rate | `15` |
 | Audio | `none` |
 | Activation | `always` |
 | Encoder GOP | Existing server default, 20 frames |
 
-Recording and focus output policies remain unchanged.
+ Recording and focus output policies remain unchanged.
+
+The maximum dimensions are a cap, not a resize target. A camera whose selected live source is 640x360 remains 640x360; only larger sources are reduced, preserving the current quality of cameras such as `2-live` while bounding uncapped 1080p encoders.
 
 ## Product Behavior
 
@@ -43,7 +45,7 @@ Before changing existing cameras, capture their complete desired output policies
 
 After apply:
 
-1. Confirm all eight live outputs are `running`, have one producer, and are verified as transcoding H.264 at no more than 640x360 and 15 fps.
+1. Confirm all eight live outputs are `running`, have one producer, and are verified as transcoding H.264 at no more than 1280x720 and 15 fps.
 2. Observe aggregate FFmpeg CPU once per second for 60 seconds.
 3. Keep the common profile only if the 60-second average is at most 280% CPU, representing 70% of the four available cores.
 4. If the threshold is exceeded or runtime verification fails, restore every captured policy through the same policy path and verify the restored runtime.
