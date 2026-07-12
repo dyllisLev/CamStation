@@ -207,4 +207,25 @@ func TestRoutesPreserveCoreAPISurface(t *testing.T) {
 	if layout["id"] == "" || layout["name"] != "Ops" {
 		t.Fatalf("created layout = %#v, want id and name Ops", layout)
 	}
+	layoutID, ok := layout["id"].(string)
+	if !ok || layoutID == "" {
+		t.Fatalf("created layout id = %#v, want non-empty string", layout["id"])
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/layouts/"+layoutID, nil)
+	deleteRec := httptest.NewRecorder()
+	server.handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/layouts/{id} status = %d, want %d; body=%s", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+	if layouts := getJSONArray(t, server.handler, "/api/layouts"); len(layouts) != 0 {
+		t.Fatalf("layouts after delete = %#v, want empty list", layouts)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodDelete, "/api/layouts/"+layoutID, nil)
+	missingRec := httptest.NewRecorder()
+	server.handler.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("second DELETE /api/layouts/{id} status = %d, want %d", missingRec.Code, http.StatusNotFound)
+	}
 }

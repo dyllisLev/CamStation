@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -66,6 +67,18 @@ func (d routeDeps) registerCoreRoutes(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, http.StatusOK, layout)
+	})
+
+	mux.HandleFunc("DELETE /api/layouts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := d.db.DeleteLayout(r.Context(), r.PathValue("id")); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("GET /api/timeline", func(w http.ResponseWriter, r *http.Request) {
