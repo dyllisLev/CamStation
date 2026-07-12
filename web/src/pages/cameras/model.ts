@@ -27,7 +27,7 @@ export const initialForm: CameraFormState = {
   name: "염소장",
   streamName: "goat-yard",
   host: "192.168.0.55",
-  username: "admin",
+  username: "",
   password: "",
   rtspPort: "10554",
   httpPort: "10080",
@@ -36,11 +36,13 @@ export const initialForm: CameraFormState = {
 };
 
 export function toScanRequest(form: CameraFormState): CameraScanRequest {
+  const username = form.username.trim();
+  const password = form.password;
   return {
     name: form.name.trim() || undefined,
     host: form.host.trim(),
-    username: form.username.trim() || undefined,
-    password: form.password || undefined,
+    username: username && password ? username : undefined,
+    password: username && password ? password : undefined,
     rtspPort: parsePort(form.rtspPort),
     httpPort: parsePort(form.httpPort),
     onvifPort: parsePort(form.onvifPort),

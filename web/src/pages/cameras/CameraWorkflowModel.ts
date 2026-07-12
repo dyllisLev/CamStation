@@ -8,7 +8,7 @@ export function formFromCamera(camera: Camera): CameraFormState {
     name: camera.name,
     streamName: camera.streamName,
     host: camera.host ?? "",
-    username: "admin",
+    username: "",
     password: "",
     rtspPort: String(camera.rtspPort ?? ""),
     httpPort: String(camera.httpPort ?? ""),
