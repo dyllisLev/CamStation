@@ -16,7 +16,6 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
   const updateViewer = useUpdateViewer();
   const deleteViewer = useDeleteViewer();
   const [label, setLabel] = useState("");
-  const [status, setStatus] = useState("stale");
   const [note, setNote] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const selectedViewer = useMemo(
@@ -31,7 +30,6 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
       return;
     }
     setLabel(selectedViewer.label ?? "");
-    setStatus(selectedViewer.status);
     setNote(selectedViewer.note ?? "");
     setConfirmDelete(false);
   }, [selectedViewer]);
@@ -41,7 +39,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
     if (!selectedViewerId) {
       return;
     }
-    updateViewer.mutate({ id: selectedViewerId, viewer: { label, status, note } });
+    updateViewer.mutate({ id: selectedViewerId, viewer: { label, note } });
   }
 
   function deleteSelectedViewer() {
@@ -81,9 +79,13 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
             <thead>
               <tr>
                 <th className="px-3 py-2 font-medium">Viewer</th>
-                <th className="px-3 py-2 font-medium">상태</th>
-                <th className="px-3 py-2 font-medium">위치</th>
-                <th className="px-3 py-2 font-medium">마지막 하트비트</th>
+                <th className="px-3 py-2 font-medium">Agent</th>
+                <th className="px-3 py-2 font-medium">제어</th>
+                <th className="px-3 py-2 font-medium">Viewer</th>
+                <th className="px-3 py-2 font-medium">Renderer</th>
+                <th className="px-3 py-2 font-medium">Agent HB</th>
+                <th className="px-3 py-2 font-medium">제어 성공</th>
+                <th className="px-3 py-2 font-medium">영상 진행</th>
                 <th className="px-3 py-2 font-medium">선택</th>
               </tr>
             </thead>
@@ -93,10 +95,15 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
                   <td className="px-3 py-3">
                     <div className="font-semibold text-slate-100">{displayViewer(viewer)}</div>
                     <div className="mt-1 font-mono text-xs text-slate-500">{viewer.id}</div>
+                    <div className="mt-1 text-xs text-slate-600">{viewer.route} · {viewer.mode}</div>
                   </td>
                   <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.status)} /></td>
-                  <td className="px-3 py-3 text-slate-400">{viewer.route} · {viewer.mode}</td>
+                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.control?.state)} /></td>
+                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.viewer?.state)} /></td>
+                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.renderer?.state)} /></td>
                   <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(viewer.lastHeartbeatAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(viewer.control?.lastSuccessAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(viewer.renderer?.lastProgressAt)}</td>
                   <td className="px-3 py-3">
                     <Button size="sm" type="button" variant="secondary" onClick={() => onSelectViewer(viewer.id)}>
                       선택
@@ -106,7 +113,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
               ))}
               {registryLoading && (
                 <tr>
-                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={5}>
+                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={9}>
                     <div className="flex items-center justify-center gap-2">
                       <Loader2 className="animate-spin text-cyan-300" size={16} />
                       Viewer 레지스트리를 불러오는 중입니다.
@@ -116,7 +123,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
               )}
               {!registryLoading && viewerRows.length === 0 && (
                 <tr>
-                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={5}>
+                  <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={9}>
                     등록된 Viewer가 없습니다. 하트비트 전송으로 등록할 수 있습니다.
                   </td>
                 </tr>
@@ -125,16 +132,8 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
           </table>
         </div>
 
-        <form className="grid gap-3 lg:grid-cols-[1fr_10rem_1fr_auto]" onSubmit={submit}>
+        <form className="grid gap-3 lg:grid-cols-[1fr_1fr_auto]" onSubmit={submit}>
           <Field label="라벨" value={label} onChange={setLabel} />
-          <label className="block space-y-2">
-            <span className="text-xs font-medium text-slate-400">상태</span>
-            <select className="new-form-control" value={status} onChange={(event) => setStatus(event.target.value)}>
-              <option value="online">online</option>
-              <option value="stale">stale</option>
-              <option value="offline">offline</option>
-            </select>
-          </label>
           <Field label="운영 메모" value={note} onChange={setNote} />
           <div className="flex flex-wrap items-end gap-2">
             <Button disabled={!selectedViewerId || updateViewer.isPending} type="submit" variant="primary">
@@ -143,7 +142,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
             </Button>
             <Button disabled={!selectedViewerId || deleteViewer.isPending} type="button" variant="danger" onClick={deleteSelectedViewer}>
               <Trash2 size={16} />
-              {confirmDelete ? "삭제 확인" : "오래된 Viewer 삭제"}
+              {confirmDelete ? "삭제 확인" : "오프라인 Viewer 삭제"}
             </Button>
           </div>
         </form>

@@ -36,7 +36,39 @@ export type StreamOperationResponse = {
 export type ViewerStreamHealth = {
   readonly streamName: string;
   readonly state: string;
+  readonly transport?: string;
   readonly latencyMs?: number;
+  readonly lastBinaryAt?: string;
+  readonly lastProgressAt?: string;
+  readonly updatedAt?: string;
+};
+
+export type ViewerAgentHealth = {
+  readonly state: string;
+  readonly version?: string;
+};
+
+export type ViewerControlHealth = {
+  readonly state: string;
+  readonly lastSuccessAt?: string;
+};
+
+export type ViewerProcessHealth = {
+  readonly state: string;
+  readonly version?: string;
+  readonly lastHeartbeatAt?: string;
+};
+
+export type ViewerRendererHealth = {
+  readonly state: string;
+  readonly lastHeartbeatAt?: string;
+  readonly lastProgressAt?: string;
+};
+
+export type ViewerUpdateHealth = {
+  readonly state: string;
+  readonly targetVersion?: string;
+  readonly generation: number;
 };
 
 export type ViewerHeartbeat = {
@@ -47,6 +79,11 @@ export type ViewerHeartbeat = {
   readonly deviceLabel: string;
   readonly route: string;
   readonly mode: string;
+  readonly agent?: ViewerAgentHealth;
+  readonly control?: ViewerControlHealth;
+  readonly viewer?: ViewerProcessHealth;
+  readonly renderer?: ViewerRendererHealth;
+  readonly update?: ViewerUpdateHealth;
   readonly streams?: readonly ViewerStreamHealth[];
 };
 
@@ -65,7 +102,34 @@ export type Viewer = ViewerHeartbeat & {
   readonly updatedAt: string;
 };
 
-export type ViewerCommandState = "pending" | "sent" | "acknowledged" | "failed" | "cancelled" | "deleted" | string;
+export type ViewerDesiredRelease = {
+  readonly version: string;
+  readonly filename: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly publishedAt: string;
+  readonly developmentUnsigned: boolean;
+  readonly downloadUrl: string;
+  readonly generation: number;
+};
+
+export type ViewerHeartbeatResponse = {
+  readonly viewer: Viewer;
+  readonly desiredRelease: ViewerDesiredRelease | null;
+  readonly commitToken?: string;
+};
+
+export type ViewerCommandState =
+  | "pending"
+  | "delivered"
+  | "acknowledged"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "rejected"
+  | "expired"
+  | "cancelled"
+  | "deleted";
 
 export type ViewerCommand = {
   readonly id: number;
@@ -74,10 +138,21 @@ export type ViewerCommand = {
   readonly message?: string;
   readonly route?: string;
   readonly mode?: string;
+  readonly streamName?: string;
+  readonly desiredVersion?: string;
+  readonly artifactSha256?: string;
+  readonly payloadHash: string;
+  readonly ttlSeconds: number;
+  readonly operationKey?: string;
+  readonly generation: number;
   readonly state: ViewerCommandState;
   readonly error?: string;
   readonly createdAt: string;
   readonly sentAt?: string;
+  readonly deliveredAt?: string;
+  readonly acknowledgedAt?: string;
+  readonly runningAt?: string;
+  readonly resultAt?: string;
   readonly completedAt?: string;
   readonly updatedAt: string;
 };
@@ -87,11 +162,17 @@ export type ViewerCommandInput = {
   readonly message?: string;
   readonly route?: string;
   readonly mode?: string;
+  readonly streamName?: string;
+  readonly desiredVersion?: string;
+  readonly artifactSha256?: string;
+  readonly ttlSeconds?: number;
+  readonly generation?: number;
 };
 
 export type ViewerCommandUpdate = {
-  readonly state: "acknowledged" | "failed";
+  readonly state: "acknowledged" | "running" | "succeeded" | "failed" | "rejected" | "expired";
   readonly error?: string;
+  readonly operationKey?: string;
 };
 
 export type SystemStatus = {
@@ -134,7 +215,7 @@ export const streamsViewersSystemApi = {
       method: "DELETE",
     }),
   viewerHeartbeat: (heartbeat: ViewerHeartbeat) =>
-    request<Viewer>("/api/viewers/heartbeat", { method: "POST", body: JSON.stringify(heartbeat) }),
+    request<ViewerHeartbeatResponse>("/api/viewers/heartbeat", { method: "POST", body: JSON.stringify(heartbeat) }),
   viewers: () => request<readonly Viewer[]>("/api/viewers"),
   updateViewer: (id: string, viewer: ViewerUpdate) =>
     request<Viewer>(`/api/viewers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(viewer) }),

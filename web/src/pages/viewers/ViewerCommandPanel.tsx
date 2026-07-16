@@ -1,11 +1,10 @@
-import { Loader2, RefreshCw, Send, Trash2, XCircle } from "lucide-react";
+import { Loader2, RefreshCw, Send, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { ViewerCommand } from "../../app/api";
 import {
   useCancelViewerCommand,
   useCreateViewerCommand,
   useDeleteViewerCommand,
-  useUpdateViewerCommand,
   useViewerCommands,
   useViewers,
 } from "../../app/streamsViewersSystemQueries";
@@ -29,13 +28,12 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
   const [viewerId, setViewerId] = useState(selectedViewerId);
   const commands = useViewerCommands(viewerId);
   const createCommand = useCreateViewerCommand();
-  const updateCommand = useUpdateViewerCommand();
   const cancelCommand = useCancelViewerCommand();
   const deleteCommand = useDeleteViewerCommand();
-  const [type, setType] = useState("navigate");
-  const [message, setMessage] = useState("운영 확인");
-  const [route, setRoute] = useState("/live");
-  const [mode, setMode] = useState("grid");
+  const [type, setType] = useState("ping");
+  const [message, setMessage] = useState("");
+  const [route, setRoute] = useState("/live?viewer=1");
+  const [streamName, setStreamName] = useState("");
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const viewerOptions = viewers.data ?? [];
   const commandRows = commands.data ?? [];
@@ -47,11 +45,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    createCommand.mutate({ id: viewerId, command: { type, message, route, mode } });
-  }
-
-  function updateState(command: ViewerCommand, state: "acknowledged" | "failed") {
-    updateCommand.mutate({ id: command.viewerId, commandID: command.id, command: { state, error: state === "failed" ? "operator marked failed" : undefined } });
+    createCommand.mutate({ id: viewerId, command: { type, message, route, streamName } });
   }
 
   function runConfirmed(action: "cancel" | "delete", command: ViewerCommand) {
@@ -71,7 +65,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
       <PanelHeader className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">Viewer 명령</h2>
-          <div className="mt-1 text-xs text-slate-500">명령 생성, 조회, 완료/실패, 취소, 삭제 흐름입니다.</div>
+          <div className="mt-1 text-xs text-slate-500">Agent 전달과 실행 결과를 독립적으로 추적합니다.</div>
         </div>
         <Button disabled={!viewerId} size="sm" type="button" variant="secondary" onClick={() => void commands.refetch()}>
           <RefreshCw size={15} />
@@ -79,7 +73,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
         </Button>
       </PanelHeader>
       <PanelBody className="space-y-4">
-        <form className="grid gap-3 lg:grid-cols-[1fr_10rem_1fr_1fr_auto]" onSubmit={submit}>
+        <form className="grid gap-3 lg:grid-cols-[1fr_12rem_1fr_1fr_1fr_auto]" onSubmit={submit}>
           <label className="block space-y-2">
             <span className="text-xs font-medium text-slate-400">대상 Viewer</span>
             <input
@@ -100,16 +94,18 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
           <label className="block space-y-2">
             <span className="text-xs font-medium text-slate-400">명령</span>
             <select className="new-form-control" value={type} onChange={(event) => setType(event.target.value)}>
-              <option value="navigate">navigate</option>
-              <option value="message">message</option>
-              <option value="mode">mode</option>
+              <option value="ping">ping</option>
+              <option value="reload_live">reload_live</option>
+              <option value="restart_viewer">restart_viewer</option>
+              <option value="restart_agent">restart_agent</option>
+              <option value="resubscribe_stream">resubscribe_stream</option>
+              <option value="restart_stream">restart_stream</option>
+              <option value="capture_diagnostics">capture_diagnostics</option>
             </select>
           </label>
+          <Field label="스트림" value={streamName} onChange={setStreamName} />
+          <Field label="경로" value={route} onChange={setRoute} />
           <Field label="메시지" value={message} onChange={setMessage} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="경로" value={route} onChange={setRoute} />
-            <Field label="모드" value={mode} onChange={setMode} />
-          </div>
           <Button className="self-end" disabled={!viewerId || createCommand.isPending} type="submit" variant="primary">
             {createCommand.isPending ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
             명령 보내기
@@ -133,17 +129,23 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
                   <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-slate-300">#{command.id}</td>
                   <td className="px-3 py-3">
                     <div className="text-slate-200">{command.type}</div>
-                    <div className="mt-1 text-xs text-slate-500">{command.message || command.route || command.mode || "-"}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {command.streamName || command.desiredVersion || command.message || command.route || "-"}
+                    </div>
                   </td>
                   <td className="px-3 py-3"><Badge value={commandBadgeState(command.state)} /></td>
-                  <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(command.createdAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-500">
+                    <div>{formatDate(command.createdAt)}</div>
+                    <div className="mt-1 text-[11px] text-slate-600">
+                      전달 {formatDate(command.deliveredAt)} · 결과 {formatDate(command.resultAt)}
+                    </div>
+                  </td>
                   <td className="px-3 py-3">
                     <CommandActions
                       command={command}
                       confirm={confirm}
-                      pending={updateCommand.isPending || cancelCommand.isPending || deleteCommand.isPending}
+                      pending={cancelCommand.isPending || deleteCommand.isPending}
                       onConfirmed={runConfirmed}
-                      onUpdateState={updateState}
                     />
                   </td>
                 </tr>
@@ -171,7 +173,6 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
 
         {commands.error && <div className="text-xs text-red-300">{errorMessage(commands.error)}</div>}
         {createCommand.error && <div className="text-xs text-red-300">{errorMessage(createCommand.error)}</div>}
-        {updateCommand.error && <div className="text-xs text-red-300">{errorMessage(updateCommand.error)}</div>}
         {cancelCommand.error && <div className="text-xs text-red-300">{errorMessage(cancelCommand.error)}</div>}
         {deleteCommand.error && <div className="text-xs text-red-300">{errorMessage(deleteCommand.error)}</div>}
       </PanelBody>
@@ -184,27 +185,20 @@ function CommandActions({
   confirm,
   pending,
   onConfirmed,
-  onUpdateState,
 }: {
   readonly command: ViewerCommand;
   readonly confirm: ConfirmState;
   readonly pending: boolean;
   readonly onConfirmed: (action: "cancel" | "delete", command: ViewerCommand) => void;
-  readonly onUpdateState: (command: ViewerCommand, state: "acknowledged" | "failed") => void;
 }) {
+  const active = ["pending", "delivered", "acknowledged", "running"].includes(command.state);
+  const deletable = ["pending", "delivered", "cancelled"].includes(command.state);
   return (
     <div className="flex flex-wrap gap-2">
-      <Button disabled={pending} size="sm" type="button" variant="secondary" onClick={() => onUpdateState(command, "acknowledged")}>
-        ACK
-      </Button>
-      <Button disabled={pending} size="sm" type="button" variant="danger" onClick={() => onUpdateState(command, "failed")}>
-        <XCircle size={14} />
-        실패
-      </Button>
-      <Button disabled={pending} size="sm" type="button" variant="danger" onClick={() => onConfirmed("cancel", command)}>
+      <Button disabled={pending || !active} size="sm" type="button" variant="danger" onClick={() => onConfirmed("cancel", command)}>
         {confirm?.action === "cancel" && confirm.commandId === command.id ? "취소 확인" : "취소"}
       </Button>
-      <Button disabled={pending} size="sm" type="button" variant="danger" onClick={() => onConfirmed("delete", command)}>
+      <Button disabled={pending || !deletable} size="sm" type="button" variant="danger" onClick={() => onConfirmed("delete", command)}>
         <Trash2 size={14} />
         {confirm?.action === "delete" && confirm.commandId === command.id ? "삭제 확인" : "삭제"}
       </Button>

@@ -31,7 +31,7 @@ export function ViewerHeartbeatPanel({ onRegistered }: { readonly onRegistered: 
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    heartbeat.mutate({ ...draft, streams: [] }, { onSuccess: (viewer) => onRegistered(viewer.id) });
+    heartbeat.mutate({ ...draft, streams: [] }, { onSuccess: (response) => onRegistered(response.viewer.id) });
   }
 
   return (

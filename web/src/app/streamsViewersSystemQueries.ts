@@ -162,7 +162,7 @@ function useStreamMutation<TInput>(mutationFn: (input: TInput) => ReturnType<typ
   });
 }
 
-function useViewerMutation<TInput>(mutationFn: (input: TInput) => ReturnType<typeof api.viewerHeartbeat>) {
+function useViewerMutation<TInput, TOutput>(mutationFn: (input: TInput) => Promise<TOutput>) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,

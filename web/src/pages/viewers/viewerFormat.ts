@@ -11,10 +11,20 @@ export function viewerBadgeState(status?: string): string {
   switch (status) {
     case "online":
     case "active":
+    case "healthy":
+    case "ready":
+    case "running":
+    case "playing":
       return "running";
     case "stale":
+    case "control_degraded":
+    case "recovering":
+    case "restarting":
       return "warning";
     case "offline":
+    case "crashed":
+    case "failed":
+    case "recovery_failed":
       return "offline";
     case undefined:
       return "offline";
@@ -26,12 +36,17 @@ export function viewerBadgeState(status?: string): string {
 export function commandBadgeState(state?: string): string {
   switch (state) {
     case "acknowledged":
-    case "sent":
+    case "delivered":
+    case "running":
       return "running";
+    case "succeeded":
+      return "succeeded";
     case "pending":
       return "info";
     case "failed":
+    case "rejected":
       return "error";
+    case "expired":
     case "cancelled":
     case "deleted":
       return "warning";

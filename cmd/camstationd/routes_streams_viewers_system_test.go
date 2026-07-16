@@ -111,7 +111,7 @@ func TestViewersAPI_HeartbeatRegistryUpdateDeleteAndCommandLifecycle(t *testing.
 	unknownDeleteStatus, unknownDeleteBody := requestJSON(t, server.handler, http.MethodDelete, "/api/viewers/missing", `{}`)
 	badHeartbeatStatus, badHeartbeatBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", `{"id":""}`)
 
-	if queueStatus != http.StatusOK || len(queueBody) != 1 || queueBody[0]["state"] != "sent" {
+	if queueStatus != http.StatusOK || len(queueBody) != 1 || queueBody[0]["state"] != "pending" {
 		t.Fatalf("queue status/body = %d/%#v", queueStatus, queueBody)
 	}
 	if ackStatus != http.StatusOK || ackBody["state"] != "acknowledged" {

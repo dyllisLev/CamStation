@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,39 +18,70 @@ type ViewerCommandState string
 
 const (
 	ViewerCommandPending      ViewerCommandState = "pending"
-	ViewerCommandSent         ViewerCommandState = "sent"
+	ViewerCommandDelivered    ViewerCommandState = "delivered"
 	ViewerCommandAcknowledged ViewerCommandState = "acknowledged"
+	ViewerCommandRunning      ViewerCommandState = "running"
+	ViewerCommandSucceeded    ViewerCommandState = "succeeded"
 	ViewerCommandFailed       ViewerCommandState = "failed"
+	ViewerCommandRejected     ViewerCommandState = "rejected"
+	ViewerCommandExpired      ViewerCommandState = "expired"
 	ViewerCommandCancelled    ViewerCommandState = "cancelled"
 	ViewerCommandDeleted      ViewerCommandState = "deleted"
+
+	// ViewerCommandSent keeps source compatibility with the legacy queue name.
+	ViewerCommandSent ViewerCommandState = ViewerCommandDelivered
 )
 
 type ViewerCommandCreate struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	Route   string `json:"route"`
-	Mode    string `json:"mode"`
+	Type           string `json:"type"`
+	Message        string `json:"message"`
+	Route          string `json:"route"`
+	Mode           string `json:"mode"`
+	StreamName     string `json:"streamName"`
+	DesiredVersion string `json:"desiredVersion"`
+	ArtifactSHA256 string `json:"artifactSha256"`
+	TTLSeconds     int    `json:"ttlSeconds"`
+	Generation     int64  `json:"generation"`
 }
 
 type ViewerCommandUpdate struct {
-	State ViewerCommandState `json:"state"`
-	Error string             `json:"error"`
+	State        ViewerCommandState `json:"state"`
+	Error        string             `json:"error"`
+	OperationKey string             `json:"operationKey"`
 }
 
+type ViewerCommandResult = ViewerCommandUpdate
+
 type ViewerCommand struct {
-	ID          int64              `json:"id"`
-	ViewerID    string             `json:"viewerId"`
-	Type        string             `json:"type"`
-	Message     string             `json:"message,omitempty"`
-	Route       string             `json:"route,omitempty"`
-	Mode        string             `json:"mode,omitempty"`
-	State       ViewerCommandState `json:"state"`
-	Error       string             `json:"error,omitempty"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	SentAt      *time.Time         `json:"sentAt,omitempty"`
-	CompletedAt *time.Time         `json:"completedAt,omitempty"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	ID             int64              `json:"id"`
+	ViewerID       string             `json:"viewerId"`
+	Type           string             `json:"type"`
+	Message        string             `json:"message,omitempty"`
+	Route          string             `json:"route,omitempty"`
+	Mode           string             `json:"mode,omitempty"`
+	StreamName     string             `json:"streamName,omitempty"`
+	DesiredVersion string             `json:"desiredVersion,omitempty"`
+	ArtifactSHA256 string             `json:"artifactSha256,omitempty"`
+	PayloadHash    string             `json:"payloadHash"`
+	TTLSeconds     int                `json:"ttlSeconds"`
+	OperationKey   string             `json:"operationKey,omitempty"`
+	Generation     int64              `json:"generation"`
+	State          ViewerCommandState `json:"state"`
+	Error          string             `json:"error,omitempty"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	SentAt         *time.Time         `json:"sentAt,omitempty"`
+	DeliveredAt    *time.Time         `json:"deliveredAt,omitempty"`
+	AcknowledgedAt *time.Time         `json:"acknowledgedAt,omitempty"`
+	RunningAt      *time.Time         `json:"runningAt,omitempty"`
+	ResultAt       *time.Time         `json:"resultAt,omitempty"`
+	CompletedAt    *time.Time         `json:"completedAt,omitempty"`
+	UpdatedAt      time.Time          `json:"updatedAt"`
 }
+
+const viewerCommandSelect = `SELECT id, viewer_id, type, message, route, mode, stream_name,
+		desired_version, artifact_sha256, payload_hash, ttl_seconds, operation_key, generation,
+		state, error, created_at, sent_at, delivered_at, acknowledged_at, running_at, result_at,
+		completed_at, updated_at FROM viewer_commands`
 
 func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate) (ViewerCommand, error) {
 	if _, err := d.GetViewer(ctx, viewerID, 90*time.Second); err != nil {
@@ -57,14 +91,37 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 	req.Message = RedactText(strings.TrimSpace(req.Message))
 	req.Route = RedactText(strings.TrimSpace(req.Route))
 	req.Mode = RedactText(strings.TrimSpace(req.Mode))
+	req.StreamName = RedactText(strings.TrimSpace(req.StreamName))
+	req.DesiredVersion = RedactText(strings.TrimSpace(req.DesiredVersion))
+	req.ArtifactSHA256 = RedactText(strings.TrimSpace(req.ArtifactSHA256))
 	if req.Type == "" {
 		return ViewerCommand{}, fmt.Errorf("command type is required: %w", ErrValidation)
 	}
+	if req.TTLSeconds <= 0 {
+		req.TTLSeconds = 300
+	}
+	payload, err := json.Marshal(struct {
+		Type           string `json:"type"`
+		Message        string `json:"message,omitempty"`
+		Route          string `json:"route,omitempty"`
+		Mode           string `json:"mode,omitempty"`
+		StreamName     string `json:"streamName,omitempty"`
+		DesiredVersion string `json:"desiredVersion,omitempty"`
+		ArtifactSHA256 string `json:"artifactSha256,omitempty"`
+		Generation     int64  `json:"generation"`
+	}{req.Type, req.Message, req.Route, req.Mode, req.StreamName, req.DesiredVersion, req.ArtifactSHA256, req.Generation})
+	if err != nil {
+		return ViewerCommand{}, fmt.Errorf("encode viewer command payload: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	payloadHash := hex.EncodeToString(digest[:])
 	now := time.Now().UTC()
 	res, err := d.db.ExecContext(ctx,
-		`INSERT INTO viewer_commands(viewer_id, type, message, route, mode, state, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		strings.TrimSpace(viewerID), req.Type, req.Message, req.Route, req.Mode, ViewerCommandPending,
+		`INSERT INTO viewer_commands(viewer_id, type, message, route, mode, stream_name, desired_version,
+			artifact_sha256, payload_hash, ttl_seconds, generation, state, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		strings.TrimSpace(viewerID), req.Type, req.Message, req.Route, req.Mode, req.StreamName,
+		req.DesiredVersion, req.ArtifactSHA256, payloadHash, req.TTLSeconds, req.Generation, ViewerCommandPending,
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -80,9 +137,10 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 func (d *DB) DequeueViewerCommands(ctx context.Context, viewerID string) ([]ViewerCommand, error) {
 	now := time.Now().UTC()
 	if _, err := d.db.ExecContext(ctx,
-		`UPDATE viewer_commands SET state = ?, sent_at = COALESCE(sent_at, ?), updated_at = ?
+		`UPDATE viewer_commands SET state = ?, sent_at = COALESCE(sent_at, ?),
+			delivered_at = COALESCE(delivered_at, ?), updated_at = ?
 		 WHERE viewer_id = ? AND state = ?`,
-		ViewerCommandSent, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+		ViewerCommandDelivered, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 		strings.TrimSpace(viewerID), ViewerCommandPending,
 	); err != nil {
 		return nil, fmt.Errorf("mark viewer commands sent: %w", err)
@@ -92,11 +150,10 @@ func (d *DB) DequeueViewerCommands(ctx context.Context, viewerID string) ([]View
 
 func (d *DB) ListViewerCommands(ctx context.Context, viewerID string) ([]ViewerCommand, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, viewer_id, type, message, route, mode, state, error, created_at, sent_at, completed_at, updated_at
-		 FROM viewer_commands
-		 WHERE viewer_id = ? AND state IN (?, ?)
+		viewerCommandSelect+`
+		 WHERE viewer_id = ?
 		 ORDER BY id`,
-		strings.TrimSpace(viewerID), ViewerCommandPending, ViewerCommandSent,
+		strings.TrimSpace(viewerID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list viewer commands: %w", err)
@@ -113,20 +170,130 @@ func (d *DB) ListViewerCommands(ctx context.Context, viewerID string) ([]ViewerC
 	return commands, rows.Err()
 }
 
+func (d *DB) DeliverNextViewerCommand(ctx context.Context, viewerID string) (ViewerCommand, bool, error) {
+	viewerID = strings.TrimSpace(viewerID)
+	if _, err := d.GetViewer(ctx, viewerID, 30*time.Second); err != nil {
+		return ViewerCommand{}, false, err
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ViewerCommand{}, false, fmt.Errorf("begin viewer command delivery: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE viewer_commands SET state = ?, result_at = COALESCE(result_at, ?),
+			completed_at = COALESCE(completed_at, ?), updated_at = ?
+		 WHERE viewer_id = ? AND state IN (?, ?)
+		   AND julianday(created_at) + (ttl_seconds / 86400.0) <= julianday(?)`,
+		ViewerCommandExpired, now, now, now, viewerID, ViewerCommandPending, ViewerCommandDelivered, now,
+	); err != nil {
+		return ViewerCommand{}, false, fmt.Errorf("expire viewer commands: %w", err)
+	}
+
+	command, err := scanViewerCommand(tx.QueryRowContext(ctx,
+		viewerCommandSelect+` WHERE viewer_id = ? AND state IN (?, ?) ORDER BY id LIMIT 1`,
+		viewerID, ViewerCommandPending, ViewerCommandDelivered,
+	))
+	if errors.Is(err, ErrViewerCommandNotFound) {
+		if err := tx.Commit(); err != nil {
+			return ViewerCommand{}, false, fmt.Errorf("commit empty viewer command delivery: %w", err)
+		}
+		return ViewerCommand{}, false, nil
+	}
+	if err != nil {
+		return ViewerCommand{}, false, fmt.Errorf("load viewer command for delivery: %w", err)
+	}
+	if command.State == ViewerCommandPending {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE viewer_commands SET state = ?, sent_at = COALESCE(sent_at, ?),
+				delivered_at = COALESCE(delivered_at, ?), updated_at = ?
+			 WHERE viewer_id = ? AND id = ? AND state = ?`,
+			ViewerCommandDelivered, now, now, now, viewerID, command.ID, ViewerCommandPending,
+		); err != nil {
+			return ViewerCommand{}, false, fmt.Errorf("mark viewer command delivered: %w", err)
+		}
+		command, err = scanViewerCommand(tx.QueryRowContext(ctx,
+			viewerCommandSelect+` WHERE viewer_id = ? AND id = ?`, viewerID, command.ID,
+		))
+		if err != nil {
+			return ViewerCommand{}, false, fmt.Errorf("reload delivered viewer command: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ViewerCommand{}, false, fmt.Errorf("commit viewer command delivery: %w", err)
+	}
+	return command, true, nil
+}
+
 func (d *DB) GetViewerCommand(ctx context.Context, viewerID string, id int64) (ViewerCommand, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT id, viewer_id, type, message, route, mode, state, error, created_at, sent_at, completed_at, updated_at
-		 FROM viewer_commands WHERE viewer_id = ? AND id = ?`,
+		viewerCommandSelect+` WHERE viewer_id = ? AND id = ?`,
 		strings.TrimSpace(viewerID), id,
 	)
 	return scanViewerCommand(row)
 }
 
+func (d *DB) ViewerDesiredReleaseGeneration(ctx context.Context, viewerID, version, artifactSHA256 string) (int64, error) {
+	var generation int64
+	if err := d.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(generation), 0) FROM viewer_commands
+		 WHERE viewer_id = ? AND type = 'update_app' AND desired_version = ? AND artifact_sha256 = ?`,
+		strings.TrimSpace(viewerID), strings.TrimSpace(version), strings.TrimSpace(artifactSHA256),
+	).Scan(&generation); err != nil {
+		return 0, fmt.Errorf("load viewer desired release generation: %w", err)
+	}
+	return generation, nil
+}
+
 func (d *DB) UpdateViewerCommand(ctx context.Context, viewerID string, id int64, req ViewerCommandUpdate) (ViewerCommand, error) {
-	if req.State != ViewerCommandAcknowledged && req.State != ViewerCommandFailed {
+	return d.ApplyViewerCommandResult(ctx, viewerID, id, req)
+}
+
+func (d *DB) ApplyViewerCommandResult(ctx context.Context, viewerID string, id int64, req ViewerCommandResult) (ViewerCommand, error) {
+	if !isViewerCommandResultState(req.State) {
 		return ViewerCommand{}, fmt.Errorf("unsupported command state: %w", ErrValidation)
 	}
-	return d.finishViewerCommand(ctx, viewerID, id, req.State, req.Error)
+	req.Error = RedactText(strings.TrimSpace(req.Error))
+	req.OperationKey = RedactText(strings.TrimSpace(req.OperationKey))
+	current, err := d.GetViewerCommand(ctx, viewerID, id)
+	if err != nil {
+		return ViewerCommand{}, err
+	}
+	if current.State == req.State && current.Error == req.Error && current.OperationKey == req.OperationKey {
+		return current, nil
+	}
+	if current.OperationKey != "" && req.OperationKey != "" && current.OperationKey != req.OperationKey {
+		return ViewerCommand{}, fmt.Errorf("command operation key changed: %w", ErrValidation)
+	}
+	if isViewerCommandTerminal(current.State) || current.State == ViewerCommandCancelled || current.State == ViewerCommandDeleted {
+		return ViewerCommand{}, fmt.Errorf("command is already complete: %w", ErrValidation)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	terminal := isViewerCommandTerminal(req.State)
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE viewer_commands SET state = ?, error = ?,
+			operation_key = CASE WHEN ? = '' THEN operation_key ELSE ? END,
+			acknowledged_at = CASE WHEN ? = ? THEN COALESCE(acknowledged_at, ?) ELSE acknowledged_at END,
+			running_at = CASE WHEN ? = ? THEN COALESCE(running_at, ?) ELSE running_at END,
+			result_at = CASE WHEN ? THEN COALESCE(result_at, ?) ELSE result_at END,
+			completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END,
+			updated_at = ?
+		 WHERE viewer_id = ? AND id = ?`,
+		req.State, req.Error, req.OperationKey, req.OperationKey,
+		req.State, ViewerCommandAcknowledged, now,
+		req.State, ViewerCommandRunning, now,
+		terminal, now, terminal, now, now, strings.TrimSpace(viewerID), id,
+	)
+	if err != nil {
+		return ViewerCommand{}, fmt.Errorf("apply viewer command result: %w", err)
+	}
+	if err := requireViewerCommandChanged(res); err != nil {
+		return ViewerCommand{}, err
+	}
+	return d.GetViewerCommand(ctx, viewerID, id)
 }
 
 func (d *DB) CancelViewerCommand(ctx context.Context, viewerID string, id int64, reason string) (ViewerCommand, error) {
@@ -170,9 +337,12 @@ func (d *DB) finishViewerCommand(ctx context.Context, viewerID string, id int64,
 func scanViewerCommand(row scanner) (ViewerCommand, error) {
 	var command ViewerCommand
 	var createdAt, updatedAt string
-	var sentAt, completedAt sql.NullString
+	var sentAt, deliveredAt, acknowledgedAt, runningAt, resultAt, completedAt sql.NullString
 	if err := row.Scan(&command.ID, &command.ViewerID, &command.Type, &command.Message, &command.Route,
-		&command.Mode, &command.State, &command.Error, &createdAt, &sentAt, &completedAt, &updatedAt); err != nil {
+		&command.Mode, &command.StreamName, &command.DesiredVersion, &command.ArtifactSHA256,
+		&command.PayloadHash, &command.TTLSeconds, &command.OperationKey, &command.Generation,
+		&command.State, &command.Error, &createdAt, &sentAt, &deliveredAt, &acknowledgedAt,
+		&runningAt, &resultAt, &completedAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ViewerCommand{}, ErrViewerCommandNotFound
 		}
@@ -184,11 +354,42 @@ func scanViewerCommand(row scanner) (ViewerCommand, error) {
 		parsed, _ := time.Parse(time.RFC3339Nano, sentAt.String)
 		command.SentAt = &parsed
 	}
+	command.DeliveredAt = parseViewerCommandTime(deliveredAt)
+	command.AcknowledgedAt = parseViewerCommandTime(acknowledgedAt)
+	command.RunningAt = parseViewerCommandTime(runningAt)
+	command.ResultAt = parseViewerCommandTime(resultAt)
 	if completedAt.Valid {
 		parsed, _ := time.Parse(time.RFC3339Nano, completedAt.String)
 		command.CompletedAt = &parsed
 	}
 	return command, nil
+}
+
+func parseViewerCommandTime(value sql.NullString) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	parsed, _ := time.Parse(time.RFC3339Nano, value.String)
+	return &parsed
+}
+
+func isViewerCommandResultState(state ViewerCommandState) bool {
+	switch state {
+	case ViewerCommandAcknowledged, ViewerCommandRunning, ViewerCommandSucceeded,
+		ViewerCommandFailed, ViewerCommandRejected, ViewerCommandExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func isViewerCommandTerminal(state ViewerCommandState) bool {
+	switch state {
+	case ViewerCommandSucceeded, ViewerCommandFailed, ViewerCommandRejected, ViewerCommandExpired:
+		return true
+	default:
+		return false
+	}
 }
 
 func requireViewerCommandChanged(result sql.Result) error {
