@@ -241,10 +241,9 @@ func viewerReportsRelease(viewer store.Viewer, artifactSHA256 string, release vi
 		}
 	}
 	if !reportedVersion {
-		return true
+		return false
 	}
-	artifactSHA256 = strings.TrimSpace(artifactSHA256)
-	return artifactSHA256 == "" || artifactSHA256 == release.SHA256
+	return strings.TrimSpace(artifactSHA256) == release.SHA256
 }
 
 func (d routeDeps) handleViewerControl(w http.ResponseWriter, r *http.Request) {

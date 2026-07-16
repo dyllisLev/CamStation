@@ -91,18 +91,22 @@ func TestViewerReleaseRoutesReturnServiceUnavailableWithoutValidRelease(t *testi
 	}
 }
 
-func TestViewerReleaseRoutesRejectLegacyMutableRelease(t *testing.T) {
+func TestViewerReleaseRoutesServeFullyVerifiedLegacyRelease(t *testing.T) {
 	server := newTestRouteServer(t)
 	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
 	artifact := []byte("legacy installer")
 	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
 		t.Fatalf("create legacy release: %v", err)
 	}
-	publishLegacyViewerFixture(t, releaseDir, "CamStationViewerSetup.exe", artifact)
+	digest := publishLegacyViewerFixture(t, releaseDir, "CamStationViewerSetup.exe", artifact)
 
-	response := performRequest(t, server.handler, http.MethodGet, "/api/viewers/app/version")
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("legacy mutable release status = %d, want %d; body=%s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	status, metadata := requestJSON(t, server.handler, http.MethodGet, "/api/viewers/app/version", "")
+	if status != http.StatusOK || metadata["sha256"] != digest {
+		t.Fatalf("legacy release metadata = %d %#v", status, metadata)
+	}
+	response := performRequest(t, server.handler, http.MethodGet, "/api/viewers/app/download")
+	if response.Code != http.StatusOK || response.Body.String() != string(artifact) {
+		t.Fatalf("legacy release download = %d body=%q", response.Code, response.Body.String())
 	}
 }
 

@@ -31,6 +31,7 @@ type selectedRelease struct {
 	target     string
 	releaseDir string
 	pointer    os.FileInfo
+	immutable  bool
 }
 
 func NewCatalog(rootDir string) *Catalog {
@@ -59,7 +60,7 @@ func (c *Catalog) load(ctx context.Context, keepArtifact bool) (Release, *os.Fil
 		return Release{}, nil, ErrUnavailable
 	}
 	defer root.Close()
-	selected, err := selectImmutableRelease(root)
+	selected, err := selectRelease(root)
 	if err != nil {
 		c.current = nil
 		return Release{}, nil, err
@@ -71,7 +72,7 @@ func (c *Catalog) load(ctx context.Context, keepArtifact bool) (Release, *os.Fil
 	}
 	defer releaseRoot.Close()
 
-	if entry := c.current; entry != nil && entry.target == selected.target && sameStat(entry.pointer, selected.pointer) {
+	if entry := c.current; selected.immutable && entry != nil && entry.target == selected.target && sameStat(entry.pointer, selected.pointer) {
 		manifest, manifestErr := regularFileInfo(releaseRoot, "release.json")
 		artifact, artifactErr := regularFileInfo(releaseRoot, entry.release.Filename)
 		if manifestErr == nil && artifactErr == nil && sameStat(entry.manifest, manifest) && sameStat(entry.artifact, artifact) {
@@ -94,7 +95,9 @@ func (c *Catalog) load(ctx context.Context, keepArtifact bool) (Release, *os.Fil
 	if err != nil {
 		return Release{}, nil, err
 	}
-	c.current = &entry
+	if selected.immutable {
+		c.current = &entry
+	}
 	if keepArtifact {
 		return entry.release, file, nil
 	}
@@ -102,8 +105,18 @@ func (c *Catalog) load(ctx context.Context, keepArtifact bool) (Release, *os.Fil
 	return entry.release, nil, nil
 }
 
-func selectImmutableRelease(root *os.Root) (selectedRelease, error) {
+func selectRelease(root *os.Root) (selectedRelease, error) {
+	current, err := root.Lstat("current")
+	if errors.Is(err, os.ErrNotExist) {
+		return selectedRelease{}, ErrUnavailable
+	}
+	if err != nil || !current.IsDir() || current.Mode()&os.ModeSymlink != 0 {
+		return selectedRelease{}, ErrInvalid
+	}
 	pointer, err := root.Lstat("current/active")
+	if errors.Is(err, os.ErrNotExist) {
+		return selectedRelease{releaseDir: "current"}, nil
+	}
 	if err != nil || pointer.Mode()&os.ModeSymlink == 0 {
 		return selectedRelease{}, ErrInvalid
 	}
@@ -121,7 +134,7 @@ func selectImmutableRelease(root *os.Root) (selectedRelease, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return selectedRelease{}, ErrInvalid
 	}
-	return selectedRelease{target: target, releaseDir: releaseDir, pointer: pointer}, nil
+	return selectedRelease{target: target, releaseDir: releaseDir, pointer: pointer, immutable: true}, nil
 }
 
 func verifyRelease(ctx context.Context, rootDir string, selected selectedRelease, root *os.Root) (catalogEntry, *os.File, error) {

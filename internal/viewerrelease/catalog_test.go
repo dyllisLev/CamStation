@@ -17,13 +17,56 @@ import (
 
 var testPublishedAt = time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC)
 
-func TestCatalogRejectsLegacyMutableRelease(t *testing.T) {
+func TestCatalogFullyVerifiesLegacyReleaseWithoutCachingAndPinsOpenFile(t *testing.T) {
 	root := t.TempDir()
-	writeReleaseFixtureAtDir(t, filepath.Join(root, "current"), []byte("legacy installer"), "")
+	current := filepath.Join(root, "current")
+	artifact := []byte("legacy installer")
+	writeReleaseFixtureAtDir(t, current, artifact, "")
+
+	catalog := viewerrelease.NewCatalog(root)
+	release, err := catalog.Current(t.Context())
+	if err != nil || release.Version != "2.0.0-dev.1" {
+		t.Fatalf("legacy current release = %#v err=%v", release, err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := catalog.Current(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("legacy release was cached: error=%v, want cancelled re-verification", err)
+	}
+
+	_, file, err := catalog.Open(t.Context())
+	if err != nil {
+		t.Fatalf("open verified legacy release: %v", err)
+	}
+	defer file.Close()
+	artifactPath := filepath.Join(current, release.Filename)
+	replacement := filepath.Join(current, ".replacement.exe")
+	if err := os.WriteFile(replacement, []byte("tampered legacy"), 0o444); err != nil {
+		t.Fatalf("write legacy replacement: %v", err)
+	}
+	if err := os.Rename(replacement, artifactPath); err != nil {
+		t.Fatalf("replace legacy artifact: %v", err)
+	}
+	contents, err := io.ReadAll(file)
+	if err != nil || string(contents) != string(artifact) {
+		t.Fatalf("pinned legacy contents = %q err=%v", contents, err)
+	}
+	if _, _, err := catalog.Open(t.Context()); !errors.Is(err, viewerrelease.ErrInvalid) {
+		t.Fatalf("replaced legacy artifact error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestCatalogDoesNotFallbackToLegacyWhenActivePointerIsInvalid(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "current")
+	writeReleaseFixtureAtDir(t, current, []byte("legacy installer"), "")
+	if err := os.Symlink(filepath.Join("..", "releases", "missing"), filepath.Join(current, "active")); err != nil {
+		t.Fatalf("create invalid active pointer: %v", err)
+	}
 
 	catalog := viewerrelease.NewCatalog(root)
 	if _, err := catalog.Current(t.Context()); !errors.Is(err, viewerrelease.ErrInvalid) {
-		t.Fatalf("legacy mutable release error = %v, want ErrInvalid", err)
+		t.Fatalf("invalid active pointer error = %v, want ErrInvalid without legacy fallback", err)
 	}
 }
 

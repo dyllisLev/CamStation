@@ -81,26 +81,51 @@ func TestViewerHeartbeatEnsuresExactDesiredReleaseCommand(t *testing.T) {
 	assertEncodedDoesNotContain(t, body, releaseDir)
 }
 
-func TestViewerHeartbeatDoesNotEnqueueInstalledReleaseUnlessReportedDigestDiffers(t *testing.T) {
+func TestViewerHeartbeatRequiresExactReportedVersionAndDigest(t *testing.T) {
 	server := newTestRouteServer(t)
 	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
 	digest := publishViewerFixture(t, releaseDir, []byte("installer"))
-	heartbeat := `{
-		"id":"viewer-current","displayName":"Current wall","appVersion":"2.0.0-dev.1",
+	missingDigest := `{
+		"id":"viewer-missing-digest","displayName":"Missing digest wall","appVersion":"2.0.0-dev.1",
 		"route":"/live?viewer=1","mode":"live","agent":{"state":"online","version":"2.0.0-dev.1"},
 		"viewer":{"state":"running","version":"2.0.0-dev.1"},"renderer":{"state":"ready"},"streams":[]
 	}`
-	status, body := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
-	commands, err := server.db.ListViewerCommands(t.Context(), "viewer-current")
-	if status != http.StatusOK || body["desiredRelease"] != nil || err != nil || len(commands) != 0 {
-		t.Fatalf("installed release heartbeat = %d body=%#v commands=%#v err=%v", status, body, commands, err)
-	}
-
-	heartbeat = strings.Replace(heartbeat, `"version":"2.0.0-dev.1"`, `"version":"2.0.0-dev.1","artifactSha256":"`+strings.Repeat("0", 64)+`"`, 1)
-	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
+	status, body := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", missingDigest)
 	desired, ok := body["desiredRelease"].(map[string]any)
 	if status != http.StatusOK || !ok || desired["sha256"] != digest || desired["generation"] != float64(1) {
-		t.Fatalf("same-version new digest heartbeat = %d desired=%#v", status, body["desiredRelease"])
+		t.Fatalf("missing digest heartbeat = %d desired=%#v", status, body["desiredRelease"])
+	}
+	commandID := desired["commandId"]
+
+	malformedDigest := strings.Replace(missingDigest, `"version":"2.0.0-dev.1"`, `"version":"2.0.0-dev.1","artifactSha256":"NOT-A-DIGEST"`, 1)
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", malformedDigest)
+	desired, ok = body["desiredRelease"].(map[string]any)
+	commands, err := server.db.ListViewerCommands(t.Context(), "viewer-missing-digest")
+	if status != http.StatusOK || !ok || desired["commandId"] != commandID || err != nil || len(commands) != 1 {
+		t.Fatalf("malformed digest heartbeat = %d desired=%#v commands=%#v err=%v", status, body["desiredRelease"], commands, err)
+	}
+	assertEncodedDoesNotContain(t, body, "NOT-A-DIGEST")
+
+	wrongDigest := strings.Replace(missingDigest, `"version":"2.0.0-dev.1"`, `"version":"2.0.0-dev.1","artifactSha256":"`+strings.Repeat("0", 64)+`"`, 1)
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", wrongDigest)
+	desired, ok = body["desiredRelease"].(map[string]any)
+	if status != http.StatusOK || !ok || desired["commandId"] != commandID || desired["generation"] != float64(1) {
+		t.Fatalf("different digest heartbeat = %d desired=%#v", status, body["desiredRelease"])
+	}
+
+	exact := strings.Replace(missingDigest, `"viewer-missing-digest"`, `"viewer-exact"`, 1)
+	exact = strings.Replace(exact, `"version":"2.0.0-dev.1"`, `"version":"2.0.0-dev.1","artifactSha256":"`+digest+`"`, 1)
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", exact)
+	commands, err = server.db.ListViewerCommands(t.Context(), "viewer-exact")
+	if status != http.StatusOK || body["desiredRelease"] != nil || err != nil || len(commands) != 0 {
+		t.Fatalf("exact release heartbeat = %d desired=%#v commands=%#v err=%v", status, body["desiredRelease"], commands, err)
+	}
+
+	oldClient := `{"id":"viewer-old","displayName":"Old wall","route":"/live?viewer=1","mode":"live","agent":{"state":"online"}}`
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", oldClient)
+	desired, ok = body["desiredRelease"].(map[string]any)
+	if status != http.StatusOK || !ok || desired["sha256"] != digest || desired["generation"] != float64(1) {
+		t.Fatalf("old client heartbeat = %d desired=%#v", status, body["desiredRelease"])
 	}
 }
 
