@@ -22,6 +22,7 @@ const defaultViewerRestartDeadline = 45 * time.Second
 const defaultViewerShutdownDeadline = 5 * time.Second
 const viewerHealthCheckInterval = time.Second
 const viewerHealthStaleAfter = 15 * time.Second
+const controlCommandQueueDepth = 16
 
 var (
 	ErrCommandRejected       = errors.New("viewer command rejected")
@@ -66,6 +67,7 @@ type Agent struct {
 	rendererProgress *time.Time
 	viewerCommandMu  sync.Mutex
 	viewerCommand    *viewerCommandRequest
+	commandMu        sync.Mutex
 	sideEffectMu     sync.Mutex
 	recoveryMu       sync.Mutex
 	recoveryInFlight bool
@@ -76,6 +78,76 @@ type viewerCommandRequest struct {
 	operationKey string
 	result       chan error
 	delivered    bool
+}
+
+type controlCommandDispatcher struct {
+	agent       *Agent
+	ctx         context.Context
+	cancel      context.CancelFunc
+	updates     chan ControlResult
+	immediate   chan ControlResult
+	workers     sync.WaitGroup
+	errOnce     sync.Once
+	terminalErr error
+}
+
+func newControlCommandDispatcher(ctx context.Context, cancel context.CancelFunc, agent *Agent) *controlCommandDispatcher {
+	dispatcher := &controlCommandDispatcher{
+		agent: agent, ctx: ctx, cancel: cancel,
+		updates: make(chan ControlResult, controlCommandQueueDepth), immediate: make(chan ControlResult, controlCommandQueueDepth),
+	}
+	dispatcher.workers.Add(2)
+	go dispatcher.run(dispatcher.updates)
+	go dispatcher.run(dispatcher.immediate)
+	return dispatcher
+}
+
+func (dispatcher *controlCommandDispatcher) dispatch(result ControlResult) error {
+	if result.Command == nil {
+		return dispatcher.agent.handleControlResult(dispatcher.ctx, result)
+	}
+	queue := dispatcher.immediate
+	if result.Command.Type == "update_app" {
+		queue = dispatcher.updates
+	}
+	select {
+	case queue <- result:
+		return nil
+	case <-dispatcher.ctx.Done():
+		return dispatcher.ctx.Err()
+	default:
+		return errors.New("control command queue is full")
+	}
+}
+
+func (dispatcher *controlCommandDispatcher) run(queue <-chan ControlResult) {
+	defer dispatcher.workers.Done()
+	for {
+		if dispatcher.ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-dispatcher.ctx.Done():
+			return
+		case result := <-queue:
+			err := dispatcher.agent.handleControlResult(dispatcher.ctx, result)
+			if errors.Is(err, ErrCommandEngine) {
+				continue
+			}
+			if err != nil {
+				dispatcher.errOnce.Do(func() {
+					dispatcher.terminalErr = err
+					dispatcher.cancel()
+				})
+				return
+			}
+		}
+	}
+}
+
+func (dispatcher *controlCommandDispatcher) wait() error {
+	dispatcher.workers.Wait()
+	return dispatcher.terminalErr
 }
 
 func NewAgent(config Config, paths MachinePaths) Agent {
@@ -100,6 +172,13 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	if err := validateCommand(command); err != nil {
 		return CommandRecord{}, err
 	}
+	agent.commandMu.Lock()
+	commandLocked := true
+	defer func() {
+		if commandLocked {
+			agent.commandMu.Unlock()
+		}
+	}()
 	if !supportedCommand(command.Type) {
 		return agent.rejectCommand(ctx, command, "unsupported command")
 	}
@@ -218,12 +297,14 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	if executor == nil {
 		executor = agent
 	}
+	agent.commandMu.Unlock()
+	commandLocked = false
 	executionErr := agent.executeCommand(ctx, executor, command, record.OperationKey)
 	if errors.Is(executionErr, ErrAgentRestartRequested) {
 		return record, ErrAgentRestartRequested
 	}
 	if executionErr != nil {
-		return agent.finishCommand(ctx, command, ledger, record, CommandFailed, commandErrorCategory(executionErr))
+		return agent.finishExecutedCommand(ctx, command, record, CommandFailed, commandErrorCategory(executionErr))
 	}
 	if command.Type == "restart_viewer" {
 		_, _ = agent.updateState(func(state *MachineState) error {
@@ -234,7 +315,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 			return nil
 		})
 	}
-	return agent.finishCommand(ctx, command, ledger, record, CommandSucceeded, "")
+	return agent.finishExecutedCommand(ctx, command, record, CommandSucceeded, "")
 }
 
 func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, resultErr error) {
@@ -574,14 +655,14 @@ func (agent *Agent) Run(ctx context.Context) error {
 		<-pipeDone
 	}
 
-	controlErr := client.RunControl(runCtx, &ReconnectState{}, func(result ControlResult) error {
-		err := agent.handleControlResult(runCtx, result)
-		if errors.Is(err, ErrCommandEngine) {
-			return nil
-		}
-		return err
-	})
+	dispatcher := newControlCommandDispatcher(runCtx, cancel, agent)
+	controlErr := client.RunControl(runCtx, &ReconnectState{}, dispatcher.dispatch)
+	cancel()
+	dispatchErr := dispatcher.wait()
 	shutdown()
+	if dispatchErr != nil {
+		controlErr = dispatchErr
+	}
 	if errors.Is(controlErr, ErrAgentRestartRequested) {
 		return ErrAgentRestartRequested
 	}
@@ -788,6 +869,16 @@ func (agent *Agent) finishCommand(ctx context.Context, command Command, ledger C
 	return record, nil
 }
 
+func (agent *Agent) finishExecutedCommand(ctx context.Context, command Command, record CommandRecord, state CommandState, message string) (CommandRecord, error) {
+	agent.commandMu.Lock()
+	defer agent.commandMu.Unlock()
+	ledger, err := agent.loadCommandLedger()
+	if err != nil {
+		return CommandRecord{}, err
+	}
+	return agent.finishCommand(ctx, command, ledger, record, state, message)
+}
+
 func (agent *Agent) reconcileRecord(key string, record CommandRecord, ledger CommandLedger) (CommandRecord, error) {
 	state, err := agent.loadState()
 	if err != nil {
@@ -885,6 +976,8 @@ func (agent *Agent) markCommandEngineFailure() error {
 }
 
 func (agent *Agent) checkCommandEngine() error {
+	agent.commandMu.Lock()
+	defer agent.commandMu.Unlock()
 	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		_ = agent.markCommandEngineFailure()
