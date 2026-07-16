@@ -78,10 +78,12 @@ type ViewerCommand struct {
 	UpdatedAt      time.Time          `json:"updatedAt"`
 }
 
-const viewerCommandSelect = `SELECT id, viewer_id, type, message, route, mode, stream_name,
+const viewerCommandColumns = `id, viewer_id, type, message, route, mode, stream_name,
 		desired_version, artifact_sha256, payload_hash, ttl_seconds, operation_key, generation,
 		state, error, created_at, sent_at, delivered_at, acknowledged_at, running_at, result_at,
-		completed_at, updated_at FROM viewer_commands`
+		completed_at, updated_at`
+
+const viewerCommandSelect = `SELECT ` + viewerCommandColumns + ` FROM viewer_commands`
 
 func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate) (ViewerCommand, error) {
 	if _, err := d.GetViewer(ctx, viewerID, 90*time.Second); err != nil {
@@ -257,6 +259,32 @@ func (d *DB) ApplyViewerCommandResult(ctx context.Context, viewerID string, id i
 	}
 	req.Error = RedactText(strings.TrimSpace(req.Error))
 	req.OperationKey = RedactText(strings.TrimSpace(req.OperationKey))
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	terminal := isViewerCommandTerminal(req.State)
+	previous := viewerCommandPreviousStates(req.State)
+	updated, err := scanViewerCommand(d.db.QueryRowContext(ctx,
+		`UPDATE viewer_commands SET state = ?, error = ?,
+			operation_key = CASE WHEN ? = '' THEN operation_key ELSE ? END,
+			acknowledged_at = CASE WHEN ? = ? THEN COALESCE(acknowledged_at, ?) ELSE acknowledged_at END,
+			running_at = CASE WHEN ? = ? THEN COALESCE(running_at, ?) ELSE running_at END,
+			result_at = CASE WHEN ? THEN COALESCE(result_at, ?) ELSE result_at END,
+			completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END,
+			updated_at = ?
+		 WHERE viewer_id = ? AND id = ? AND state IN (?, ?, ?, ?)
+		   AND (operation_key = '' OR ? = '' OR operation_key = ?)
+		 RETURNING `+viewerCommandColumns,
+		req.State, req.Error, req.OperationKey, req.OperationKey,
+		req.State, ViewerCommandAcknowledged, now,
+		req.State, ViewerCommandRunning, now,
+		terminal, now, terminal, now, now, strings.TrimSpace(viewerID), id,
+		previous[0], previous[1], previous[2], previous[3], req.OperationKey, req.OperationKey,
+	))
+	if err == nil {
+		return updated, nil
+	}
+	if !errors.Is(err, ErrViewerCommandNotFound) {
+		return ViewerCommand{}, fmt.Errorf("apply viewer command result: %w", err)
+	}
 	current, err := d.GetViewerCommand(ctx, viewerID, id)
 	if err != nil {
 		return ViewerCommand{}, err
@@ -267,33 +295,7 @@ func (d *DB) ApplyViewerCommandResult(ctx context.Context, viewerID string, id i
 	if current.OperationKey != "" && req.OperationKey != "" && current.OperationKey != req.OperationKey {
 		return ViewerCommand{}, fmt.Errorf("command operation key changed: %w", ErrValidation)
 	}
-	if isViewerCommandTerminal(current.State) || current.State == ViewerCommandCancelled || current.State == ViewerCommandDeleted {
-		return ViewerCommand{}, fmt.Errorf("command is already complete: %w", ErrValidation)
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	terminal := isViewerCommandTerminal(req.State)
-	res, err := d.db.ExecContext(ctx,
-		`UPDATE viewer_commands SET state = ?, error = ?,
-			operation_key = CASE WHEN ? = '' THEN operation_key ELSE ? END,
-			acknowledged_at = CASE WHEN ? = ? THEN COALESCE(acknowledged_at, ?) ELSE acknowledged_at END,
-			running_at = CASE WHEN ? = ? THEN COALESCE(running_at, ?) ELSE running_at END,
-			result_at = CASE WHEN ? THEN COALESCE(result_at, ?) ELSE result_at END,
-			completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END,
-			updated_at = ?
-		 WHERE viewer_id = ? AND id = ?`,
-		req.State, req.Error, req.OperationKey, req.OperationKey,
-		req.State, ViewerCommandAcknowledged, now,
-		req.State, ViewerCommandRunning, now,
-		terminal, now, terminal, now, now, strings.TrimSpace(viewerID), id,
-	)
-	if err != nil {
-		return ViewerCommand{}, fmt.Errorf("apply viewer command result: %w", err)
-	}
-	if err := requireViewerCommandChanged(res); err != nil {
-		return ViewerCommand{}, err
-	}
-	return d.GetViewerCommand(ctx, viewerID, id)
+	return ViewerCommand{}, fmt.Errorf("unsupported command transition from %s to %s: %w", current.State, req.State, ErrValidation)
 }
 
 func (d *DB) CancelViewerCommand(ctx context.Context, viewerID string, id int64, reason string) (ViewerCommand, error) {
@@ -389,6 +391,19 @@ func isViewerCommandTerminal(state ViewerCommandState) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func viewerCommandPreviousStates(state ViewerCommandState) [4]ViewerCommandState {
+	switch state {
+	case ViewerCommandAcknowledged:
+		return [4]ViewerCommandState{ViewerCommandPending, ViewerCommandDelivered}
+	case ViewerCommandRunning:
+		return [4]ViewerCommandState{ViewerCommandPending, ViewerCommandDelivered, ViewerCommandAcknowledged}
+	default:
+		return [4]ViewerCommandState{
+			ViewerCommandPending, ViewerCommandDelivered, ViewerCommandAcknowledged, ViewerCommandRunning,
+		}
 	}
 }
 

@@ -57,6 +57,23 @@ export function commandBadgeState(state?: string): string {
   }
 }
 
+type ViewerHealthAxes = {
+  readonly agent?: { readonly state: string };
+  readonly control?: { readonly state: string };
+};
+
+export function viewerAgentState(viewer: ViewerHealthAxes): string | undefined {
+  return viewer.agent?.state;
+}
+
+export function viewerControlState(viewer: ViewerHealthAxes): string | undefined {
+  return viewer.control?.state;
+}
+
+export function canCancelViewerCommand(state?: string): boolean {
+  return state === "pending" || state === "delivered";
+}
+
 export function displayViewer(viewer: Viewer): string {
   return viewer.label || viewer.displayName || viewer.id;
 }

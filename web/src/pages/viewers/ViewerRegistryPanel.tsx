@@ -4,7 +4,14 @@ import { useDeleteViewer, useUpdateViewer, useViewers } from "../../app/streamsV
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../../components/ui/panel";
-import { displayViewer, errorMessage, formatDate, viewerBadgeState } from "./viewerFormat";
+import {
+  displayViewer,
+  errorMessage,
+  formatDate,
+  viewerAgentState,
+  viewerBadgeState,
+  viewerControlState,
+} from "./viewerFormat";
 
 type Props = {
   readonly selectedViewerId: string;
@@ -97,8 +104,8 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
                     <div className="mt-1 font-mono text-xs text-slate-500">{viewer.id}</div>
                     <div className="mt-1 text-xs text-slate-600">{viewer.route} · {viewer.mode}</div>
                   </td>
-                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.status)} /></td>
-                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.control?.state)} /></td>
+                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewerAgentState(viewer))} /></td>
+                  <td className="px-3 py-3"><Badge value={viewerBadgeState(viewerControlState(viewer))} /></td>
                   <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.viewer?.state)} /></td>
                   <td className="px-3 py-3"><Badge value={viewerBadgeState(viewer.renderer?.state)} /></td>
                   <td className="whitespace-nowrap px-3 py-3 text-slate-500">{formatDate(viewer.lastHeartbeatAt)}</td>

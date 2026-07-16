@@ -11,7 +11,7 @@ import {
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../../components/ui/panel";
-import { commandBadgeState, displayViewer, errorMessage, formatDate } from "./viewerFormat";
+import { canCancelViewerCommand, commandBadgeState, displayViewer, errorMessage, formatDate } from "./viewerFormat";
 
 type Props = {
   readonly selectedViewerId: string;
@@ -191,11 +191,10 @@ function CommandActions({
   readonly pending: boolean;
   readonly onConfirmed: (action: "cancel" | "delete", command: ViewerCommand) => void;
 }) {
-  const active = ["pending", "delivered", "acknowledged", "running"].includes(command.state);
   const deletable = ["pending", "delivered", "cancelled"].includes(command.state);
   return (
     <div className="flex flex-wrap gap-2">
-      <Button disabled={pending || !active} size="sm" type="button" variant="danger" onClick={() => onConfirmed("cancel", command)}>
+      <Button disabled={pending || !canCancelViewerCommand(command.state)} size="sm" type="button" variant="danger" onClick={() => onConfirmed("cancel", command)}>
         {confirm?.action === "cancel" && confirm.commandId === command.id ? "취소 확인" : "취소"}
       </Button>
       <Button disabled={pending || !deletable} size="sm" type="button" variant="danger" onClick={() => onConfirmed("delete", command)}>

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,6 +40,101 @@ func TestViewerCommandResultIsIdempotent(t *testing.T) {
 	}
 	if !second.UpdatedAt.Equal(first.UpdatedAt) {
 		t.Fatalf("duplicate result updated timestamp: first=%s second=%s", first.UpdatedAt, second.UpdatedAt)
+	}
+}
+
+func TestViewerCommandConcurrentDuplicateResultUpdatesOnce(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-concurrent", DisplayName: "Concurrent Viewer", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	command, err := db.CreateViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{Type: "restart_viewer"})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+
+	const callers = 24
+	start := make(chan struct{})
+	results := make(chan ViewerCommand, callers)
+	errorsCh := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+				State: ViewerCommandSucceeded, OperationKey: "op-concurrent",
+			})
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errorsCh)
+	for err := range errorsCh {
+		t.Errorf("apply concurrent duplicate: %v", err)
+	}
+	var updatedAt time.Time
+	for result := range results {
+		if updatedAt.IsZero() {
+			updatedAt = result.UpdatedAt
+		}
+		if !result.UpdatedAt.Equal(updatedAt) {
+			t.Fatalf("duplicate changed updatedAt: first=%s got=%s", updatedAt, result.UpdatedAt)
+		}
+	}
+}
+
+func TestViewerCommandResultRejectsOutOfOrderRegression(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-order", DisplayName: "Ordered Viewer", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	command, err := db.CreateViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{Type: "restart_viewer"})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	running, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandRunning, OperationKey: "op-order",
+	})
+	if err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandAcknowledged, OperationKey: "op-order",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("running to acknowledged error = %v, want validation", err)
+	}
+	stored, err := db.GetViewerCommand(t.Context(), viewer.ID, command.ID)
+	if err != nil || stored.State != ViewerCommandRunning || !stored.UpdatedAt.Equal(running.UpdatedAt) {
+		t.Fatalf("regression changed command: %#v err=%v", stored, err)
+	}
+	terminal, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandSucceeded, OperationKey: "op-order",
+	})
+	if err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandAcknowledged, OperationKey: "op-order",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("terminal to acknowledged error = %v, want validation", err)
+	}
+	stored, err = db.GetViewerCommand(t.Context(), viewer.ID, command.ID)
+	if err != nil || stored.State != ViewerCommandSucceeded || !stored.UpdatedAt.Equal(terminal.UpdatedAt) {
+		t.Fatalf("terminal regression changed command: %#v err=%v", stored, err)
 	}
 }
 
