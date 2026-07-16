@@ -118,7 +118,11 @@ func TestRendererStatusAcceptsOnlyFixedStates(t *testing.T) {
 		Generation: grant.Generation, Nonce: grant.Nonce,
 	})
 	for _, state := range []string{"ready", "not_ready", "unresponsive", "failed"} {
-		payload, _ := json.Marshal(map[string]string{"state": state})
+		source := "host"
+		if state == "ready" {
+			source = "renderer"
+		}
+		payload, _ := json.Marshal(map[string]string{"state": state, "source": source})
 		if _, err := agent.handlePipeMessage(PipeMessage{
 			Version: 1, RequestID: "renderer-" + state, Type: "renderer_status", PID: 99, SessionID: 3,
 			Generation: grant.Generation, Nonce: grant.Nonce, Payload: payload,
@@ -136,6 +140,28 @@ func TestRendererStatusAcceptsOnlyFixedStates(t *testing.T) {
 	state, err := agent.loadState()
 	if err != nil || containsSecret(state.RendererState) {
 		t.Fatalf("renderer state=%q err=%v", state.RendererState, err)
+	}
+}
+
+func TestViewerHeartbeatDoesNotPretendTheRendererPulseIsFresh(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	agent := pipeTestAgent(t)
+	agent.Now = func() time.Time { return now }
+	grant := registerReadyViewer(t, agent, 42, 99)
+
+	now = now.Add(10 * time.Second)
+	if _, err := agent.handlePipeMessage(PipeMessage{
+		Version: 1, RequestID: "viewer-only", Type: "viewer_heartbeat", PID: 99, SessionID: 3,
+		Generation: grant.Generation, Nonce: grant.Nonce,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := agent.loadState()
+	if err != nil || state.ViewerLastHeartbeatAt == nil || state.RendererLastHeartbeatAt == nil {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	if !state.ViewerLastHeartbeatAt.Equal(now) || state.RendererLastHeartbeatAt.Equal(now) {
+		t.Fatalf("Viewer heartbeat refreshed renderer pulse: viewer=%v renderer=%v", state.ViewerLastHeartbeatAt, state.RendererLastHeartbeatAt)
 	}
 }
 
@@ -264,7 +290,7 @@ func TestDefaultRestartViewerReachesAuthorizedNextReadyGeneration(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ready := json.RawMessage(`{"state":"ready"}`)
+	ready := json.RawMessage(`{"state":"ready","source":"renderer"}`)
 	if _, err := agent.handlePipeMessage(PipeMessage{
 		Version: 1, RequestID: "restart-ready", Type: "renderer_status", PID: 100, SessionID: 3,
 		Generation: next.Generation, Nonce: next.Nonce, Payload: ready,
@@ -375,7 +401,7 @@ func TestRestartViewerDuringAgentRecoveryUsesAuthorizedGenerationWithoutDeadShut
 	}
 	if _, err := agent.handlePipeMessage(PipeMessage{
 		Version: 1, RequestID: "recovery-ready", Type: "renderer_status", PID: 100, SessionID: 3,
-		Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready"}`),
+		Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready","source":"renderer"}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +451,7 @@ func registerReadyViewer(t *testing.T, agent *Agent, bootstrapPID, viewerPID int
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ready := json.RawMessage(`{"state":"ready"}`)
+	ready := json.RawMessage(`{"state":"ready","source":"renderer"}`)
 	if _, err := agent.handlePipeMessage(PipeMessage{
 		Version: 1, RequestID: "initial-ready", Type: "renderer_status", PID: viewerPID, SessionID: 3,
 		Generation: grant.Generation, Nonce: grant.Nonce, Payload: ready,

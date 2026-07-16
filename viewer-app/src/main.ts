@@ -20,16 +20,16 @@ async function run(): Promise<void> {
   let explicitShutdown = false;
 
   hardenSession(window, liveURL);
-  ipcMain.on("viewer:renderer", (event, payload: unknown) => {
-    if (event.sender === window.webContents) agent.reportRenderer(payload);
+  ipcMain.on("viewer:renderer", (event) => {
+    if (event.sender === window.webContents) agent.reportRenderer({ state: "ready", source: "renderer" });
   });
   ipcMain.on("viewer:stream", (event, payload: unknown) => {
     if (event.sender === window.webContents) agent.reportStream(payload);
   });
-  window.webContents.on("did-finish-load", () => agent.reportRenderer({ state: rendererStateForEvent("did-finish-load") }));
-  window.on("unresponsive", () => agent.reportRenderer({ state: rendererStateForEvent("unresponsive") }));
-  window.on("responsive", () => agent.reportRenderer({ state: rendererStateForEvent("responsive") }));
-  window.webContents.on("render-process-gone", () => agent.reportRenderer({ state: rendererStateForEvent("render-process-gone") }));
+  window.webContents.on("did-finish-load", () => agent.reportRenderer({ state: rendererStateForEvent("did-finish-load"), source: "host" }));
+  window.on("unresponsive", () => agent.reportRenderer({ state: rendererStateForEvent("unresponsive"), source: "host" }));
+  window.on("responsive", () => agent.reportRenderer({ state: rendererStateForEvent("responsive"), source: "host" }));
+  window.webContents.on("render-process-gone", () => agent.reportRenderer({ state: rendererStateForEvent("render-process-gone"), source: "host" }));
   const unsubscribe = agent.onCommand((command) => {
     switch (command.type) {
     case "reload_live":

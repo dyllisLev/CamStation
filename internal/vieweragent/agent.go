@@ -19,6 +19,9 @@ import (
 const defaultHeartbeatInterval = 10 * time.Second
 const defaultViewerCommandDeadline = 45 * time.Second
 const defaultViewerRestartDeadline = 45 * time.Second
+const defaultViewerShutdownDeadline = 5 * time.Second
+const viewerHealthCheckInterval = time.Second
+const viewerHealthStaleAfter = 15 * time.Second
 
 var (
 	ErrCommandRejected       = errors.New("viewer command rejected")
@@ -63,6 +66,9 @@ type Agent struct {
 	rendererProgress *time.Time
 	viewerCommandMu  sync.Mutex
 	viewerCommand    *viewerCommandRequest
+	sideEffectMu     sync.Mutex
+	recoveryMu       sync.Mutex
+	recoveryInFlight bool
 }
 
 type viewerCommandRequest struct {
@@ -96,6 +102,13 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	}
 	if !supportedCommand(command.Type) {
 		return agent.rejectCommand(ctx, command, "unsupported command")
+	}
+	if serializedSideEffect(command.Type) {
+		agent.sideEffectMu.Lock()
+		defer agent.sideEffectMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return CommandRecord{}, err
+		}
 	}
 	if command.TTLSeconds <= 0 {
 		command.TTLSeconds = 300
@@ -367,7 +380,7 @@ func (agent *Agent) resumeUpdate(ctx context.Context, key string, record Command
 		ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash,
 		DesiredVersion: record.DesiredVersion, ArtifactSHA256: record.ArtifactSHA256, Generation: record.Generation,
 	}
-	err := executor.Execute(ctx, command, record.OperationKey)
+	err := agent.executeCommand(ctx, executor, command, record.OperationKey)
 	if errors.Is(err, ErrAgentRestartRequested) {
 		return record, ErrAgentRestartRequested
 	}
@@ -392,7 +405,7 @@ func (agent *Agent) resumeViewerRestart(ctx context.Context, key string, record 
 		executor = agent
 	}
 	command := Command{ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash, Generation: record.Generation}
-	executionErr := executor.Execute(ctx, command, record.OperationKey)
+	executionErr := agent.executeCommand(ctx, executor, command, record.OperationKey)
 	now := agent.now().UTC()
 	if executionErr != nil {
 		record.State = CommandFailed
@@ -497,6 +510,20 @@ func (agent *Agent) Run(ctx context.Context) error {
 		joinPipe()
 		return nil
 	}
+	if err := agent.checkCommandEngine(); err != nil {
+		joinPipe()
+		return err
+	}
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		agent.runHeartbeats(runCtx, client)
+	}()
+	joinRuntime := func() {
+		cancel()
+		<-heartbeatDone
+		<-pipeDone
+	}
 
 	reconcileDone := make(chan error, 1)
 	go func() {
@@ -506,12 +533,13 @@ func (agent *Agent) Run(ctx context.Context) error {
 	select {
 	case err := <-reconcileDone:
 		if err != nil {
-			joinPipe()
+			joinRuntime()
 			return err
 		}
 	case <-pipeDone:
 		cancel()
 		<-reconcileDone
+		<-heartbeatDone
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -519,32 +547,34 @@ func (agent *Agent) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		cancel()
 		<-reconcileDone
+		<-heartbeatDone
 		<-pipeDone
 		return nil
 	}
 	if err := agent.checkCommandEngine(); err != nil {
-		joinPipe()
+		joinRuntime()
 		return err
 	}
 	select {
 	case <-pipeDone:
+		joinRuntime()
 		return pipeFailure()
 	case <-ctx.Done():
-		joinPipe()
+		joinRuntime()
 		return nil
 	default:
 	}
 	if agent.Ready != nil {
 		agent.Ready()
 	}
-
-	heartbeatDone := make(chan struct{})
+	supervisorDone := make(chan struct{})
 	go func() {
-		defer close(heartbeatDone)
-		agent.runHeartbeats(runCtx, client)
+		defer close(supervisorDone)
+		agent.runViewerSupervisor(runCtx)
 	}()
 	shutdown := func() {
 		cancel()
+		<-supervisorDone
 		<-heartbeatDone
 		<-pipeDone
 	}
@@ -600,6 +630,85 @@ func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient) {
 	}
 }
 
+func (agent *Agent) runViewerSupervisor(ctx context.Context) {
+	ticker := time.NewTicker(viewerHealthCheckInterval)
+	defer ticker.Stop()
+	for {
+		_ = agent.recoverViewerIfUnhealthy(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (agent *Agent) recoverViewerIfUnhealthy(ctx context.Context) error {
+	agent.recoveryMu.Lock()
+	if agent.recoveryInFlight {
+		agent.recoveryMu.Unlock()
+		return nil
+	}
+	agent.recoveryInFlight = true
+	agent.recoveryMu.Unlock()
+	defer func() {
+		agent.recoveryMu.Lock()
+		agent.recoveryInFlight = false
+		agent.recoveryMu.Unlock()
+	}()
+
+	agent.sideEffectMu.Lock()
+	defer agent.sideEffectMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	now := agent.now().UTC()
+	state, err := agent.loadState()
+	if err != nil || viewerRecoveryCause(state, now) == "" {
+		return err
+	}
+	var generation int64
+	var allowed bool
+	if _, err := agent.updateState(func(state *MachineState) error {
+		if viewerRecoveryCause(*state, now) == "" {
+			return nil
+		}
+		allowed, generation = state.AllowViewerRestart(now, false, "")
+		if !allowed {
+			state.ViewerState = "recovery_failed"
+			return nil
+		}
+		state.ViewerState = "restart_authorized"
+		return nil
+	}); err != nil || !allowed {
+		return err
+	}
+	return agent.executeViewerRestart(ctx, Command{Type: "restart_viewer", Generation: generation}, fmt.Sprintf("viewer-generation-%d", generation))
+}
+
+func viewerRecoveryCause(state MachineState, now time.Time) string {
+	if state.ViewerState != "running" {
+		return ""
+	}
+	switch state.RendererState {
+	case "unresponsive":
+		return "renderer_unresponsive"
+	case "failed":
+		return "renderer_failed"
+	}
+	if viewerHealthStale(state.ViewerLastHeartbeatAt, now) {
+		return "ipc_stale"
+	}
+	if viewerHealthStale(state.RendererLastHeartbeatAt, now) {
+		return "renderer_stale"
+	}
+	return ""
+}
+
+func viewerHealthStale(at *time.Time, now time.Time) bool {
+	return at == nil || at.After(now.Add(5*time.Second)) || now.Sub(*at) >= viewerHealthStaleAfter
+}
+
 func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 	state, err := agent.loadState()
 	if err != nil {
@@ -611,6 +720,12 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 		Hostname: hostname, Route: "/live?viewer=1", Mode: "live",
 	}
 	heartbeat.Agent.State = "online"
+	switch state.ViewerState {
+	case "restart_authorized", "restarting":
+		heartbeat.Agent.State = "recovering"
+	case "recovery_failed":
+		heartbeat.Agent.State = "recovery_failed"
+	}
 	heartbeat.Agent.Version = agent.AgentVersion
 	heartbeat.Control.State = state.ControlState
 	heartbeat.Control.LastSuccessAt = state.LastControlSuccessAt
@@ -851,9 +966,30 @@ func (agent *Agent) now() time.Time {
 	return time.Now()
 }
 
+func (agent *Agent) executeCommand(ctx context.Context, executor Executor, command Command, operationKey string) error {
+	if !serializedSideEffect(command.Type) {
+		return executor.Execute(ctx, command, operationKey)
+	}
+	agent.sideEffectMu.Lock()
+	defer agent.sideEffectMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return executor.Execute(ctx, command, operationKey)
+}
+
+func serializedSideEffect(commandType string) bool {
+	switch commandType {
+	case "restart_viewer", "restart_agent", "update_app":
+		return true
+	default:
+		return false
+	}
+}
+
 func supportedCommand(commandType string) bool {
 	switch commandType {
-	case "ping", "reload_live", "restart_viewer", "restart_agent", "resubscribe_stream", "restart_stream", "update_app", "capture_diagnostics":
+	case "ping", "reload_live", "restart_viewer", "restart_agent", "resubscribe_stream", "update_app":
 		return true
 	default:
 		return false
@@ -929,12 +1065,23 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 		return response, err
 	case "viewer_heartbeat", "renderer_status", "stream_telemetry", "command_result":
 		var stream *ViewerStreamState
+		var rendererState, rendererSource string
 		if message.Type == "stream_telemetry" {
 			decoded, streamErr := decodeViewerStreamTelemetry(message.Payload, now)
 			if streamErr != nil {
 				return PipeMessage{}, streamErr
 			}
 			stream = &decoded
+		}
+		if message.Type == "renderer_status" {
+			var payload struct {
+				State  string `json:"state"`
+				Source string `json:"source"`
+			}
+			if err := json.Unmarshal(message.Payload, &payload); err != nil || !validRendererStatus(payload.State, payload.Source) {
+				return PipeMessage{}, errors.New("renderer state and source are required")
+			}
+			rendererState, rendererSource = payload.State, payload.Source
 		}
 		_, err := agent.updateState(func(state *MachineState) error {
 			currentDuringRestart := state.ViewerState == "restart_authorized" && message.Generation == state.ViewerGeneration
@@ -945,19 +1092,19 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 				return errors.New("stale Viewer pipe identity")
 			}
 			state.ViewerGeneration = message.Generation
-			if message.Type != "command_result" && !currentDuringRestart {
+			if message.Type != "command_result" && message.Type != "renderer_status" &&
+				!currentDuringRestart && state.ViewerState != "starting" {
 				state.ViewerState = "running"
 			}
 			state.ViewerLastHeartbeatAt = &now
 			if message.Type == "renderer_status" {
-				var payload struct {
-					State string `json:"state"`
+				if !currentDuringRestart {
+					state.RendererState = rendererState
+					if rendererSource == "renderer" {
+						state.RendererLastHeartbeatAt = &now
+						state.ViewerState = "running"
+					}
 				}
-				if err := json.Unmarshal(message.Payload, &payload); err != nil || !validRendererState(payload.State) {
-					return errors.New("renderer state is required")
-				}
-				state.RendererState = payload.State
-				state.RendererLastHeartbeatAt = &now
 			}
 			return nil
 		})
@@ -1035,7 +1182,8 @@ func (agent *Agent) waitViewerReady(ctx context.Context, stableFor time.Duration
 		}
 		now := agent.now()
 		freshViewer := state.ViewerLastHeartbeatAt != nil && !state.ViewerLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.ViewerLastHeartbeatAt) <= 15*time.Second
-		if state.ViewerState == "running" && state.RendererState == "ready" && freshViewer {
+		freshRenderer := state.RendererLastHeartbeatAt != nil && !state.RendererLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.RendererLastHeartbeatAt) <= 15*time.Second
+		if state.ViewerState == "running" && state.RendererState == "ready" && freshViewer && freshRenderer {
 			if readySince.IsZero() {
 				readySince = now
 			}
@@ -1097,10 +1245,13 @@ func (agent *Agent) executeViewerRestart(ctx context.Context, command Command, o
 		return nil
 	}
 	if state.ViewerState == "restart_authorized" && state.ExpectedViewerPID != 0 {
-		if err := agent.executeViewerCommand(restartCtx, Command{Type: "shutdown", Generation: command.Generation}, operationKey); err != nil {
-			agent.failViewerRestart(command.Generation)
-			return err
-		}
+		shutdownCtx, cancelShutdown := context.WithTimeout(restartCtx, defaultViewerShutdownDeadline)
+		_ = agent.executeViewerCommand(shutdownCtx, Command{Type: "shutdown", Generation: command.Generation}, operationKey)
+		cancelShutdown()
+	}
+	if err := agent.prepareViewerRelaunch(command.Generation); err != nil {
+		agent.failViewerRestart(command.Generation)
+		return err
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -1119,6 +1270,27 @@ func (agent *Agent) executeViewerRestart(ctx context.Context, command Command, o
 		case <-ticker.C:
 		}
 	}
+}
+
+func (agent *Agent) prepareViewerRelaunch(generation int64) error {
+	_, err := agent.updateState(func(state *MachineState) error {
+		if state.ViewerGeneration >= generation {
+			return nil
+		}
+		if state.ExpectedViewerGeneration == generation &&
+			(state.ViewerState == "restarting" || state.ViewerState == "starting") {
+			return nil
+		}
+		if state.ExpectedViewerGeneration != generation || state.ViewerState != "restart_authorized" {
+			return errors.New("Viewer restart generation changed")
+		}
+		state.ViewerNonce = ""
+		state.ExpectedViewerPID = 0
+		state.ExpectedViewerSession = 0
+		state.RendererState = "not_ready"
+		return nil
+	})
+	return err
 }
 
 func (agent *Agent) failViewerRestart(generation int64) {
@@ -1283,9 +1455,15 @@ func validViewerStreamPhase(value string) bool {
 	}
 }
 
-func validRendererState(value string) bool {
-	switch value {
-	case "ready", "not_ready", "unresponsive", "failed":
+func validRendererStatus(state, source string) bool {
+	if source == "renderer" {
+		return state == "ready"
+	}
+	if source != "host" {
+		return false
+	}
+	switch state {
+	case "not_ready", "unresponsive", "failed":
 		return true
 	default:
 		return false

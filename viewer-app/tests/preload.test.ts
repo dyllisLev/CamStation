@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPreloadBridge } from "../src/preload.ts";
+import { createPreloadBridge, startRendererHeartbeat } from "../src/preload.ts";
 
 test("preload exposes only the three narrow Viewer methods", () => {
   const sent: unknown[][] = [];
@@ -22,4 +22,25 @@ test("preload exposes only the three narrow Viewer methods", () => {
   assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "yard-live" }]);
   unsubscribe();
   assert.equal(listeners.has("viewer:command"), false);
+});
+
+test("preload emits a genuine renderer-context liveness pulse periodically", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const sent: unknown[][] = [];
+  const ipc = {
+    send: (...args: unknown[]) => sent.push(args),
+    on: () => undefined,
+    removeListener: () => undefined,
+  };
+
+  const stop = startRendererHeartbeat(ipc);
+  try {
+    t.mock.timers.tick(10_000);
+  } finally {
+    stop();
+  }
+
+  assert.ok(sent.length >= 2, `renderer pulses=${sent.length}`);
+  assert.ok(sent.every((entry) => entry[0] === "viewer:renderer"));
+  assert.ok(sent.every((entry) => JSON.stringify(entry[1]) === JSON.stringify({ state: "ready" })));
 });

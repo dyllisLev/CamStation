@@ -71,7 +71,7 @@ export function useWebRtcMseStream(
     if (!videoElement || candidates.length === 0) return;
     const video: HTMLVideoElement = videoElement;
 
-    const recovery = new PlaybackRecovery(candidates, Date.now());
+    const recovery = new PlaybackRecovery(candidates);
     let destroyed = false;
     let generation = 0;
     let ws: WebSocket | null = null;

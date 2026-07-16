@@ -16,9 +16,9 @@ test("viewer URL always targets the 2.0 live route", () => {
 });
 
 test("renderer lifecycle reports stable bounded states", () => {
-  assert.equal(rendererStateForEvent("did-finish-load"), "ready");
+  assert.equal(rendererStateForEvent("did-finish-load"), "not_ready");
   assert.equal(rendererStateForEvent("unresponsive"), "unresponsive");
-  assert.equal(rendererStateForEvent("responsive"), "ready");
+  assert.equal(rendererStateForEvent("responsive"), "not_ready");
   assert.equal(rendererStateForEvent("render-process-gone"), "failed");
   assert.equal(rendererStateForEvent("unexpected"), "not_ready");
 });

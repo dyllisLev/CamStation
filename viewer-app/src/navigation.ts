@@ -42,9 +42,6 @@ export function permissionAllowed(_permission: string): boolean {
 
 export function rendererStateForEvent(event: string): "ready" | "unresponsive" | "failed" | "not_ready" {
   switch (event) {
-  case "did-finish-load":
-  case "responsive":
-    return "ready";
   case "unresponsive":
     return "unresponsive";
   case "render-process-gone":

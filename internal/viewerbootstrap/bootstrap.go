@@ -128,7 +128,7 @@ func RunWithDeadlines(ctx context.Context, installDir string, adapter ProcessAda
 				return errors.New("Viewer recovery timed out before relaunch")
 			}
 		}
-		generation, childErr, err := runGeneration(ctx, installDir, adapter, &gate, gracefulDeadline, startupBudget)
+		generation, childErr, authorized, err := runGeneration(ctx, installDir, adapter, &gate, gracefulDeadline, startupBudget)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -136,11 +136,13 @@ func RunWithDeadlines(ctx context.Context, installDir string, adapter ProcessAda
 			return err
 		}
 		recoveryDeadline = time.Now().Add(totalDeadline)
-		recoveryCtx, cancelRecovery := context.WithDeadline(ctx, recoveryDeadline)
-		authorized, err := adapter.RelaunchAuthorized(recoveryCtx, generation)
-		cancelRecovery()
-		if err != nil {
-			return err
+		if !authorized {
+			recoveryCtx, cancelRecovery := context.WithDeadline(ctx, recoveryDeadline)
+			authorized, err = adapter.RelaunchAuthorized(recoveryCtx, generation)
+			cancelRecovery()
+			if err != nil {
+				return err
+			}
 		}
 		if !authorized {
 			if childErr != nil {
@@ -158,39 +160,39 @@ func runGeneration(
 	gate *GenerationGate,
 	gracefulDeadline time.Duration,
 	totalDeadline time.Duration,
-) (int64, error, error) {
+) (int64, error, bool, error) {
 	setupCtx, cancelSetup := context.WithTimeout(ctx, totalDeadline)
 	defer cancelSetup()
 	viewerPath, err := adapter.CurrentViewer(setupCtx, installDir)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	grant, err := adapter.RequestGrant(setupCtx)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	if !gate.Accept(grant.Generation) {
-		return 0, nil, errors.New("Agent launch generation is not strictly increasing")
+		return 0, nil, false, errors.New("Agent launch generation is not strictly increasing")
 	}
 	spec, err := BuildLaunchSpec(installDir, viewerPath, grant)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	process, err := adapter.StartSuspended(setupCtx, spec)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- process.Wait() }()
 	if err := process.AssignKillOnCloseJob(); err != nil {
 		_ = process.TerminateJob()
 		waitAndDispose(process, done, setupCtx, gracefulDeadline)
-		return 0, nil, fmt.Errorf("assign Viewer Job: %w", err)
+		return 0, nil, false, fmt.Errorf("assign Viewer Job: %w", err)
 	}
 	if err := process.Resume(); err != nil {
 		_ = process.TerminateJob()
 		waitAndDispose(process, done, setupCtx, gracefulDeadline)
-		return 0, nil, fmt.Errorf("resume Viewer: %w", err)
+		return 0, nil, false, fmt.Errorf("resume Viewer: %w", err)
 	}
 
 	ready := make(chan error, 1)
@@ -199,41 +201,79 @@ func runGeneration(
 	case childErr := <-done:
 		_ = process.TerminateJob()
 		_ = process.Dispose()
-		return grant.Generation, childErr, errors.New("Viewer exited before renderer readiness")
+		return grant.Generation, childErr, false, errors.New("Viewer exited before renderer readiness")
 	case readyErr := <-ready:
 		if readyErr != nil {
 			_ = process.RequestStop()
 			_ = process.TerminateJob()
 			waitAndDispose(process, done, setupCtx, gracefulDeadline)
-			return grant.Generation, nil, fmt.Errorf("Viewer readiness failed: %w", readyErr)
+			return grant.Generation, nil, false, fmt.Errorf("Viewer readiness failed: %w", readyErr)
 		}
 		cancelSetup()
 	case <-setupCtx.Done():
 		_ = process.RequestStop()
 		_ = process.TerminateJob()
 		waitAndDispose(process, done, setupCtx, gracefulDeadline)
-		return grant.Generation, nil, errors.New("Viewer startup timed out")
+		return grant.Generation, nil, false, errors.New("Viewer startup timed out")
 	}
 
-	select {
-	case childErr := <-done:
-		_ = process.TerminateJob()
-		_ = process.Dispose()
-		return grant.Generation, childErr, nil
-	case <-ctx.Done():
-		_ = process.RequestStop()
+	type relaunchResult struct {
+		authorized bool
+		err        error
 	}
-	timer := time.NewTimer(gracefulDeadline)
-	defer timer.Stop()
-	select {
-	case <-done:
-		_ = process.TerminateJob()
-		_ = process.Dispose()
-		return grant.Generation, nil, nil
-	case <-timer.C:
-		_ = process.TerminateJob()
-		waitAndDispose(process, done, context.Background(), gracefulDeadline)
-		return grant.Generation, nil, nil
+	relaunchCtx, cancelRelaunch := context.WithCancel(ctx)
+	defer cancelRelaunch()
+	relaunch := make(chan relaunchResult, 1)
+	go func() {
+		authorized, err := adapter.RelaunchAuthorized(relaunchCtx, grant.Generation)
+		relaunch <- relaunchResult{authorized: authorized, err: err}
+	}()
+	for {
+		select {
+		case childErr := <-done:
+			_ = process.TerminateJob()
+			_ = process.Dispose()
+			return grant.Generation, childErr, false, nil
+		case result := <-relaunch:
+			if result.err != nil {
+				if ctx.Err() != nil {
+					relaunch = nil
+					continue
+				}
+				return grant.Generation, nil, false, result.err
+			}
+			if !result.authorized {
+				relaunch = nil
+				continue
+			}
+			_ = process.RequestStop()
+			timer := time.NewTimer(gracefulDeadline)
+			select {
+			case childErr := <-done:
+				timer.Stop()
+				_ = process.TerminateJob()
+				_ = process.Dispose()
+				return grant.Generation, childErr, true, nil
+			case <-timer.C:
+				_ = process.TerminateJob()
+				waitAndDispose(process, done, context.Background(), gracefulDeadline)
+				return grant.Generation, nil, true, nil
+			}
+		case <-ctx.Done():
+			_ = process.RequestStop()
+			timer := time.NewTimer(gracefulDeadline)
+			select {
+			case <-done:
+				timer.Stop()
+				_ = process.TerminateJob()
+				_ = process.Dispose()
+				return grant.Generation, nil, false, nil
+			case <-timer.C:
+				_ = process.TerminateJob()
+				waitAndDispose(process, done, context.Background(), gracefulDeadline)
+				return grant.Generation, nil, false, nil
+			}
+		}
 	}
 }
 

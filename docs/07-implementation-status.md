@@ -152,8 +152,11 @@ This document records the current implementation state so the next session can c
   - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified `CamStationViewerSetup.exe`
   - the Viewer registry stores independent Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
   - durable idempotent commands, bounded SSE/long-poll recovery, force restart, and server-directed `update_app` control are implemented
+  - the Viewer command selector exposes only `ping`, `reload_live`, `restart_viewer`, `restart_agent`, and `resubscribe_stream`; the Agent additionally accepts server-directed `update_app`
+  - `restart_stream` remains the existing Streams-page server control and `capture_diagnostics` is not implemented or advertised as a Viewer command
   - the Windows Agent runs behind a stable automatic SCM service host; the per-user bootstrap owns the Electron Viewer process tree through a Windows Job Object
-  - Electron opens only the CamStation 2.0 `/live?viewer=1` route and uses finite WebRTC-primary/MSE-fallback playback recovery
+  - Electron opens only the CamStation 2.0 `/live?viewer=1` route, emits renderer-context liveness pulses, and uses finite WebRTC-primary/MSE-fallback playback recovery whose 30-second budget begins at failure detection
+  - the Agent supervises Viewer IPC and renderer liveness independently of server/control health, persists the automatic restart budget, and serializes Viewer restart, Agent restart, and update side effects
   - the installer registers the automatic Agent service, SCM recovery actions, configured-user logon task, and boot recovery task in one unattended installation flow
   - update activation, durable retry budgets, exact artifact verification, ownership, rollback, quarantine, and restart recovery are transactional
   - `scripts/publish-viewer-release.sh` serializes publishers with `flock`, fsyncs immutable `releases/<version>-<sha>` directories, and atomically replaces stable `current/active` and `previous/active` pointers

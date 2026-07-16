@@ -909,7 +909,9 @@ func TestViewerReadyGateRequiresContinuousReadyWindow(t *testing.T) {
 	go func() { done <- agent.waitViewerReady(t.Context(), 20*time.Millisecond) }()
 	time.Sleep(10 * time.Millisecond)
 	now := time.Now()
-	if err := SaveMachineState(paths.State, MachineState{ViewerState: "running", RendererState: "ready", ViewerLastHeartbeatAt: &now}); err != nil {
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerState: "running", RendererState: "ready", ViewerLastHeartbeatAt: &now, RendererLastHeartbeatAt: &now,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	select {

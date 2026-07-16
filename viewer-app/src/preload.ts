@@ -21,6 +21,13 @@ export function createPreloadBridge(ipc: PreloadIPC) {
   });
 }
 
+export function startRendererHeartbeat(ipc: PreloadIPC): () => void {
+  const pulse = () => ipc.send("viewer:renderer", { state: "ready" });
+  pulse();
+  const timer = setInterval(pulse, 5_000);
+  return () => clearInterval(timer);
+}
+
 declare const require: (name: string) => {
   contextBridge: { exposeInMainWorld(name: string, value: unknown): void };
   ipcRenderer: PreloadIPC;
@@ -29,4 +36,5 @@ declare const require: (name: string) => {
 if (typeof process !== "undefined" && process.versions.electron) {
   const { contextBridge, ipcRenderer } = require("electron");
   contextBridge.exposeInMainWorld("camstationViewer", createPreloadBridge(ipcRenderer));
+  startRendererHeartbeat(ipcRenderer);
 }

@@ -159,6 +159,36 @@ func TestRunRelaunchesOnlyAnAuthorizedHigherGeneration(t *testing.T) {
 	}
 }
 
+func TestRunningBootstrapReceivesAuthorizedRelaunchGeneration(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	first := &fakeProcess{wait: make(chan error), waitStarted: make(chan struct{})}
+	second := &fakeProcess{wait: make(chan error), waitStarted: make(chan struct{})}
+	adapter := &fakeAdapter{
+		grants: []LaunchGrant{
+			{Generation: 7, Nonce: "nonce-7", SessionID: 3},
+			{Generation: 8, Nonce: "nonce-8", SessionID: 3},
+		},
+		processes: []*fakeProcess{first, second}, authorized: []bool{true},
+	}
+	done := make(chan error, 1)
+	go func() { done <- RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, time.Second) }()
+	select {
+	case <-second.waitStarted:
+		cancel()
+	case <-time.After(200 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatalf("authorized generation did not reach the running bootstrap: events=%v", adapter.Events())
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	events := adapter.Events()
+	if eventIndex(events, "request_stop") < 0 || eventIndex(events, "terminate_job") < eventIndex(events, "request_stop") {
+		t.Fatalf("bootstrap did not own graceful/forced recovery: %v", events)
+	}
+}
+
 func TestRecoveryWindowIncludesDelayedAuthorizationAndNextRendererReadiness(t *testing.T) {
 	first := &fakeProcess{wait: make(chan error, 1)}
 	second := &fakeProcess{wait: make(chan error, 1)}

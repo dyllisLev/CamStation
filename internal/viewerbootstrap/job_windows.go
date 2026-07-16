@@ -158,10 +158,13 @@ func (windowsAdapter) RelaunchAuthorized(ctx context.Context, generation int64) 
 			return false, err
 		}
 		if state.ViewerGeneration == generation && state.ExpectedViewerGeneration > generation &&
-			state.ViewerState == "restart_authorized" && state.ViewerNonce == "" && state.ExpectedViewerPID == 0 {
+			state.ViewerState == "restart_authorized" {
 			return true, nil
 		}
-		if state.ViewerGeneration > generation || state.ViewerState == "recovery_failed" {
+		if state.ViewerState == "recovery_failed" {
+			return false, nil
+		}
+		if state.ViewerGeneration > generation {
 			return false, errors.New("Agent rejected Viewer recovery generation")
 		}
 		select {

@@ -352,6 +352,190 @@ func TestAgentHeartbeatContinuesWithoutViewerIPC(t *testing.T) {
 	}
 }
 
+func TestViewerRecoveryCauseDistinguishesIPCAndRendererHealthFromControl(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	freshViewer := now.Add(-5 * time.Second)
+	freshRenderer := now.Add(-4 * time.Second)
+	state := MachineState{
+		ViewerState: "running", ViewerLastHeartbeatAt: &freshViewer,
+		RendererState: "ready", RendererLastHeartbeatAt: &freshRenderer,
+		ControlState: "control_degraded",
+	}
+	if cause := viewerRecoveryCause(state, now); cause != "" {
+		t.Fatalf("control loss triggered Viewer recovery: %q", cause)
+	}
+	state.RendererState = "not_ready"
+	if cause := viewerRecoveryCause(state, now); cause != "" {
+		t.Fatalf("fresh responsive renderer triggered recovery before its next pulse: %q", cause)
+	}
+	state.RendererState = "ready"
+
+	staleViewer := now.Add(-15 * time.Second)
+	state.ViewerLastHeartbeatAt = &staleViewer
+	if cause := viewerRecoveryCause(state, now); cause != "ipc_stale" {
+		t.Fatalf("IPC cause=%q", cause)
+	}
+
+	state.ViewerLastHeartbeatAt = &freshViewer
+	staleRenderer := now.Add(-15 * time.Second)
+	state.RendererLastHeartbeatAt = &staleRenderer
+	if cause := viewerRecoveryCause(state, now); cause != "renderer_stale" {
+		t.Fatalf("renderer pulse cause=%q", cause)
+	}
+
+	state.RendererState = "unresponsive"
+	if cause := viewerRecoveryCause(state, now); cause != "renderer_unresponsive" {
+		t.Fatalf("unresponsive cause=%q", cause)
+	}
+	state.RendererState = "failed"
+	if cause := viewerRecoveryCause(state, now); cause != "renderer_failed" {
+		t.Fatalf("failed cause=%q", cause)
+	}
+}
+
+func TestAutomaticViewerRecoveryIsSingleFlightAndKeepsAgentHeartbeatRunning(t *testing.T) {
+	var heartbeats atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/viewers/heartbeat" {
+			heartbeats.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	agent := pipeTestAgent(t)
+	agent.Config.ServerURL = server.URL
+	agent.HTTPClient = server.Client()
+	agent.HeartbeatInterval = 5 * time.Millisecond
+	agent.ViewerRestartDeadline = time.Second
+	current := registerReadyViewer(t, agent, 42, 99)
+	if _, err := agent.handlePipeMessage(PipeMessage{
+		Version: 1, RequestID: "renderer-hung", Type: "renderer_status", PID: 99, SessionID: 3,
+		Generation: current.Generation, Nonce: current.Nonce,
+		Payload: json.RawMessage(`{"state":"unresponsive","source":"host"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	heartbeatDone := make(chan struct{})
+	go func() {
+		agent.runHeartbeats(ctx, ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: agent.Config.ClientID})
+		close(heartbeatDone)
+	}()
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- agent.recoverViewerIfUnhealthy(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		state, err := agent.loadState()
+		if err == nil && state.ViewerState == "restart_authorized" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- agent.recoverViewerIfUnhealthy(ctx) }()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second automatic recovery did not observe the in-flight recovery")
+	}
+	for heartbeats.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if heartbeats.Load() < 3 {
+		t.Fatalf("Agent heartbeat stopped during Viewer recovery: %d", heartbeats.Load())
+	}
+	state, err := agent.loadState()
+	if err != nil || len(state.ViewerRestartHistory) != 1 {
+		t.Fatalf("restart history=%v err=%v", state.ViewerRestartHistory, err)
+	}
+	cancel()
+	<-heartbeatDone
+	<-recoveryDone
+}
+
+func TestAutomaticViewerRecoveryPersistsCooldownAndHourlyBudgetExhaustion(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name    string
+		history []time.Time
+	}{
+		{name: "ten minute cooldown", history: []time.Time{now.Add(-5 * time.Minute)}},
+		{name: "three per hour", history: []time.Time{now.Add(-50 * time.Minute), now.Add(-30 * time.Minute), now.Add(-11 * time.Minute)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+			if err := SaveMachineState(paths.State, MachineState{
+				ViewerState: "running", RendererState: "unresponsive", ViewerRestartHistory: test.history,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			agent := NewAgent(Config{ClientID: "budget-client"}, paths)
+			agent.Now = func() time.Time { return now }
+			if err := agent.recoverViewerIfUnhealthy(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := LoadMachineState(paths.State)
+			if err != nil || persisted.ViewerState != "recovery_failed" || len(persisted.ViewerRestartHistory) != len(test.history) {
+				t.Fatalf("persisted=%+v err=%v", persisted, err)
+			}
+		})
+	}
+}
+
+func TestUnsupportedViewerCommandsAreNotInAgentAllowlist(t *testing.T) {
+	for _, commandType := range []string{"restart_stream", "capture_diagnostics"} {
+		if supportedCommand(commandType) {
+			t.Fatalf("unsupported command %q is advertised", commandType)
+		}
+	}
+}
+
+func TestRestartAndUpdateSideEffectsShareOneProductionBoundary(t *testing.T) {
+	agent := Agent{}
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	executor := executorFunc(func(_ context.Context, command Command, _ string) error {
+		started <- command.Type
+		<-release
+		return nil
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- agent.executeCommand(t.Context(), executor, Command{Type: "restart_viewer"}, "viewer-generation-2")
+	}()
+	if first := <-started; first != "restart_viewer" {
+		t.Fatalf("first side effect=%q", first)
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- agent.executeCommand(t.Context(), executor, Command{Type: "update_app"}, "update-2")
+	}()
+	select {
+	case second := <-started:
+		t.Fatalf("concurrent side effect started: %q", second)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if second := <-started; second != "update_app" {
+		t.Fatalf("second side effect=%q", second)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPipeFailureMarksViewerFailedWithoutChangingControlState(t *testing.T) {
 	dir := t.TempDir()
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
@@ -461,7 +645,7 @@ func TestAgentStartsViewerPipeBeforeReconcilingDurableRestart(t *testing.T) {
 		}
 		if err == nil {
 			_, err = handler(PipeMessage{Version: 1, RequestID: "recovery-ready", Type: "renderer_status", PID: 100, SessionID: 3,
-				Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready"}`)})
+				Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready","source":"renderer"}`)})
 		}
 		bootstrapDone <- err
 	}()
@@ -503,6 +687,53 @@ func TestAgentStartsViewerPipeBeforeReconcilingDurableRestart(t *testing.T) {
 	}
 	if readyCalls.Load() != 1 {
 		t.Fatalf("ready calls=%d", readyCalls.Load())
+	}
+}
+
+func TestAgentHeartbeatRunsWhileDurableViewerRecoveryIsInFlight(t *testing.T) {
+	var heartbeats atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/viewers/heartbeat" {
+			heartbeats.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 8, ViewerState: "restart_authorized", RendererState: "not_ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"62": {
+		ID: 62, Type: "restart_viewer", PayloadHash: "restart-62", OperationKey: "viewer-generation-8",
+		Generation: 8, State: CommandRunning,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	agent := NewAgent(Config{ClientID: "recovery-heartbeat", ServerURL: server.URL, InstallDir: dir}, paths)
+	agent.HTTPClient = server.Client()
+	agent.ServePipe = serveTestViewerPipe
+	agent.HeartbeatInterval = 5 * time.Millisecond
+	agent.ViewerRestartDeadline = time.Second
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- agent.Run(ctx) }()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for heartbeats.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if heartbeats.Load() < 3 {
+		cancel()
+		<-done
+		t.Fatalf("heartbeats began only after Viewer recovery: %d", heartbeats.Load())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -677,6 +908,27 @@ func TestTransportSuccessCannotMaskBrokenCommandEngineInHeartbeat(t *testing.T) 
 	agent.sendHeartbeat(t.Context(), ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: config.ClientID})
 	if got := <-heartbeat; got.Control.State != "control_degraded" {
 		t.Fatalf("heartbeat control state=%q", got.Control.State)
+	}
+}
+
+func TestHeartbeatReportsDurableViewerRecoveryFailure(t *testing.T) {
+	heartbeat := make(chan HeartbeatPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload HeartbeatPayload
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		heartbeat <- payload
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Update: filepath.Join(dir, "update.json")}
+	if err := SaveMachineState(paths.State, MachineState{ViewerState: "recovery_failed", RendererState: "failed"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := NewAgent(Config{ClientID: "failed-recovery", ServerURL: server.URL}, paths)
+	agent.sendHeartbeat(t.Context(), ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: agent.Config.ClientID})
+	if got := <-heartbeat; got.Agent.State != "recovery_failed" || got.Viewer.State != "recovery_failed" {
+		t.Fatalf("heartbeat Agent=%q Viewer=%q", got.Agent.State, got.Viewer.State)
 	}
 }
 

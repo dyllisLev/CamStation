@@ -99,8 +99,6 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
               <option value="restart_viewer">restart_viewer</option>
               <option value="restart_agent">restart_agent</option>
               <option value="resubscribe_stream">resubscribe_stream</option>
-              <option value="restart_stream">restart_stream</option>
-              <option value="capture_diagnostics">capture_diagnostics</option>
             </select>
           </label>
           <Field label="스트림" value={streamName} onChange={setStreamName} />

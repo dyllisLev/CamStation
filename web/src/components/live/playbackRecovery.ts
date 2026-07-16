@@ -13,18 +13,18 @@ export type PlaybackRecoveryStep =
 
 export class PlaybackRecovery {
   readonly streamNames: readonly string[];
-  private episodeStartedAt: number;
+  private episodeStartedAt: number | null = null;
   private step = 0;
   private stableSince: number | null = null;
   private lastProgressAt: number | null = null;
   private stallStartedAt: number | null = null;
 
-  constructor(streamNames: readonly string[], startedAt: number) {
+  constructor(streamNames: readonly string[]) {
     this.streamNames = streamNames.filter((name, index) => Boolean(name) && streamNames.indexOf(name) === index);
-    this.episodeStartedAt = startedAt;
   }
 
   nextFailure(now: number): PlaybackRecoveryStep {
+    if (this.episodeStartedAt === null) this.episodeStartedAt = this.stallStartedAt ?? now;
     if (this.remainingMs(now) === 0) return this.cooldown(now);
 
     const primary = this.streamNames[0];
@@ -46,14 +46,17 @@ export class PlaybackRecovery {
     if (this.lastProgressAt === null || now - this.lastProgressAt > PLAYBACK_STALL_MS) this.stableSince = now;
     this.lastProgressAt = now;
     if (this.stableSince === null || now - this.stableSince < PLAYBACK_STABLE_RESET_MS) return false;
-    this.episodeStartedAt = now;
+    this.episodeStartedAt = null;
     this.step = 0;
     this.stableSince = now;
     return true;
   }
 
   recordFailure(now: number): void {
-    if (this.stallStartedAt === null) this.stallStartedAt = now;
+    if (this.stallStartedAt === null) {
+      this.stallStartedAt = now;
+      if (this.episodeStartedAt === null) this.episodeStartedAt = now;
+    }
   }
 
   stalledForMs(now: number): number {
@@ -61,6 +64,7 @@ export class PlaybackRecovery {
   }
 
   remainingMs(now: number): number {
+    if (this.episodeStartedAt === null) return PLAYBACK_EPISODE_MS;
     return Math.max(0, this.episodeStartedAt + PLAYBACK_EPISODE_MS - now);
   }
 
