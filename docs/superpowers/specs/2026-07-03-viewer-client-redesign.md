@@ -30,7 +30,8 @@ Build a CamStation 2.0 Windows viewer EXE that asks for a server address and vie
 
 ## Stability Requirements
 
-- Main-process heartbeat continues while renderer is crashed or unresponsive.
+- Windows Agent service heartbeat continues while the Viewer or renderer is
+  crashed or unresponsive.
 - Server command channel remains recoverable through SSE with long-poll fallback.
 - `resubscribe_stream` affects only the requested stream pipeline.
 - Repeated reload/restart does not leave orphan Electron processes.
@@ -49,8 +50,11 @@ Build a CamStation 2.0 Windows viewer EXE that asks for a server address and vie
 
 ## Implementation Plan
 
-Use the detailed task plan at:
+Do not execute the stale plan below. It predates the Windows Agent service,
+server-directed automatic update, and WebRTC/MSE recovery design. Replace it
+with a new plan reviewed against the approved replacement design:
 
 - `docs/superpowers/plans/2026-07-03-viewer-client-redesign.md`
 
-That plan includes the reviewed task breakdown, QA commands, stability thresholds, security gates, and final review wave.
+The file is retained only as historical planning context until its replacement
+is written.
