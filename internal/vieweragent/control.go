@@ -470,12 +470,23 @@ type HeartbeatPayload struct {
 	Renderer struct {
 		State           string     `json:"state"`
 		LastHeartbeatAt *time.Time `json:"lastHeartbeatAt,omitempty"`
+		LastProgressAt  *time.Time `json:"lastProgressAt,omitempty"`
 	} `json:"renderer"`
 	Update struct {
 		State         string `json:"state"`
 		TargetVersion string `json:"targetVersion,omitempty"`
 		Generation    int64  `json:"generation"`
 	} `json:"update"`
+	Streams []ViewerStreamState `json:"streams,omitempty"`
+}
+
+type ViewerStreamState struct {
+	StreamName     string     `json:"streamName"`
+	State          string     `json:"state"`
+	Transport      string     `json:"transport,omitempty"`
+	LastBinaryAt   *time.Time `json:"lastBinaryAt,omitempty"`
+	LastProgressAt *time.Time `json:"lastProgressAt,omitempty"`
+	UpdatedAt      *time.Time `json:"updatedAt,omitempty"`
 }
 
 func (client ControlClient) SendHeartbeat(ctx context.Context, heartbeat HeartbeatPayload) error {

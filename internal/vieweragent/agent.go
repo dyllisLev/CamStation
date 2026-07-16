@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 )
 
 const defaultHeartbeatInterval = 10 * time.Second
+const defaultViewerCommandDeadline = 45 * time.Second
 
 var (
 	ErrCommandRejected       = errors.New("viewer command rejected")
@@ -37,13 +39,26 @@ type Agent struct {
 	HeartbeatInterval        time.Duration
 	HeartbeatRequestDeadline time.Duration
 	ControlReadDeadline      time.Duration
+	ViewerCommandDeadline    time.Duration
 	AgentVersion             string
 	Now                      func() time.Time
 	LoadLedger               func(string) (CommandLedger, error)
 	SaveLedger               func(string, CommandLedger) error
 	Ready                    func()
 
-	stateMu sync.Mutex
+	stateMu          sync.Mutex
+	telemetryMu      sync.Mutex
+	viewerStreams    []ViewerStreamState
+	rendererProgress *time.Time
+	viewerCommandMu  sync.Mutex
+	viewerCommand    *viewerCommandRequest
+}
+
+type viewerCommandRequest struct {
+	command      Command
+	operationKey string
+	result       chan error
+	delivered    bool
 }
 
 func NewAgent(config Config, paths MachinePaths) Agent {
@@ -53,6 +68,7 @@ func NewAgent(config Config, paths MachinePaths) Agent {
 		HeartbeatInterval:        defaultHeartbeatInterval,
 		HeartbeatRequestDeadline: DefaultHeartbeatRequestDeadline,
 		ControlReadDeadline:      DefaultControlReadDeadline,
+		ViewerCommandDeadline:    defaultViewerCommandDeadline,
 		Now:                      time.Now,
 	}
 }
@@ -171,7 +187,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 
 	executor := agent.Executor
 	if executor == nil {
-		executor = builtinExecutor{}
+		executor = agent
 	}
 	executionErr := executor.Execute(ctx, command, record.OperationKey)
 	if errors.Is(executionErr, ErrAgentRestartRequested) {
@@ -239,7 +255,7 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 func (agent *Agent) resumeViewerRestart(ctx context.Context, key string, record CommandRecord, ledger CommandLedger) (CommandRecord, error) {
 	executor := agent.Executor
 	if executor == nil {
-		executor = builtinExecutor{}
+		executor = agent
 	}
 	command := Command{ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash, Generation: record.Generation}
 	executionErr := executor.Execute(ctx, command, record.OperationKey)
@@ -396,6 +412,7 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 		heartbeat.Renderer.State = "not_ready"
 	}
 	heartbeat.Renderer.LastHeartbeatAt = state.RendererLastHeartbeatAt
+	heartbeat.Streams, heartbeat.Renderer.LastProgressAt = agent.viewerTelemetry()
 	journal, _ := LoadUpdateJournal(agent.Paths.Update)
 	heartbeat.Update.State = journal.State
 	heartbeat.Update.TargetVersion = journal.TargetVersion
@@ -637,6 +654,9 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 			return PipeMessage{}, err
 		}
 		_, err = agent.updateState(func(state *MachineState) error {
+			if state.ViewerState == "restarting" && state.ExpectedViewerGeneration > state.ViewerGeneration {
+				return errors.New("Viewer bootstrap already granted")
+			}
 			generation := state.ExpectedViewerGeneration
 			if generation <= state.ViewerGeneration {
 				generation = state.ViewerGeneration + 1
@@ -652,14 +672,46 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 			return nil
 		})
 		return response, err
-	case "viewer_heartbeat", "renderer_status":
+	case "viewer_register":
+		payload, err := json.Marshal(struct {
+			ServerURL string `json:"serverUrl"`
+		}{ServerURL: agent.Config.ServerURL})
+		if err != nil {
+			return PipeMessage{}, err
+		}
+		_, err = agent.updateState(func(state *MachineState) error {
+			if state.ViewerState != "restarting" || message.PID <= 0 || message.PID == state.ExpectedViewerPID ||
+				message.SessionID != state.ExpectedViewerSession || message.Generation != state.ExpectedViewerGeneration ||
+				message.Nonce == "" || message.Nonce != state.ViewerNonce {
+				return errors.New("stale Viewer registration")
+			}
+			state.ExpectedViewerPID = message.PID
+			state.ViewerState = "starting"
+			return nil
+		})
+		response.Type = "viewer_registered"
+		response.Generation = message.Generation
+		response.Nonce = message.Nonce
+		response.Payload = payload
+		return response, err
+	case "viewer_heartbeat", "renderer_status", "stream_telemetry", "command_result":
+		var stream *ViewerStreamState
+		if message.Type == "stream_telemetry" {
+			decoded, streamErr := decodeViewerStreamTelemetry(message.Payload, now)
+			if streamErr != nil {
+				return PipeMessage{}, streamErr
+			}
+			stream = &decoded
+		}
 		_, err := agent.updateState(func(state *MachineState) error {
 			if message.PID != state.ExpectedViewerPID || message.SessionID != state.ExpectedViewerSession ||
 				message.Generation != state.ExpectedViewerGeneration || message.Nonce == "" || message.Nonce != state.ViewerNonce {
 				return errors.New("stale Viewer pipe identity")
 			}
 			state.ViewerGeneration = message.Generation
-			state.ViewerState = "running"
+			if message.Type != "command_result" {
+				state.ViewerState = "running"
+			}
 			state.ViewerLastHeartbeatAt = &now
 			if message.Type == "renderer_status" {
 				var payload struct {
@@ -673,10 +725,192 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 			}
 			return nil
 		})
+		if err == nil && stream != nil {
+			agent.storeViewerTelemetry(*stream)
+		}
+		if err == nil && message.Type == "command_result" {
+			err = agent.completeViewerCommand(message.Payload)
+		}
+		if err == nil && message.Type != "command_result" {
+			if commandPayload := agent.pendingViewerCommand(); commandPayload != nil {
+				response.Type = "command"
+				response.Payload = commandPayload
+				return response, nil
+			}
+		}
 		response.Type = "ack"
 		return response, err
 	default:
 		return PipeMessage{}, errors.New("unsupported pipe message type")
+	}
+}
+
+func (agent *Agent) Execute(ctx context.Context, command Command, operationKey string) error {
+	switch command.Type {
+	case "ping":
+		return nil
+	case "restart_agent":
+		return ErrAgentRestartRequested
+	case "reload_live", "resubscribe_stream":
+		return agent.executeViewerCommand(ctx, command, operationKey)
+	default:
+		return errors.New("command adapter is not installed")
+	}
+}
+
+func (agent *Agent) executeViewerCommand(ctx context.Context, command Command, operationKey string) error {
+	if operationKey == "" || (command.Type != "reload_live" && command.Type != "resubscribe_stream") ||
+		(command.Type == "resubscribe_stream" && !validViewerStreamName(command.StreamName)) {
+		return ErrCommandRejected
+	}
+	request := &viewerCommandRequest{command: command, operationKey: operationKey, result: make(chan error, 1)}
+	agent.viewerCommandMu.Lock()
+	if agent.viewerCommand != nil {
+		agent.viewerCommandMu.Unlock()
+		return errors.New("Viewer command already pending")
+	}
+	agent.viewerCommand = request
+	agent.viewerCommandMu.Unlock()
+	defer func() {
+		agent.viewerCommandMu.Lock()
+		if agent.viewerCommand == request {
+			agent.viewerCommand = nil
+		}
+		agent.viewerCommandMu.Unlock()
+	}()
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(agent.viewerCommandDeadline()):
+		return errors.New("Viewer command timed out")
+	}
+}
+
+func (agent *Agent) pendingViewerCommand() json.RawMessage {
+	agent.viewerCommandMu.Lock()
+	defer agent.viewerCommandMu.Unlock()
+	if agent.viewerCommand == nil || agent.viewerCommand.delivered {
+		return nil
+	}
+	agent.viewerCommand.delivered = true
+	payload, err := json.Marshal(struct {
+		Type         string `json:"type"`
+		StreamName   string `json:"streamName,omitempty"`
+		OperationKey string `json:"operationKey"`
+	}{agent.viewerCommand.command.Type, agent.viewerCommand.command.StreamName, agent.viewerCommand.operationKey})
+	if err != nil {
+		return nil
+	}
+	return payload
+}
+
+func (agent *Agent) completeViewerCommand(payload json.RawMessage) error {
+	var result struct {
+		OperationKey string `json:"operationKey"`
+		Succeeded    bool   `json:"succeeded"`
+	}
+	if err := json.Unmarshal(payload, &result); err != nil || result.OperationKey == "" {
+		return errors.New("invalid Viewer command result")
+	}
+	agent.viewerCommandMu.Lock()
+	defer agent.viewerCommandMu.Unlock()
+	if agent.viewerCommand == nil || agent.viewerCommand.operationKey != result.OperationKey {
+		return errors.New("stale Viewer command result")
+	}
+	if result.Succeeded {
+		agent.viewerCommand.result <- nil
+	} else {
+		agent.viewerCommand.result <- errors.New("Viewer command failed")
+	}
+	agent.viewerCommand = nil
+	return nil
+}
+
+func decodeViewerStreamTelemetry(payload json.RawMessage, now time.Time) (ViewerStreamState, error) {
+	var input struct {
+		StreamName     string `json:"streamName"`
+		Transport      string `json:"transport"`
+		Phase          string `json:"phase"`
+		LastBinaryAt   int64  `json:"lastBinaryAt"`
+		LastProgressAt int64  `json:"lastProgressAt"`
+	}
+	if err := json.Unmarshal(payload, &input); err != nil {
+		return ViewerStreamState{}, errors.New("invalid Viewer stream telemetry")
+	}
+	input.StreamName = strings.TrimSpace(input.StreamName)
+	if !validViewerStreamName(input.StreamName) ||
+		(input.Transport != "webrtc" && input.Transport != "mse") || !validViewerStreamPhase(input.Phase) {
+		return ViewerStreamState{}, errors.New("invalid Viewer stream telemetry")
+	}
+	stream := ViewerStreamState{StreamName: input.StreamName, State: input.Phase, Transport: input.Transport, UpdatedAt: &now}
+	stream.LastBinaryAt = viewerTelemetryTime(input.LastBinaryAt)
+	stream.LastProgressAt = viewerTelemetryTime(input.LastProgressAt)
+	return stream, nil
+}
+
+func (agent *Agent) viewerCommandDeadline() time.Duration {
+	if agent.ViewerCommandDeadline > 0 {
+		return agent.ViewerCommandDeadline
+	}
+	return defaultViewerCommandDeadline
+}
+
+func replaceViewerStream(streams []ViewerStreamState, replacement ViewerStreamState) []ViewerStreamState {
+	for index := range streams {
+		if streams[index].StreamName == replacement.StreamName {
+			streams[index] = replacement
+			return streams
+		}
+	}
+	if len(streams) >= 64 {
+		streams = streams[1:]
+	}
+	return append(streams, replacement)
+}
+
+func (agent *Agent) storeViewerTelemetry(stream ViewerStreamState) {
+	agent.telemetryMu.Lock()
+	defer agent.telemetryMu.Unlock()
+	agent.viewerStreams = replaceViewerStream(agent.viewerStreams, stream)
+	if stream.LastProgressAt != nil && (agent.rendererProgress == nil || stream.LastProgressAt.After(*agent.rendererProgress)) {
+		agent.rendererProgress = stream.LastProgressAt
+	}
+}
+
+func (agent *Agent) viewerTelemetry() ([]ViewerStreamState, *time.Time) {
+	agent.telemetryMu.Lock()
+	defer agent.telemetryMu.Unlock()
+	streams := append([]ViewerStreamState(nil), agent.viewerStreams...)
+	return streams, agent.rendererProgress
+}
+
+func viewerTelemetryTime(milliseconds int64) *time.Time {
+	if milliseconds <= 0 {
+		return nil
+	}
+	value := time.UnixMilli(milliseconds).UTC()
+	return &value
+}
+
+func validViewerStreamName(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 || strings.ContainsAny(value, "\r\n\t") || strings.HasPrefix(value, "//") {
+		return false
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" {
+		return false
+	}
+	return true
+}
+
+func validViewerStreamPhase(value string) bool {
+	switch value {
+	case "connecting", "retrying", "fallback", "recovering", "playing", "stalled", "cooldown", "unsupported":
+		return true
+	default:
+		return false
 	}
 }
 

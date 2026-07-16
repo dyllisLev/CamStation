@@ -14,6 +14,7 @@ import (
 type CurrentRelease struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	AgentPath     string `json:"agentPath"`
+	ViewerPath    string `json:"viewerPath,omitempty"`
 }
 
 const PlannedRestartExitCode = 75
@@ -50,21 +51,37 @@ func ValidateCurrentRelease(installDir string, current CurrentRelease) (CurrentR
 	if !filepath.IsAbs(installDir) || current.AgentPath == "" {
 		return CurrentRelease{}, errors.New("invalid current release pointer")
 	}
-	agentPath := current.AgentPath
-	if !filepath.IsAbs(agentPath) {
-		agentPath = filepath.Join(installDir, agentPath)
-	}
-	agentPath = filepath.Clean(agentPath)
-	relative, err := filepath.Rel(installDir, agentPath)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+	agentPath, err := releasePath(installDir, current.AgentPath)
+	if err != nil {
 		return CurrentRelease{}, errors.New("current Agent path escapes install directory")
+	}
+	viewerPath := ""
+	if current.ViewerPath != "" {
+		viewerPath, err = releasePath(installDir, current.ViewerPath)
+		if err != nil {
+			return CurrentRelease{}, errors.New("current Viewer path escapes install directory")
+		}
 	}
 	if current.SchemaVersion != SchemaVersion {
 		return CurrentRelease{}, errors.New("unsupported current release schema")
 	}
 	current.SchemaVersion = SchemaVersion
 	current.AgentPath = agentPath
+	current.ViewerPath = viewerPath
 	return current, nil
+}
+
+func releasePath(installDir, value string) (string, error) {
+	path := value
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(installDir, path)
+	}
+	path = filepath.Clean(path)
+	relative, err := filepath.Rel(installDir, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("release path escapes install directory")
+	}
+	return path, nil
 }
 
 func RunChildSupervisor(ctx context.Context, run func(context.Context) ChildExit, sleep func(context.Context, time.Duration) error) error {

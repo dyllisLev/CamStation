@@ -141,6 +141,13 @@ func TestCurrentReleaseCannotEscapeInstallDirectory(t *testing.T) {
 	if _, err := ValidateCurrentRelease(installDir, CurrentRelease{AgentPath: inside}); err == nil {
 		t.Fatal("schema-less current release pointer was accepted")
 	}
+	if _, err := ValidateCurrentRelease(installDir, CurrentRelease{
+		SchemaVersion: SchemaVersion,
+		AgentPath:     inside,
+		ViewerPath:    outside,
+	}); err == nil {
+		t.Fatal("current Viewer path escaped install directory")
+	}
 }
 
 func TestHostReadinessRequiresValidRegularAgentAndSuccessfulStart(t *testing.T) {
