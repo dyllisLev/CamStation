@@ -65,3 +65,22 @@ func TestConfigurePreservesInstallerOwnedSIDs(t *testing.T) {
 		t.Fatalf("installer-owned SIDs were lost: %+v", updated)
 	}
 }
+
+func TestInstallerConfigurationPersistsUpdateTrustAndIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	installDir := filepath.Join(t.TempDir(), "install")
+	config, err := ConfigureInstaller(path, InstallerConfig{
+		ServerURL: "http://camstation.local:18080", DisplayName: "Wall A", InstallDir: installDir,
+		MonitoringUserSID: "S-1-5-21-1", AgentServiceSID: "S-1-5-80-2", AllowDevelopmentUnsigned: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ClientID != config.ClientID || loaded.MonitoringUserSID != "S-1-5-21-1" || loaded.AgentServiceSID != "S-1-5-80-2" || !loaded.AllowDevelopmentUnsigned {
+		t.Fatalf("installer config not persisted: %+v", loaded)
+	}
+}

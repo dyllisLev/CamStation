@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ type CommandReporter interface {
 	Report(context.Context, Command, CommandState, string, string) error
 }
 
+type UpdateExecutor interface {
+	Run(context.Context, UpdateTarget) error
+}
+
 type Agent struct {
 	Config                   Config
 	Paths                    MachinePaths
@@ -48,6 +53,7 @@ type Agent struct {
 	SaveLedger               func(string, CommandLedger) error
 	ServePipe                func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
 	Ready                    func()
+	Updater                  UpdateExecutor
 
 	stateMu          sync.Mutex
 	telemetryMu      sync.Mutex
@@ -257,12 +263,61 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 				return results, reconcileErr
 			}
 		}
+		if reconciled.State == CommandRunning && reconciled.Type == "update_app" {
+			journal, loadErr := LoadUpdateJournal(agent.Paths.Update)
+			if loadErr != nil {
+				return results, loadErr
+			}
+			if updateCanResume(journal.State) {
+				reconciled, reconcileErr = agent.resumeUpdate(ctx, key, reconciled, ledger)
+				if reconcileErr != nil {
+					return results, reconcileErr
+				}
+			}
+		}
 		if reconciled.State != CommandRunning {
 			results = append(results, reconciled)
 			agent.report(ctx, Command{ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash}, reconciled.State, reconciled.OperationKey, reconciled.Error)
 		}
 	}
 	return results, nil
+}
+
+func updateCanResume(state string) bool {
+	switch state {
+	case "", "checking_release", "downloading", "download_retry_wait", "verified", "waiting_for_viewer_session", "launch_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func (agent *Agent) resumeUpdate(ctx context.Context, key string, record CommandRecord, ledger CommandLedger) (CommandRecord, error) {
+	executor := agent.Executor
+	if executor == nil {
+		executor = agent
+	}
+	command := Command{
+		ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash,
+		DesiredVersion: record.DesiredVersion, ArtifactSHA256: record.ArtifactSHA256, Generation: record.Generation,
+	}
+	err := executor.Execute(ctx, command, record.OperationKey)
+	if errors.Is(err, ErrAgentRestartRequested) {
+		return record, ErrAgentRestartRequested
+	}
+	now := agent.now().UTC()
+	if err != nil {
+		record.State = CommandFailed
+		record.Error = commandErrorCategory(err)
+	} else {
+		record.State = CommandSucceeded
+	}
+	record.CompletedAt = &now
+	ledger.Records[key] = record
+	if saveErr := agent.saveCommandLedger(ledger); saveErr != nil {
+		return record, saveErr
+	}
+	return record, err
 }
 
 func (agent *Agent) resumeViewerRestart(ctx context.Context, key string, record CommandRecord, ledger CommandLedger) (CommandRecord, error) {
@@ -851,10 +906,67 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 		return agent.executeViewerRestart(ctx, command, operationKey)
 	case "restart_agent":
 		return ErrAgentRestartRequested
+	case "update_app":
+		updater := agent.Updater
+		if updater == nil {
+			updater = UpdateRunner{
+				HTTPClient: agent.HTTPClient, ServerURL: agent.Config.ServerURL, StateDir: filepath.Dir(agent.Paths.Update),
+				AllowDevelopmentUnsigned: agent.Config.AllowDevelopmentUnsigned,
+				ExpectedSignerThumbprint: agent.Config.SignerThumbprint,
+				WaitViewerReady:          agent.waitViewerReady,
+			}
+		}
+		err := updater.Run(ctx, UpdateTarget{
+			Version: command.DesiredVersion, SHA256: strings.ToLower(command.ArtifactSHA256),
+			Generation: command.Generation, TransactionID: operationKey,
+		})
+		if errors.Is(err, ErrUpdateLaunched) {
+			return ErrAgentRestartRequested
+		}
+		return err
 	case "reload_live", "resubscribe_stream":
 		return agent.executeViewerCommand(ctx, command, operationKey)
 	default:
 		return errors.New("command adapter is not installed")
+	}
+}
+
+func (agent *Agent) waitViewerReady(ctx context.Context, stableFor time.Duration) error {
+	if stableFor <= 0 {
+		return errors.New("invalid Viewer-ready duration")
+	}
+	interval := stableFor / 4
+	if interval < 5*time.Millisecond {
+		interval = 5 * time.Millisecond
+	}
+	if interval > 250*time.Millisecond {
+		interval = 250 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var readySince time.Time
+	for {
+		state, err := agent.loadState()
+		if err != nil {
+			return err
+		}
+		now := agent.now()
+		freshViewer := state.ViewerLastHeartbeatAt != nil && !state.ViewerLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.ViewerLastHeartbeatAt) <= 15*time.Second
+		if state.ViewerState == "running" && state.RendererState == "ready" && freshViewer {
+			if readySince.IsZero() {
+				readySince = now
+			}
+			if now.Sub(readySince) >= stableFor {
+				return nil
+			}
+		} else {
+			readySince = time.Time{}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

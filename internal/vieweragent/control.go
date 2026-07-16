@@ -532,6 +532,11 @@ func validateCommand(command Command) error {
 	if command.ID <= 0 || strings.TrimSpace(command.Type) == "" || strings.TrimSpace(command.PayloadHash) == "" {
 		return errors.New("invalid viewer command")
 	}
+	if command.Type == "update_app" && !validUpdateTarget(UpdateTarget{
+		Version: command.DesiredVersion, SHA256: strings.ToLower(command.ArtifactSHA256), Generation: command.Generation, TransactionID: "command",
+	}) {
+		return errors.New("invalid viewer update command")
+	}
 	return nil
 }
 

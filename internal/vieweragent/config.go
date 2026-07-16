@@ -17,13 +17,25 @@ const (
 )
 
 type Config struct {
-	SchemaVersion     int    `json:"schemaVersion"`
-	ServerURL         string `json:"serverUrl"`
-	DisplayName       string `json:"displayName"`
-	InstallDir        string `json:"installDir"`
-	ClientID          string `json:"clientId"`
-	MonitoringUserSID string `json:"monitoringUserSid,omitempty"`
-	AgentServiceSID   string `json:"agentServiceSid,omitempty"`
+	SchemaVersion            int    `json:"schemaVersion"`
+	ServerURL                string `json:"serverUrl"`
+	DisplayName              string `json:"displayName"`
+	InstallDir               string `json:"installDir"`
+	ClientID                 string `json:"clientId"`
+	MonitoringUserSID        string `json:"monitoringUserSid,omitempty"`
+	AgentServiceSID          string `json:"agentServiceSid,omitempty"`
+	AllowDevelopmentUnsigned bool   `json:"allowDevelopmentUnsigned,omitempty"`
+	SignerThumbprint         string `json:"signerThumbprint,omitempty"`
+}
+
+type InstallerConfig struct {
+	ServerURL                string
+	DisplayName              string
+	InstallDir               string
+	MonitoringUserSID        string
+	AgentServiceSID          string
+	AllowDevelopmentUnsigned bool
+	SignerThumbprint         string
 }
 
 func ValidateServerURL(raw string) (string, error) {
@@ -61,10 +73,14 @@ func Configure(path, serverURL, displayName, installDir string) (Config, error) 
 	clientID := ""
 	monitoringUserSID := ""
 	agentServiceSID := ""
+	allowDevelopmentUnsigned := false
+	signerThumbprint := ""
 	if current, loadErr := LoadConfig(path); loadErr == nil {
 		clientID = current.ClientID
 		monitoringUserSID = current.MonitoringUserSID
 		agentServiceSID = current.AgentServiceSID
+		allowDevelopmentUnsigned = current.AllowDevelopmentUnsigned
+		signerThumbprint = current.SignerThumbprint
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("load existing config: %w", loadErr)
 	}
@@ -75,18 +91,53 @@ func Configure(path, serverURL, displayName, installDir string) (Config, error) 
 		}
 	}
 	config := Config{
-		SchemaVersion:     SchemaVersion,
-		ServerURL:         validatedURL,
-		DisplayName:       displayName,
-		InstallDir:        installDir,
-		ClientID:          clientID,
-		MonitoringUserSID: monitoringUserSID,
-		AgentServiceSID:   agentServiceSID,
+		SchemaVersion:            SchemaVersion,
+		ServerURL:                validatedURL,
+		DisplayName:              displayName,
+		InstallDir:               installDir,
+		ClientID:                 clientID,
+		MonitoringUserSID:        monitoringUserSID,
+		AgentServiceSID:          agentServiceSID,
+		AllowDevelopmentUnsigned: allowDevelopmentUnsigned,
+		SignerThumbprint:         signerThumbprint,
 	}
 	if err := atomicWriteJSON(path, config); err != nil {
 		return Config{}, fmt.Errorf("save config: %w", err)
 	}
 	return config, nil
+}
+
+func ConfigureInstaller(path string, installer InstallerConfig) (Config, error) {
+	config, err := Configure(path, installer.ServerURL, installer.DisplayName, installer.InstallDir)
+	if err != nil {
+		return Config{}, err
+	}
+	if !validInstallerSID(installer.MonitoringUserSID) || !validInstallerSID(installer.AgentServiceSID) {
+		return Config{}, errors.New("valid monitoring and Agent service SIDs are required")
+	}
+	if installer.SignerThumbprint != "" && !validThumbprint(installer.SignerThumbprint) {
+		return Config{}, errors.New("invalid signer thumbprint")
+	}
+	config.MonitoringUserSID = installer.MonitoringUserSID
+	config.AgentServiceSID = installer.AgentServiceSID
+	config.AllowDevelopmentUnsigned = installer.AllowDevelopmentUnsigned
+	config.SignerThumbprint = strings.ToLower(installer.SignerThumbprint)
+	if err := atomicWriteJSON(path, config); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func validInstallerSID(value string) bool {
+	if !strings.HasPrefix(value, "S-") || len(value) > 184 || strings.ContainsAny(value, "\r\n\t ") {
+		return false
+	}
+	for _, char := range strings.TrimPrefix(value, "S-") {
+		if (char < '0' || char > '9') && char != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -100,6 +151,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if config.SchemaVersion != SchemaVersion || config.ClientID == "" || strings.TrimSpace(config.DisplayName) == "" || !filepath.IsAbs(config.InstallDir) {
 		return Config{}, errors.New("invalid viewer Agent config")
+	}
+	if (config.MonitoringUserSID != "" && !validInstallerSID(config.MonitoringUserSID)) ||
+		(config.AgentServiceSID != "" && !validInstallerSID(config.AgentServiceSID)) ||
+		(config.SignerThumbprint != "" && !validThumbprint(config.SignerThumbprint)) ||
+		(config.AllowDevelopmentUnsigned && config.SignerThumbprint != "") {
+		return Config{}, errors.New("invalid installer-owned Agent config")
 	}
 	config.ServerURL = serverURL
 	return config, nil

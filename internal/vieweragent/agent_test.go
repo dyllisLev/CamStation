@@ -288,8 +288,9 @@ func TestAgentStartupConvergesStaleViewerIdentityOnce(t *testing.T) {
 func TestQuarantinedUpdateIsRejectedWithoutExecution(t *testing.T) {
 	dir := t.TempDir()
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	digest := strings.Repeat("a", 64)
 	journal := UpdateJournal{}
-	journal.Quarantine("2.0.0", "bad", 4, time.Now(), "rollback")
+	journal.Quarantine("2.0.0", digest, 4, time.Now(), "rollback")
 	if err := SaveUpdateJournal(paths.Update, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +298,7 @@ func TestQuarantinedUpdateIsRejectedWithoutExecution(t *testing.T) {
 		t.Fatal("quarantined update executed")
 		return nil
 	})}
-	result, err := agent.HandleCommand(t.Context(), Command{ID: 4, Type: "update_app", DesiredVersion: "2.0.0", ArtifactSHA256: "bad", Generation: 4, PayloadHash: "p", TTLSeconds: 300})
+	result, err := agent.HandleCommand(t.Context(), Command{ID: 4, Type: "update_app", DesiredVersion: "2.0.0", ArtifactSHA256: digest, Generation: 4, PayloadHash: "p", TTLSeconds: 300})
 	if err == nil || result.State != CommandRejected {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

@@ -13,6 +13,9 @@ import (
 
 type CurrentRelease struct {
 	SchemaVersion int    `json:"schemaVersion"`
+	ReleaseID     string `json:"releaseId,omitempty"`
+	Version       string `json:"version,omitempty"`
+	Digest        string `json:"digest,omitempty"`
 	AgentPath     string `json:"agentPath"`
 	ViewerPath    string `json:"viewerPath,omitempty"`
 }
@@ -64,6 +67,21 @@ func ValidateCurrentRelease(installDir string, current CurrentRelease) (CurrentR
 	}
 	if current.SchemaVersion != SchemaVersion {
 		return CurrentRelease{}, errors.New("unsupported current release schema")
+	}
+	if current.ReleaseID != "" || current.Version != "" || current.Digest != "" {
+		if current.ReleaseID == "" || current.Version == "" || !validUpdateTarget(UpdateTarget{Version: current.Version, SHA256: current.Digest, Generation: 1, TransactionID: "pointer"}) || current.ReleaseID != current.Version+"-"+current.Digest {
+			return CurrentRelease{}, errors.New("invalid current release metadata")
+		}
+		releaseRoot := filepath.Join(installDir, "releases", current.ReleaseID)
+		for _, executable := range []string{agentPath, viewerPath} {
+			if executable == "" {
+				continue
+			}
+			relative, relErr := filepath.Rel(releaseRoot, executable)
+			if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				return CurrentRelease{}, errors.New("current executable does not match release metadata")
+			}
+		}
 	}
 	current.SchemaVersion = SchemaVersion
 	current.AgentPath = agentPath

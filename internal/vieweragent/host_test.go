@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -147,6 +148,24 @@ func TestCurrentReleaseCannotEscapeInstallDirectory(t *testing.T) {
 		ViewerPath:    outside,
 	}); err == nil {
 		t.Fatal("current Viewer path escaped install directory")
+	}
+}
+
+func TestHostAcceptsTransactionalReleasePointerMetadata(t *testing.T) {
+	installDir := t.TempDir()
+	digest := strings.Repeat("a", 64)
+	releaseID := "2.0.0-" + digest
+	pointer := CurrentRelease{
+		SchemaVersion: SchemaVersion, ReleaseID: releaseID, Version: "2.0.0", Digest: digest,
+		AgentPath:  filepath.Join("releases", releaseID, "camstation-viewer-agent.exe"),
+		ViewerPath: filepath.Join("releases", releaseID, "viewer", "CamStationViewer.exe"),
+	}
+	if err := atomicWriteJSON(filepath.Join(installDir, "current.json"), pointer); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCurrentRelease(installDir)
+	if err != nil || loaded.ReleaseID != releaseID || loaded.Version != "2.0.0" || loaded.Digest != digest {
+		t.Fatalf("loaded=%+v err=%v", loaded, err)
 	}
 }
 

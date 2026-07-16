@@ -181,12 +181,17 @@ type QuarantinedUpdate struct {
 }
 
 type UpdateJournal struct {
-	SchemaVersion  int                 `json:"schemaVersion"`
-	State          string              `json:"state,omitempty"`
-	TargetVersion  string              `json:"targetVersion,omitempty"`
-	ArtifactSHA256 string              `json:"artifactSha256,omitempty"`
-	Generation     int64               `json:"generation"`
-	Quarantined    []QuarantinedUpdate `json:"quarantined,omitempty"`
+	SchemaVersion    int                 `json:"schemaVersion"`
+	State            string              `json:"state,omitempty"`
+	TargetVersion    string              `json:"targetVersion,omitempty"`
+	ArtifactSHA256   string              `json:"artifactSha256,omitempty"`
+	Generation       int64               `json:"generation"`
+	TransactionID    string              `json:"transactionId,omitempty"`
+	DownloadAttempts int                 `json:"downloadAttempts,omitempty"`
+	NextAttemptAt    *time.Time          `json:"nextAttemptAt,omitempty"`
+	InstallerPath    string              `json:"installerPath,omitempty"`
+	LastError        string              `json:"lastError,omitempty"`
+	Quarantined      []QuarantinedUpdate `json:"quarantined,omitempty"`
 }
 
 func (journal *UpdateJournal) Quarantine(version, digest string, generation int64, at time.Time, reason string) {
