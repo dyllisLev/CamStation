@@ -124,10 +124,10 @@ $ file viewer-app/dist/CamStationViewerSetup.exe
 PE32+ executable (console) x86-64, for MS Windows
 
 $ stat -c '%s bytes' viewer-app/dist/CamStationViewerSetup.exe
-383864832 bytes
+383865344 bytes
 
 $ sha256sum viewer-app/dist/CamStationViewerSetup.exe
-be8d32490a55887db9d780b78b007955c248f3f97fe42e471627ca006d34a2c1
+1215810fb2f669e5483f334afa00ba96a8c3a80306707dd84aedecebc91b4ce0
 
 $ test ! -e cmd/camstation-viewer-installer/payload/release.zip
 PASS
