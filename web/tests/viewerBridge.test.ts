@@ -60,6 +60,7 @@ test("rejects telemetry that tries to use a URL as a stream name", () => {
   };
 
   reportViewerStream({ streamName: "rtsp://user:pass@camera/live", transport: "webrtc", phase: "playing" }, bridge);
+  reportViewerStream({ streamName: "  rtsp://user:pass@camera/live", transport: "webrtc", phase: "playing" }, bridge);
   assert.equal(calls, 0);
 });
 
@@ -75,15 +76,48 @@ test("uses the preload bridge when present and filters renderer commands", () =>
     },
   };
   const received: unknown[] = [];
-  const unsubscribe = subscribeViewerCommands((command) => received.push(command), bridge);
+  const unsubscribe = subscribeViewerCommands((command) => received.push(command), bridge, ["yard-live"]);
 
   rawHandler?.({ type: "resubscribe_stream", streamName: "yard-live" });
+  rawHandler?.({ type: "resubscribe_stream", streamName: "porch-live" });
   rawHandler?.({ type: "resubscribe_stream", streamName: "rtsp://admin:secret@camera/live" });
   rawHandler?.({ type: "restart_agent", streamName: "yard-live" });
 
   assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "yard-live" }]);
   unsubscribe();
   assert.equal(rawHandler, undefined);
+});
+
+test("accepts registered Korean and space stream identifiers only", () => {
+  let rawHandler: ((command: unknown) => void) | undefined;
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined,
+    onCommand: (handler) => {
+      rawHandler = handler;
+    },
+  };
+  const received: unknown[] = [];
+  subscribeViewerCommands((command) => received.push(command), bridge, ["마당 카메라"]);
+
+  rawHandler?.({ type: "resubscribe_stream", streamName: "마당 카메라" });
+  rawHandler?.({ type: "resubscribe_stream", streamName: "다른 카메라" });
+  rawHandler?.({ type: "resubscribe_stream", streamName: "마당\u0000카메라" });
+  rawHandler?.({ type: "resubscribe_stream", streamName: "rtsp://camera/live" });
+
+  assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "마당 카메라" }]);
+});
+
+test("reports a registered non-ASCII stream identifier without widening fields", () => {
+  let reported: unknown;
+  const bridge: CamStationViewerBridge = {
+    reportStream: (telemetry) => {
+      reported = telemetry;
+    },
+    onCommand: () => undefined,
+  };
+
+  reportViewerStream({ streamName: "마당 카메라", transport: "webrtc", phase: "playing" }, bridge);
+  assert.deepEqual(reported, { streamName: "마당 카메라", transport: "webrtc", phase: "playing" });
 });
 
 test("does nothing when Electron preload did not expose the bridge", () => {

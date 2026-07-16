@@ -38,17 +38,26 @@ func TestGo2RTCProxyAllowsOnlyRegisteredPublicStreamNames(t *testing.T) {
 }
 
 func TestGo2RTCProxyRejectsUnregisteredWebSocketSourceBeforeProxying(t *testing.T) {
-	proxy, err := go2RTCProxy(newPreviewRegistry(), func(context.Context, string) bool { return false })
+	registrationChecked := false
+	proxy, err := go2RTCProxy(newPreviewRegistry(), func(_ context.Context, streamName string) bool {
+		registrationChecked = true
+		return streamName == "yard-live"
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/ws?src=yard-private-input", nil)
+	req.Host = "camstation.local:18080"
+	req.Header.Set("Origin", "http://camstation.local:18080")
 	rec := httptest.NewRecorder()
 
 	proxy.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if !registrationChecked {
+		t.Fatal("registration callback was not reached")
 	}
 }
 

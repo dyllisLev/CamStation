@@ -677,10 +677,12 @@ function LiveVideo({
           : "연결 중...";
 
   useEffect(() => {
-    const candidates = new Set(streamKey.split("\u001f").filter(Boolean));
-    return subscribeViewerCommands((command) => {
-      if (candidates.has(command.streamName)) setResubscribeGeneration((value) => value + 1);
-    });
+    const candidates = streamKey.split("\u001f").filter(Boolean);
+    return subscribeViewerCommands(
+      () => setResubscribeGeneration((value) => value + 1),
+      undefined,
+      candidates,
+    );
   }, [streamKey]);
 
   useEffect(() => {

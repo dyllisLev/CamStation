@@ -1,6 +1,6 @@
 import type { PlaybackTransport } from "./playbackRecovery";
 
-const STREAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const URL_LIKE = /^[a-z][a-z0-9+.-]*:/iu;
 const TRANSPORTS = new Set<PlaybackTransport>(["webrtc", "mse"]);
 const PHASES = new Set(["connecting", "retrying", "fallback", "recovering", "playing", "stalled", "cooldown", "unsupported"]);
 const ERRORS = new Set(["none", "setup_timeout", "media_stall", "socket", "signaling", "media", "unsupported", "episode_exhausted"]);
@@ -45,12 +45,14 @@ export function reportViewerStream(input: Record<string, unknown>, bridge = prel
 export function subscribeViewerCommands(
   handler: (command: ViewerCommand) => void,
   bridge = preloadBridge(),
+  registeredStreamNames?: readonly string[],
 ): () => void {
   if (!bridge) return () => undefined;
+  const registered = registeredStreamNames ? new Set(registeredStreamNames) : null;
   try {
     const unsubscribe = bridge.onCommand((input) => {
       const command = safeCommand(input);
-      if (command) handler(command);
+      if (command && (!registered || registered.has(command.streamName))) handler(command);
     });
     return typeof unsubscribe === "function"
       ? () => {
@@ -95,5 +97,14 @@ function safeCommand(input: unknown): ViewerCommand | null {
 }
 
 function safeStreamName(value: unknown): value is string {
-  return typeof value === "string" && STREAM_NAME.test(value);
+  if (typeof value !== "string" || value.length === 0 || value.length > 128) return false;
+  const trimmed = value.trim();
+  const containsControlCharacter = Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || (code >= 127 && code <= 159);
+  });
+  return trimmed.length > 0
+    && !containsControlCharacter
+    && !URL_LIKE.test(trimmed)
+    && !trimmed.startsWith("//");
 }

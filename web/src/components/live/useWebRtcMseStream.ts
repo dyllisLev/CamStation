@@ -9,6 +9,7 @@ import {
   type PlaybackRecoveryStep,
   type PlaybackTransport,
 } from "./playbackRecovery";
+import { inboundVideoReceipt, receiptAdvanced } from "./webrtcReceipt";
 
 const CODECS = ["avc1.640029", "avc1.64002A", "avc1.640033", "mp4a.40.2", "mp4a.40.5", "opus"];
 
@@ -80,6 +81,7 @@ export function useWebRtcMseStream(
     let setupTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
     let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
+    let statsTimer: ReturnType<typeof setInterval> | null = null;
     let terminalAttempt = false;
     let lowFrequencyProbeUsed = false;
     let lastVideoTime = -1;
@@ -97,9 +99,11 @@ export function useWebRtcMseStream(
       if (setupTimer) clearTimeout(setupTimer);
       if (stallTimer) clearTimeout(stallTimer);
       if (cooldownTimer) clearTimeout(cooldownTimer);
+      if (statsTimer) clearInterval(statsTimer);
       setupTimer = null;
       stallTimer = null;
       cooldownTimer = null;
+      statsTimer = null;
     }
 
     function teardownAttempt() {
@@ -138,14 +142,18 @@ export function useWebRtcMseStream(
     }
 
     function publishAttempt(options: AttemptOptions, errorCategory: PlaybackErrorCategory) {
+      lastBinaryStateAt = 0;
+      lastProgressStateAt = 0;
       setPlayback((current) => ({
         ...current,
         transport: options.transport,
         phase: options.phase,
         activeStreamName: options.streamName,
         usingFallback: options.streamName !== candidates[0],
+        lastBinaryAt: null,
+        lastProgressAt: null,
         readyState: video.readyState,
-        stalledForMs: errorCategory === "media_stall" && current.lastProgressAt ? Date.now() - current.lastProgressAt : 0,
+        stalledForMs: 0,
         attempt: options.attempt,
         reconnectCount: counts.reconnect,
         fallbackCount: counts.fallback,
@@ -260,11 +268,19 @@ export function useWebRtcMseStream(
     ) {
       if (destroyed) return;
       teardownAttempt();
+      const remainingMs = recovery.remainingMs(Date.now());
+      if (!terminal && remainingMs === 0) {
+        advance(recovery.nextFailure(Date.now()), "episode_exhausted");
+        return;
+      }
       const token = ++generation;
       activeAttempt = options;
       terminalAttempt = terminal;
       publishAttempt(options, previousError);
-      setupTimer = setTimeout(() => failAttempt(token, "setup_timeout"), PLAYBACK_SETUP_MS);
+      setupTimer = setTimeout(
+        () => failAttempt(token, "setup_timeout"),
+        terminal ? PLAYBACK_SETUP_MS : recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
+      );
       if (options.transport === "webrtc") connectWebRTC(token, options.streamName);
       else connectMSE(token, options.streamName);
     }
@@ -294,6 +310,26 @@ export function useWebRtcMseStream(
           failAttempt(token, "media");
         }
       };
+
+      let statsPending = false;
+      let previousReceipt = { bytesReceived: 0, packetsReceived: 0 };
+      statsTimer = setInterval(async () => {
+        if (statsPending || destroyed || token !== generation) return;
+        statsPending = true;
+        try {
+          const receipt = inboundVideoReceipt(await connection.getStats());
+          if (token !== generation) return;
+          if (receiptAdvanced(previousReceipt, receipt)) {
+            const now = Date.now();
+            setPlayback((current) => ({ ...current, lastBinaryAt: now, readyState: video.readyState }));
+          }
+          previousReceipt = receipt;
+        } catch {
+          // Setup and media-progress deadlines remain authoritative.
+        } finally {
+          statsPending = false;
+        }
+      }, 1_000);
 
       ws = openPlayerSocket(streamName);
       ws.onopen = async () => {

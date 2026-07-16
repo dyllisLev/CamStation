@@ -17,7 +17,6 @@ export class PlaybackRecovery {
   private step = 0;
   private stableSince: number | null = null;
   private lastProgressAt: number | null = null;
-  private progressedSinceFailure = false;
 
   constructor(streamNames: readonly string[], startedAt: number) {
     this.streamNames = streamNames.filter((name, index) => Boolean(name) && streamNames.indexOf(name) === index);
@@ -25,11 +24,7 @@ export class PlaybackRecovery {
   }
 
   nextFailure(now: number): PlaybackRecoveryStep {
-    if (this.progressedSinceFailure) {
-      this.episodeStartedAt = now;
-      this.progressedSinceFailure = false;
-    }
-    if (now - this.episodeStartedAt >= PLAYBACK_EPISODE_MS) return this.cooldown(now);
+    if (this.remainingMs(now) === 0) return this.cooldown(now);
 
     const primary = this.streamNames[0];
     if (!primary) return this.cooldown(now);
@@ -48,12 +43,19 @@ export class PlaybackRecovery {
   recordProgress(now: number): boolean {
     if (this.lastProgressAt === null || now - this.lastProgressAt > PLAYBACK_STALL_MS) this.stableSince = now;
     this.lastProgressAt = now;
-    this.progressedSinceFailure = true;
     if (this.stableSince === null || now - this.stableSince < PLAYBACK_STABLE_RESET_MS) return false;
     this.episodeStartedAt = now;
     this.step = 0;
     this.stableSince = now;
     return true;
+  }
+
+  remainingMs(now: number): number {
+    return Math.max(0, this.episodeStartedAt + PLAYBACK_EPISODE_MS - now);
+  }
+
+  boundedDelayMs(now: number, maximumMs: number): number {
+    return Math.max(0, Math.min(maximumMs, this.remainingMs(now)));
   }
 
   private cooldown(now: number): PlaybackRecoveryStep {

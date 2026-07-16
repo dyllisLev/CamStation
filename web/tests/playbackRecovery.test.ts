@@ -43,6 +43,7 @@ test("only five minutes of continuous progress resets the finite episode", () =>
     assert.equal(episode.recordProgress(now), false);
   }
   assert.equal(episode.recordProgress(303_000), true);
+  assert.equal(episode.remainingMs(304_000), 29_000);
   assert.deepEqual(episode.nextFailure(304_000), {
     transport: "webrtc",
     streamName: "yard-live",
@@ -61,13 +62,19 @@ test("a media stall breaks the stable-progress reset interval", () => {
   assert.equal(episode.recordProgress(312_001), true);
 });
 
-test("a new stall starts a fresh 30-second deadline without resetting attempts", () => {
+test("brief progress cannot rearm the original 30-second episode", () => {
   const episode = new PlaybackRecovery(["yard-live"], 0);
+  assert.equal(episode.nextFailure(1_000).attempt, 2);
   episode.recordProgress(20_000);
 
-  assert.deepEqual(episode.nextFailure(40_000), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
-  });
+  assert.deepEqual(episode.nextFailure(30_001), { action: "cooldown", until: 330_001 });
+});
+
+test("late attempts are bounded by the original remaining deadline", () => {
+  const episode = new PlaybackRecovery(["yard-live"], 0);
+
+  assert.equal(episode.remainingMs(28_000), 2_000);
+  assert.equal(episode.boundedDelayMs(28_000, 5_000), 2_000);
+  assert.equal(episode.remainingMs(30_000), 0);
+  assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 330_000 });
 });
