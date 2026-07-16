@@ -36,12 +36,13 @@ const (
 var errCommitJournalBoundary = errors.New("transaction committed before update journal")
 
 type installerOptions struct {
-	mode          installerMode
-	silent        bool
-	transactionID string
-	generation    int64
-	expectedSHA   string
-	parentPID     int
+	mode              installerMode
+	silent            bool
+	transactionID     string
+	generation        int64
+	expectedSHA       string
+	parentPID         int
+	detachedParentPID int
 }
 
 func main() {
@@ -51,7 +52,7 @@ func main() {
 	}
 }
 
-func run(args []string) error {
+func run(args []string) (result error) {
 	options, err := parseInstallerArgs(args)
 	if err != nil {
 		return err
@@ -60,9 +61,19 @@ func run(args []string) error {
 	if err != nil || relaunched {
 		return err
 	}
+	layout := viewerinstall.DefaultLayout()
+	detached, err := detachOwnedInstaller(layout, options, args)
+	if err != nil || detached {
+		return err
+	}
+	if options.detachedParentPID > 0 {
+		defer func() { result = errors.Join(result, cleanupDetachedInstaller()) }()
+		if err := waitParent(options.detachedParentPID, 30*time.Second); err != nil {
+			return err
+		}
+	}
 	progress := installerProgress(options.silent, os.Stdout)
 	progress("Preparing installation")
-	layout := viewerinstall.DefaultLayout()
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 	switch options.mode {
@@ -119,6 +130,7 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 	generation := flags.Int64("generation", 0, "command generation")
 	expectedSHA := flags.String("expected-sha", "", "verified installer SHA-256")
 	parentPID := flags.Int("parent-pid", 0, "Agent process to drain")
+	detachedParentPID := flags.Int("detached-parent-pid", 0, "detached installer parent")
 	if err := flags.Parse(filtered); err != nil || flags.NArg() != 0 {
 		return installerOptions{}, errors.New("invalid installer arguments")
 	}
@@ -146,6 +158,10 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 	options.generation = *generation
 	options.expectedSHA = strings.ToLower(*expectedSHA)
 	options.parentPID = *parentPID
+	options.detachedParentPID = *detachedParentPID
+	if options.detachedParentPID < 0 || (options.detachedParentPID > 0 && options.mode != modeInstall && options.mode != modeRecover) {
+		return installerOptions{}, errors.New("invalid detached installer handoff")
+	}
 	switch options.mode {
 	case modeUpdate:
 		if !safeIdentifier(options.transactionID, 128) || options.generation <= 0 || !validSHA(options.expectedSHA) || options.parentPID < 0 {
@@ -162,6 +178,22 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 		}
 	}
 	return options, nil
+}
+
+func needsDetachedInstaller(executable string, layout viewerinstall.Layout, detachedParentPID int, mode installerMode) bool {
+	if detachedParentPID > 0 || (mode != modeInstall && mode != modeRecover) {
+		return false
+	}
+	executable = filepath.Clean(executable)
+	for _, owned := range []string{
+		filepath.Join(layout.InstallDir, "CamStationViewerSetup.exe"),
+		filepath.Join(layout.StateDir, "updater", "CamStationViewerUpdater.exe"),
+	} {
+		if strings.EqualFold(executable, filepath.Clean(owned)) {
+			return true
+		}
+	}
+	return false
 }
 
 func installPayload(ctx context.Context, layout viewerinstall.Layout, options installerOptions, progress func(string)) error {
@@ -242,24 +274,56 @@ func installInitial(ctx context.Context, layout viewerinstall.Layout, defaults v
 	if err != nil {
 		return err
 	}
-	_ = (viewerinstall.SystemRegistration{Layout: layout}).Stop(ctx)
-	if err := viewerinstall.InstallStablePayload(layout, payloadDir, executable); err != nil {
-		return err
-	}
-	serviceSID, err := viewerinstall.RegisterAll(ctx, layout, viewerinstall.RegistrationOptions{MonitoringUserSID: monitoringSID, ServerURL: defaults.ServerURL, DisplayName: displayName})
+	transaction, err := initialReleaseRequest(manifest, payloadDir, executable, time.Now().UTC().UnixNano())
 	if err != nil {
 		return err
 	}
-	if _, err := vieweragent.ConfigureInstaller(filepath.Join(layout.StateDir, "config.json"), vieweragent.InstallerConfig{
-		ServerURL: defaults.ServerURL, DisplayName: displayName, InstallDir: layout.InstallDir,
-		MonitoringUserSID: monitoringSID, AgentServiceSID: serviceSID,
-		AllowDevelopmentUnsigned: defaults.AllowDevelopmentUnsigned, SignerThumbprint: defaults.SignerThumbprint,
-	}); err != nil {
-		return err
+	registration := viewerinstall.SystemRegistration{Layout: layout}
+	request := viewerinstall.InitialRequest{
+		Transaction:         transaction,
+		PayloadDir:          payloadDir,
+		SetupPath:           executable,
+		RegistrationOptions: viewerinstall.RegistrationOptions{MonitoringUserSID: monitoringSID, ServerURL: defaults.ServerURL, DisplayName: displayName},
+		Configure: func(serviceSID string) error {
+			_, err := vieweragent.ConfigureInstaller(filepath.Join(layout.StateDir, "config.json"), vieweragent.InstallerConfig{
+				ServerURL: defaults.ServerURL, DisplayName: displayName, InstallDir: layout.InstallDir,
+				MonitoringUserSID: monitoringSID, AgentServiceSID: serviceSID,
+				AllowDevelopmentUnsigned: defaults.AllowDevelopmentUnsigned, SignerThumbprint: defaults.SignerThumbprint,
+			})
+			return err
+		},
+		PreviousRegistration: func() (viewerinstall.RegistrationOptions, error) {
+			config, err := vieweragent.LoadConfig(filepath.Join(layout.StateDir, "config.json"))
+			if err != nil {
+				return viewerinstall.RegistrationOptions{}, err
+			}
+			if config.InstallDir != layout.InstallDir {
+				return viewerinstall.RegistrationOptions{}, errors.New("existing Viewer layout does not match repair")
+			}
+			return viewerinstall.RegistrationOptions{MonitoringUserSID: config.MonitoringUserSID, ServerURL: config.ServerURL, DisplayName: config.DisplayName}, nil
+		},
 	}
-	release := viewerinstall.Release{Version: manifest.Version, Digest: manifest.Digest, ReleaseID: viewerinstall.ReleaseID(manifest.Version, manifest.Digest)}
-	request := viewerinstall.Request{TransactionID: "install-" + manifest.Digest[:16], Generation: 1, SourceDir: filepath.Join(payloadDir, "release"), Release: release}
-	return (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Apply(ctx, request)
+	return (viewerinstall.Manager{Layout: layout, Registration: registration}).InstallInitial(ctx, request)
+}
+
+func initialReleaseRequest(manifest viewerinstall.PayloadManifest, payloadDir, setupPath string, generation int64) (viewerinstall.Request, error) {
+	if generation <= 0 || !filepath.IsAbs(payloadDir) {
+		return viewerinstall.Request{}, errors.New("invalid initial release generation")
+	}
+	digest, err := fileSHA(setupPath)
+	if err != nil {
+		return viewerinstall.Request{}, err
+	}
+	release := viewerinstall.Release{Version: manifest.Version, Digest: digest, ReleaseID: viewerinstall.ReleaseID(manifest.Version, digest)}
+	if release.ReleaseID == "" {
+		return viewerinstall.Request{}, errors.New("invalid initial release identity")
+	}
+	return viewerinstall.Request{
+		TransactionID: fmt.Sprintf("install-%s-%d", digest[:16], generation),
+		Generation:    generation,
+		SourceDir:     filepath.Join(payloadDir, "release"),
+		Release:       release,
+	}, nil
 }
 
 func installUpdate(ctx context.Context, layout viewerinstall.Layout, options installerOptions, manifest viewerinstall.PayloadManifest, payloadDir string) error {
@@ -357,23 +421,31 @@ func uninstallInstallation(
 }
 
 func verifyFileSHA(path, expected string) error {
-	file, err := os.Open(path)
+	actual, err := fileSHA(path)
 	if err != nil {
 		return err
+	}
+	if actual != expected {
+		return errors.New("updater executable SHA-256 does not match Agent handoff")
+	}
+	return nil
+}
+
+func fileSHA(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return errors.New("updater executable is not a regular file")
+		return "", errors.New("updater executable is not a regular file")
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return err
+		return "", err
 	}
-	if hex.EncodeToString(hash.Sum(nil)) != expected {
-		return errors.New("updater executable SHA-256 does not match Agent handoff")
-	}
-	return nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func validateUpdateHandoff(journal vieweragent.UpdateJournal, options installerOptions, version string) error {

@@ -19,6 +19,7 @@ type RegistrationOptions struct {
 	MonitoringUserSID string
 	ServerURL         string
 	DisplayName       string
+	Staged            bool
 }
 
 type RecoveryAction struct {
@@ -47,6 +48,26 @@ func (registration SystemRegistration) Validate(ctx context.Context, journal Jou
 	return validateRegistered(ctx, registration.Layout)
 }
 
+func (registration SystemRegistration) Disable(ctx context.Context) error {
+	return disableAndStopRegistered(ctx, registration.Layout)
+}
+
+func (registration SystemRegistration) EnableRuntime(ctx context.Context) error {
+	return enableRegistered(ctx, registration.Layout)
+}
+
+func (registration SystemRegistration) RegisterRuntime(ctx context.Context, options RegistrationOptions) (string, error) {
+	return RegisterRuntime(ctx, registration.Layout, options)
+}
+
+func (registration SystemRegistration) RegisterUninstall(ctx context.Context) error {
+	return RegisterUninstall(ctx, registration.Layout)
+}
+
+func (registration SystemRegistration) Unregister(ctx context.Context) error {
+	return UnregisterAll(ctx, registration.Layout)
+}
+
 func unregisterSequence(ctx context.Context, disableAndStop func(context.Context) error, deletes ...func(context.Context) error) error {
 	if err := disableAndStop(ctx); err != nil {
 		return err
@@ -56,6 +77,11 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 		result = errors.Join(result, remove(ctx))
 	}
 	return result
+}
+
+func disableAndStopScript() string {
+	return `$viewer=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($viewer){Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop}; ` +
+		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}`
 }
 
 func SCMRecoveryActions() []RecoveryAction {
@@ -68,12 +94,16 @@ func SCMRecoveryActions() []RecoveryAction {
 }
 
 func ViewerTaskXML(bootstrapPath, installDir, userSID string) (string, error) {
+	return viewerTaskXML(bootstrapPath, installDir, userSID, true)
+}
+
+func viewerTaskXML(bootstrapPath, installDir, userSID string, enabled bool) (string, error) {
 	if !absolutePlatformPath(bootstrapPath) || !absolutePlatformPath(installDir) || !validTaskSID(userSID) {
 		return "", errors.New("invalid Viewer task configuration")
 	}
 	return taskXML(
 		`<LogonTrigger><Enabled>true</Enabled><UserId>`+xmlEscape(userSID)+`</UserId></LogonTrigger>`, userSID, "InteractiveToken", "LeastPrivilege",
-		bootstrapPath, `--install-dir &quot;`+xmlEscape(installDir)+`&quot;`,
+		bootstrapPath, `--install-dir &quot;`+xmlEscape(installDir)+`&quot;`, enabled,
 	), nil
 }
 
@@ -83,7 +113,7 @@ func RecoveryTaskXML(updaterPath string) (string, error) {
 	}
 	return taskXML(
 		`<BootTrigger><Enabled>true</Enabled></BootTrigger>`, "S-1-5-18", "ServiceAccount", "HighestAvailable",
-		updaterPath, "--recover",
+		updaterPath, "--recover", true,
 	), nil
 }
 
@@ -91,13 +121,17 @@ func absolutePlatformPath(value string) bool {
 	return filepath.IsAbs(value) || (len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '\\' || value[2] == '/'))
 }
 
-func taskXML(trigger, sid, logonType, runLevel, command, arguments string) string {
+func taskXML(trigger, sid, logonType, runLevel, command, arguments string, enabled bool) string {
+	enabledText := "false"
+	if enabled {
+		enabledText = "true"
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` +
 		`<RegistrationInfo><Description>CamStation Viewer supervised startup</Description></RegistrationInfo>` +
 		`<Triggers>` + trigger + `</Triggers>` +
 		`<Principals><Principal id="Author"><UserId>` + xmlEscape(sid) + `</UserId><LogonType>` + logonType + `</LogonType><RunLevel>` + runLevel + `</RunLevel></Principal></Principals>` +
-		`<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>` +
+		`<Settings><Enabled>` + enabledText + `</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>` +
 		`<Actions Context="Author"><Exec><Command>` + xmlEscape(command) + `</Command><Arguments>` + arguments + `</Arguments></Exec></Actions></Task>`
 }
 
@@ -127,6 +161,27 @@ func stableBootstrapPath(layout Layout) string {
 }
 func stableUpdaterPath(layout Layout) string {
 	return filepath.Join(layout.StateDir, "updater", "CamStationViewerUpdater.exe")
+}
+
+func stableInstallPaths(layout Layout) []string {
+	return []string{
+		stableHostPath(layout),
+		stableBootstrapPath(layout),
+		filepath.Join(layout.InstallDir, "CamStationViewerSetup.exe"),
+		stableUpdaterPath(layout),
+	}
+}
+
+func initialOwnedPaths(layout Layout) []string {
+	return append(stableInstallPaths(layout),
+		filepath.Join(layout.StateDir, "config.json"),
+		layout.CurrentPath(),
+		filepath.Join(layout.StateDir, "viewer-task.xml"),
+		filepath.Join(layout.StateDir, "recovery-task.xml"),
+		filepath.Join(layout.StateDir, "state.json"),
+		filepath.Join(layout.StateDir, "commands.json"),
+		filepath.Join(layout.StateDir, "update.json"),
+	)
 }
 
 func serviceBinaryPath(layout Layout) string {

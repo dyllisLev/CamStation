@@ -12,6 +12,10 @@ import (
 
 func ensureElevated([]string) (bool, error) { return false, nil }
 func waitParent(int, time.Duration) error   { return nil }
+func detachOwnedInstaller(viewerinstall.Layout, installerOptions, []string) (bool, error) {
+	return false, nil
+}
+func cleanupDetachedInstaller() error { return nil }
 func removeInstallation(layout viewerinstall.Layout) error {
 	return errors.Join(removeAll(layout.InstallDir), removeAll(layout.StateDir))
 }

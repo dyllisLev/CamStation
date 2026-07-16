@@ -86,19 +86,35 @@ func (owner *Ownership) owns(layout Layout) bool {
 }
 
 func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions) (string, error) {
+	options.Staged = false
+	serviceSID, err := RegisterRuntime(ctx, layout, options)
+	if err != nil {
+		return "", errors.Join(err, UnregisterAll(ctx, layout))
+	}
+	if err := RegisterUninstall(ctx, layout); err != nil {
+		return "", errors.Join(err, UnregisterAll(ctx, layout))
+	}
+	return serviceSID, nil
+}
+
+func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOptions) (string, error) {
 	if err := layout.Ensure(); err != nil {
 		return "", err
 	}
 	if !validTaskSID(options.MonitoringUserSID) {
 		return "", errors.New("valid monitoring user SID is required")
 	}
-	if _, err := runWindows(ctx, "sc.exe", "create", ServiceName, "binPath=", serviceBinaryPath(layout), "start=", "auto", "obj=", "LocalSystem", "DisplayName=", "CamStation Viewer Agent"); err != nil {
+	startMode := "auto"
+	if options.Staged {
+		startMode = "disabled"
+	}
+	if _, err := runWindows(ctx, "sc.exe", "create", ServiceName, "binPath=", serviceBinaryPath(layout), "start=", startMode, "obj=", "LocalSystem", "DisplayName=", "CamStation Viewer Agent"); err != nil {
 		// A repair may encounter an existing service; sc config below is authoritative.
 		if !strings.Contains(strings.ToLower(err.Error()), "1073") && !strings.Contains(strings.ToLower(err.Error()), "exists") {
 			return "", err
 		}
 	}
-	if _, err := runWindows(ctx, "sc.exe", "config", ServiceName, "binPath=", serviceBinaryPath(layout), "start=", "auto", "obj=", "LocalSystem", "DisplayName=", "CamStation Viewer Agent"); err != nil {
+	if _, err := runWindows(ctx, "sc.exe", "config", ServiceName, "binPath=", serviceBinaryPath(layout), "start=", startMode, "obj=", "LocalSystem", "DisplayName=", "CamStation Viewer Agent"); err != nil {
 		return "", err
 	}
 	if err := configureServiceRecovery(); err != nil {
@@ -111,7 +127,7 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 	if err != nil {
 		return "", err
 	}
-	viewerXML, err := ViewerTaskXML(stableBootstrapPath(layout), layout.InstallDir, options.MonitoringUserSID)
+	viewerXML, err := viewerTaskXML(stableBootstrapPath(layout), layout.InstallDir, options.MonitoringUserSID, !options.Staged)
 	if err != nil {
 		return "", err
 	}
@@ -138,6 +154,10 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 			return "", err
 		}
 	}
+	return serviceSID, nil
+}
+
+func RegisterUninstall(ctx context.Context, layout Layout) error {
 	uninstall := filepath.Join(layout.InstallDir, "CamStationViewerSetup.exe") + " --uninstall"
 	registry := `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`
 	for _, entry := range [][]string{
@@ -146,10 +166,10 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 		{"add", registry, "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f"},
 	} {
 		if _, err := runWindows(ctx, "reg.exe", entry...); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return serviceSID, nil
+	return nil
 }
 
 func configureServiceRecovery() error {
@@ -253,10 +273,17 @@ func stopRegistered(ctx context.Context, _ Layout) error {
 }
 
 func disableAndStopRegistered(ctx context.Context, _ Layout) error {
-	// Disable every automatic entry point before waiting for the live processes to stop.
-	script := `$names=@('` + ViewerTaskName + `','` + RecoveryTaskName + `'); foreach($name in $names){$t=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; if($t){Disable-ScheduledTask -InputObject $t -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $t -ErrorAction Stop}}; ` +
-		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}`
-	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	// Keep boot recovery enabled while disabling every application entry point.
+	// The recovery task may also be running this installer now.
+	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", disableAndStopScript())
+	return err
+}
+
+func enableRegistered(ctx context.Context, _ Layout) error {
+	if _, err := runWindows(ctx, "sc.exe", "config", ServiceName, "start=", "auto"); err != nil {
+		return err
+	}
+	_, err := runWindows(ctx, "schtasks.exe", "/Change", "/TN", ViewerTaskName, "/ENABLE")
 	return err
 }
 

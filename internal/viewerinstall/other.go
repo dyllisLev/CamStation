@@ -14,6 +14,14 @@ func RegisterAll(context.Context, Layout, RegistrationOptions) (string, error) {
 	return "", errors.New("Windows registration requires Windows")
 }
 
+func RegisterRuntime(context.Context, Layout, RegistrationOptions) (string, error) {
+	return "", errors.New("Windows registration requires Windows")
+}
+
+func RegisterUninstall(context.Context, Layout) error {
+	return errors.New("Windows registration requires Windows")
+}
+
 func UnregisterAll(context.Context, Layout) error {
 	return errors.New("Windows registration requires Windows")
 }
@@ -22,9 +30,11 @@ func ActiveConsoleUserSID(context.Context) (string, error) {
 	return "", errors.New("active console SID requires Windows")
 }
 
-func stopRegistered(context.Context, Layout) error     { return nil }
-func startRegistered(context.Context, Layout) error    { return nil }
-func validateRegistered(context.Context, Layout) error { return nil }
+func stopRegistered(context.Context, Layout) error           { return nil }
+func disableAndStopRegistered(context.Context, Layout) error { return nil }
+func enableRegistered(context.Context, Layout) error         { return nil }
+func startRegistered(context.Context, Layout) error          { return nil }
+func validateRegistered(context.Context, Layout) error       { return nil }
 
 type Ownership struct {
 	file     *os.File

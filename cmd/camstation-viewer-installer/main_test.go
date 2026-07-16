@@ -36,6 +36,36 @@ func TestInstallerModesAreExplicitAndBounded(t *testing.T) {
 	}
 }
 
+func TestOwnedInstallerExecutableDetachesBeforeInitialMutation(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	owned := []string{
+		filepath.Join(layout.InstallDir, "CamStationViewerSetup.exe"),
+		filepath.Join(layout.StateDir, "updater", "CamStationViewerUpdater.exe"),
+	}
+	for _, executable := range owned {
+		if !needsDetachedInstaller(executable, layout, 0, modeInstall) {
+			t.Fatalf("owned installer did not detach: %s", executable)
+		}
+		if needsDetachedInstaller(executable, layout, 42, modeInstall) {
+			t.Fatalf("detached helper recursively detached: %s", executable)
+		}
+		if needsDetachedInstaller(executable, layout, 0, modeUninstall) {
+			t.Fatalf("uninstaller incorrectly used initial-install detachment: %s", executable)
+		}
+	}
+	if needsDetachedInstaller(filepath.Join(root, "download", "setup.exe"), layout, 0, modeInstall) {
+		t.Fatal("external installer detached unnecessarily")
+	}
+	options, err := parseInstallerArgs([]string{"--recover", "--detached-parent-pid", "42"})
+	if err != nil || options.detachedParentPID != 42 {
+		t.Fatalf("detached options=%+v err=%v", options, err)
+	}
+	if _, err := parseInstallerArgs([]string{"--update", "--detached-parent-pid", "42"}); err == nil {
+		t.Fatal("update accepted initial-install detachment handoff")
+	}
+}
+
 func TestSilentProgressReporterSuppressesAllProgress(t *testing.T) {
 	var output bytes.Buffer
 	report := installerProgress(true, &output)
@@ -66,6 +96,21 @@ func TestUpdaterReverifiesItsOwnExactArtifactHash(t *testing.T) {
 	}
 	if err := verifyFileSHA(path, strings.Repeat("0", 64)); err == nil {
 		t.Fatal("altered updater executable was accepted")
+	}
+}
+
+func TestInitialReleaseIdentityUsesSetupArtifactSHA(t *testing.T) {
+	setup := filepath.Join(t.TempDir(), "CamStationViewerSetup.exe")
+	if err := os.WriteFile(setup, []byte("MZ exact published installer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := viewerinstall.PayloadManifest{Version: "2.0.0", Digest: strings.Repeat("b", 64)}
+	request, err := initialReleaseRequest(manifest, t.TempDir(), setup, 77)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Release.Digest != "d64227086ce1a79de0e360083ded4d98e16dbadded7c97bf91c9b82c9adb66b4" || request.Release.Digest == manifest.Digest {
+		t.Fatalf("release digest=%q manifest digest=%q", request.Release.Digest, manifest.Digest)
 	}
 }
 

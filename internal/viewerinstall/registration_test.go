@@ -30,6 +30,13 @@ func TestUnregisterAbortsBeforeDeletingAnythingWhenDisableOrStopFails(t *testing
 	}
 }
 
+func TestDisableAndStopKeepsRunningBootRecoveryProcessAlive(t *testing.T) {
+	script := disableAndStopScript()
+	if strings.Contains(script, RecoveryTaskName) || strings.Contains(script, "$recovery") {
+		t.Fatalf("boot recovery task was disabled during recoverable transaction: %s", script)
+	}
+}
+
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {
@@ -64,6 +71,16 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 	}
 	if task.Triggers.LogonTrigger.UserID != "S-1-5-21-123" || task.Principals.Principal.UserID != "S-1-5-21-123" {
 		t.Fatalf("SID trigger=%q principal=%q", task.Triggers.LogonTrigger.UserID, task.Principals.Principal.UserID)
+	}
+}
+
+func TestStagedViewerLogonTaskRemainsDisabledUntilReleaseActivation(t *testing.T) {
+	taskXML, err := viewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(taskXML, "<Enabled>false</Enabled>") {
+		t.Fatalf("staged task was runnable: %s", taskXML)
 	}
 }
 

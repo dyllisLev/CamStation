@@ -118,6 +118,10 @@ func (manager Manager) Apply(ctx context.Context, request Request) error {
 }
 
 func (manager Manager) ApplyOwned(ctx context.Context, owner *Ownership, request Request) error {
+	return manager.applyOwned(ctx, owner, request, true)
+}
+
+func (manager Manager) applyOwned(ctx context.Context, owner *Ownership, request Request, recoverInitial bool) error {
 	if !owner.owns(manager.Layout) {
 		return errors.New("matching transaction ownership is required")
 	}
@@ -133,6 +137,25 @@ func (manager Manager) ApplyOwned(ctx context.Context, owner *Ownership, request
 	journal, err := LoadJournal(manager.Layout)
 	if err != nil {
 		return err
+	}
+	if recoverInitial {
+		present, presentErr := initialSnapshotPresent(manager.Layout, journal.TransactionID)
+		if presentErr != nil {
+			return presentErr
+		}
+		if present {
+			registration, ok := manager.Registration.(InitialRegistration)
+			if !ok {
+				return errors.New("initial installation recovery adapter is required")
+			}
+			if err := manager.recoverInitialLocked(ctx, &journal, registration); err != nil {
+				return err
+			}
+			journal, err = LoadJournal(manager.Layout)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if journal.Phase == PhaseCommitted && journalMatchesRequest(journal, request) {
 		return nil
@@ -194,7 +217,11 @@ func (manager Manager) ApplyOwned(ctx context.Context, owner *Ownership, request
 	if err := manager.advance(&journal, PhaseStaged); err != nil {
 		return err
 	}
-	if err := backupMachineState(manager.Layout, request.TransactionID, previous); err != nil {
+	preserveInitialBackup, err := initialSnapshotPresent(manager.Layout, request.TransactionID)
+	if err != nil {
+		return err
+	}
+	if err := backupMachineState(manager.Layout, request.TransactionID, previous, preserveInitialBackup); err != nil {
 		return err
 	}
 	if err := manager.advance(&journal, PhasePointerBackedUp); err != nil {
@@ -293,6 +320,15 @@ func (manager Manager) Recover(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if present, presentErr := initialSnapshotPresent(manager.Layout, journal.TransactionID); presentErr != nil {
+		return presentErr
+	} else if present {
+		registration, ok := manager.Registration.(InitialRegistration)
+		if !ok {
+			return errors.New("initial installation recovery adapter is required")
+		}
+		return manager.recoverInitialLocked(ctx, &journal, registration)
+	}
 	return manager.recoverLocked(ctx, &journal)
 }
 
@@ -381,6 +417,15 @@ func (manager Manager) rollbackFailure(ctx context.Context, journal *Journal, re
 	if err := manager.advance(journal, PhaseRollingBack); err != nil {
 		return errors.Join(cause, err)
 	}
+	present, err := initialSnapshotPresent(manager.Layout, journal.TransactionID)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	if present {
+		// Initial install owns the wider stable/config/registration snapshot and
+		// must restore it before any prior service is restarted.
+		return cause
+	}
 	if err := manager.recoverLocked(ctx, journal); err != nil {
 		return errors.Join(cause, err)
 	}
@@ -392,10 +437,7 @@ func (manager Manager) advance(journal *Journal, phase Phase) error {
 	if err := saveJournal(manager.Layout, *journal); err != nil {
 		return err
 	}
-	if manager.FailAfter != nil {
-		return manager.FailAfter(phase)
-	}
-	return nil
+	return manager.failAfter(phase)
 }
 
 func validateRequest(request Request) error {
@@ -422,10 +464,19 @@ func incomplete(phase Phase) bool {
 	return phase != "" && phase != PhaseCommitted && phase != PhaseRolledBack
 }
 
-func backupMachineState(layout Layout, transactionID string, current *Current) error {
+func backupMachineState(layout Layout, transactionID string, current *Current, preserveRoot bool) error {
 	backup := layout.TransactionBackup(transactionID)
-	if err := os.RemoveAll(backup); err != nil {
-		return err
+	if preserveRoot {
+		if err := os.RemoveAll(filepath.Join(backup, "state")); err != nil {
+			return err
+		}
+		if err := removeFileAtomic(filepath.Join(backup, "current.json")); err != nil {
+			return err
+		}
+	} else {
+		if err := os.RemoveAll(backup); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(backup, "state"), 0o700); err != nil {
 		return err
