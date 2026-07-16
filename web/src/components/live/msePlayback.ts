@@ -15,9 +15,3 @@ export function parseMseControlMessage(raw: string): MseControlMessage {
     return { type: "invalid", value: "" };
   }
 }
-
-export function nextPlaybackAttempt(currentIndex: number, candidateCount: number) {
-  const count = Math.max(1, candidateCount);
-  const candidateIndex = (currentIndex + 1) % count;
-  return { candidateIndex, delayMs: candidateIndex === 0 ? 3000 : 500 };
-}

@@ -28,7 +28,8 @@ import {
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
 import { playbackStreamCandidates, shouldRenderLiveTile } from "./streamSelection";
-import { useMseStream, type MsePlaybackPhase } from "./useMseStream";
+import { reportViewerStream, subscribeViewerCommands } from "./viewerBridge";
+import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
 
 const GRID_MARGIN: [number, number] = [4, 4];
 const LAST_LAYOUT_KEY = "camstation-live-layout-id";
@@ -583,7 +584,7 @@ function CameraTile({
   onVideoViewportChange: (viewport: VideoViewport) => void;
   suspended?: boolean;
 }) {
-  const [playback, setPlayback] = useState<{ phase: MsePlaybackPhase; usingFallback: boolean }>({
+  const [playback, setPlayback] = useState<{ phase: PlaybackPhase; usingFallback: boolean }>({
     phase: "connecting",
     usingFallback: false,
   });
@@ -638,9 +639,26 @@ function LiveVideo({
   streamNames: readonly string[];
   viewport?: VideoViewport;
   onViewportChange: (viewport: VideoViewport) => void;
-  onPlaybackChange: (playback: { phase: MsePlaybackPhase; usingFallback: boolean }) => void;
+  onPlaybackChange: (playback: { phase: PlaybackPhase; usingFallback: boolean }) => void;
 }) {
-  const { videoRef, connected, phase, usingFallback } = useMseStream(streamNames);
+  const streamKey = streamNames.join("\u001f");
+  const [resubscribeGeneration, setResubscribeGeneration] = useState(0);
+  const {
+    videoRef,
+    connected,
+    transport,
+    phase,
+    activeStreamName,
+    usingFallback,
+    lastBinaryAt,
+    lastProgressAt,
+    readyState,
+    stalledForMs,
+    reconnectCount,
+    fallbackCount,
+    resubscribeCount,
+    errorCategory,
+  } = useWebRtcMseStream(streamNames, resubscribeGeneration);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
@@ -650,9 +668,37 @@ function LiveVideo({
       ? "대체 스트림 연결 중..."
       : phase === "retrying"
         ? "영상 입력 재연결 중..."
+        : phase === "recovering"
+          ? "영상 입력을 다시 구독하는 중..."
+          : phase === "cooldown"
+            ? "자동 복구 한도에 도달했습니다."
         : phase === "unsupported"
           ? "이 브라우저는 라이브 재생을 지원하지 않습니다."
           : "연결 중...";
+
+  useEffect(() => {
+    const candidates = new Set(streamKey.split("\u001f").filter(Boolean));
+    return subscribeViewerCommands((command) => {
+      if (candidates.has(command.streamName)) setResubscribeGeneration((value) => value + 1);
+    });
+  }, [streamKey]);
+
+  useEffect(() => {
+    if (!activeStreamName) return;
+    reportViewerStream({
+      streamName: activeStreamName,
+      transport,
+      phase,
+      lastBinaryAt: lastBinaryAt ?? undefined,
+      lastProgressAt: lastProgressAt ?? undefined,
+      readyState,
+      stalledForMs,
+      reconnectCount,
+      fallbackCount,
+      resubscribeCount,
+      errorCategory,
+    });
+  }, [activeStreamName, errorCategory, fallbackCount, lastBinaryAt, lastProgressAt, phase, readyState, reconnectCount, resubscribeCount, stalledForMs, transport]);
 
   useEffect(() => {
     onPlaybackChange({ phase, usingFallback });

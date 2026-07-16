@@ -113,7 +113,10 @@ func (d routeDeps) handler() (http.Handler, error) {
 	d.registerBackupRoutes(mux)
 	d.registerEventIncidentRoutes(mux)
 
-	liveProxy, err := go2RTCProxy(previews)
+	liveProxy, err := go2RTCProxy(previews, func(ctx context.Context, streamName string) bool {
+		cameras, err := d.db.ListCameras(ctx, false)
+		return err == nil && isRegisteredPublicStream(cameras, streamName)
+	})
 	if err != nil {
 		return nil, err
 	}

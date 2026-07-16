@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"camstation/internal/store"
 )
 
 func spaHandler(files http.FileSystem) http.Handler {
@@ -92,7 +95,9 @@ func randomToken() string {
 	return hex.EncodeToString(buf[:])
 }
 
-func go2RTCProxy(previews *previewRegistry) (http.Handler, error) {
+type previewURLContextKey struct{}
+
+func go2RTCProxy(previews *previewRegistry, registered func(context.Context, string) bool) (http.Handler, error) {
 	target, err := url.Parse("http://127.0.0.1:1984")
 	if err != nil {
 		return nil, err
@@ -104,8 +109,8 @@ func go2RTCProxy(previews *previewRegistry) (http.Handler, error) {
 		r.Host = target.Host
 		if r.URL.Path == "/api/ws" {
 			r.Header.Set("Origin", target.String())
-			query := r.URL.Query()
-			if rawURL, ok := previews.Resolve(query.Get("src")); ok {
+			if rawURL, ok := r.Context().Value(previewURLContextKey{}).(string); ok {
+				query := r.URL.Query()
 				query.Set("src", rawURL)
 				r.URL.RawQuery = query.Encode()
 			}
@@ -117,8 +122,52 @@ func go2RTCProxy(previews *previewRegistry) (http.Handler, error) {
 			writeError(w, http.StatusForbidden, fmt.Errorf("go2rtc endpoint is not exposed"))
 			return
 		}
+		if r.URL.Path == "/api/ws" {
+			if !isPlayerOriginAllowed(r) {
+				writeError(w, http.StatusForbidden, fmt.Errorf("player origin is not allowed"))
+				return
+			}
+			sources := r.URL.Query()["src"]
+			if len(sources) != 1 || sources[0] == "" {
+				writeError(w, http.StatusForbidden, fmt.Errorf("player stream is not allowed"))
+				return
+			}
+			if rawURL, ok := previews.Resolve(sources[0]); ok {
+				r = r.WithContext(context.WithValue(r.Context(), previewURLContextKey{}, rawURL))
+			} else if registered == nil || !registered(r.Context(), sources[0]) {
+				writeError(w, http.StatusForbidden, fmt.Errorf("player stream is not allowed"))
+				return
+			}
+		}
 		proxy.ServeHTTP(w, r)
 	}), nil
+}
+
+func isPlayerOriginAllowed(r *http.Request) bool {
+	origin, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin")))
+	if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") {
+		return false
+	}
+	return origin.Host == r.Host
+}
+
+func isRegisteredPublicStream(cameras []store.Camera, streamName string) bool {
+	if streamName == "" {
+		return false
+	}
+	for _, camera := range cameras {
+		for _, publicName := range []string{camera.StreamName, camera.RecordingStreamName, camera.LiveStreamName, camera.FocusStreamName} {
+			if streamName == publicName && publicName != "" {
+				return true
+			}
+		}
+		for _, output := range camera.Outputs {
+			if streamName == output.StreamName && output.StreamName != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func allowedGo2RTCPath(path string) bool {
