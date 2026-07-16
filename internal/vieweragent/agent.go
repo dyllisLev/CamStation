@@ -288,7 +288,7 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 
 func updateCanResume(state string) bool {
 	switch state {
-	case "", "checking_release", "downloading", "download_retry_wait", "verified", "waiting_for_viewer_session", "launching_installer", "launch_failed":
+	case "", "checking_release", "metadata_retry_wait", "downloading", "download_retry_wait", "verified", "waiting_for_viewer_session", "launching_installer", "launch_failed":
 		return true
 	default:
 		return false
@@ -624,8 +624,25 @@ func (agent *Agent) reconcileRecord(key string, record CommandRecord, ledger Com
 		if loadErr != nil {
 			return record, loadErr
 		}
-		reached = journal.State == "committed" && journal.TargetVersion == record.DesiredVersion &&
-			strings.EqualFold(journal.ArtifactSHA256, record.ArtifactSHA256) && journal.Generation == record.Generation
+		exactTarget := journal.TargetVersion == record.DesiredVersion && strings.EqualFold(journal.ArtifactSHA256, record.ArtifactSHA256) && journal.Generation == record.Generation
+		if exactTarget && (journal.State == "metadata_failed" || journal.State == "rejected") {
+			now := agent.now().UTC()
+			record.State = CommandFailed
+			if journal.State == "rejected" {
+				record.State = CommandRejected
+			}
+			record.Error = journal.LastError
+			if record.Error == "" {
+				record.Error = "metadata_request_failed"
+			}
+			record.CompletedAt = &now
+			ledger.Records[key] = record
+			if err := agent.saveCommandLedger(ledger); err != nil {
+				return record, err
+			}
+			return record, nil
+		}
+		reached = exactTarget && journal.State == "committed"
 	}
 	if !reached {
 		return record, nil

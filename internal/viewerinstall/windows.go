@@ -6,19 +6,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
-type Ownership struct{ handle windows.Handle }
+type Ownership struct {
+	handle   windows.Handle
+	stateDir string
+}
 
 func Acquire(layout Layout) (*Ownership, error) {
-	if err := layout.Ensure(); err != nil {
-		return nil, err
-	}
 	name, err := windows.UTF16PtrFromString(`Global\CamStationViewerUpdate`)
 	if err != nil {
 		return nil, err
@@ -35,14 +37,25 @@ func Acquire(layout Layout) (*Ownership, error) {
 		}
 		return nil, err
 	}
-	return &Ownership{handle: handle}, nil
+	owner := &Ownership{handle: handle, stateDir: filepath.Clean(layout.StateDir)}
+	if err := layout.Ensure(); err != nil {
+		_ = owner.Close()
+		return nil, err
+	}
+	return owner, nil
 }
 
 func (owner *Ownership) Close() error {
 	if owner == nil || owner.handle == 0 {
 		return nil
 	}
-	return errors.Join(windows.ReleaseMutex(owner.handle), windows.CloseHandle(owner.handle))
+	handle := owner.handle
+	owner.handle = 0
+	return errors.Join(windows.ReleaseMutex(handle), windows.CloseHandle(handle))
+}
+
+func (owner *Ownership) owns(layout Layout) bool {
+	return owner != nil && owner.handle != 0 && owner.stateDir == filepath.Clean(layout.StateDir)
 }
 
 func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions) (string, error) {
@@ -61,10 +74,7 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 	if _, err := runWindows(ctx, "sc.exe", "config", ServiceName, "binPath=", serviceBinaryPath(layout), "start=", "auto", "obj=", "LocalSystem", "DisplayName=", "CamStation Viewer Agent"); err != nil {
 		return "", err
 	}
-	if _, err := runWindows(ctx, "sc.exe", SCMRecoveryArgs()...); err != nil {
-		return "", err
-	}
-	if _, err := runWindows(ctx, "sc.exe", "failureflag", ServiceName, "1"); err != nil {
+	if err := configureServiceRecovery(); err != nil {
 		return "", err
 	}
 	if _, err := runWindows(ctx, "sc.exe", "sidtype", ServiceName, "unrestricted"); err != nil {
@@ -113,6 +123,44 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 		}
 	}
 	return serviceSID, nil
+}
+
+func configureServiceRecovery() error {
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(ServiceName)
+	if err != nil {
+		return err
+	}
+	defer service.Close()
+	actions, err := windowsRecoveryActions()
+	if err != nil {
+		return err
+	}
+	if err := service.SetRecoveryActions(actions, 86400); err != nil {
+		return err
+	}
+	return service.SetRecoveryActionsOnNonCrashFailures(true)
+}
+
+func windowsRecoveryActions() ([]mgr.RecoveryAction, error) {
+	policy := SCMRecoveryActions()
+	actions := make([]mgr.RecoveryAction, 0, len(policy))
+	for _, action := range policy {
+		typeID := mgr.NoAction
+		switch action.Type {
+		case "restart":
+			typeID = mgr.ServiceRestart
+		case "none":
+		default:
+			return nil, fmt.Errorf("unsupported SCM recovery action %q", action.Type)
+		}
+		actions = append(actions, mgr.RecoveryAction{Type: typeID, Delay: time.Duration(action.DelayMS) * time.Millisecond})
+	}
+	return actions, nil
 }
 
 func UnregisterAll(ctx context.Context, layout Layout) error {

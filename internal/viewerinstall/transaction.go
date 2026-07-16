@@ -102,9 +102,10 @@ type Registration interface {
 }
 
 type Manager struct {
-	Layout       Layout
-	Registration Registration
-	FailAfter    func(Phase) error
+	Layout         Layout
+	Registration   Registration
+	AfterPreparing func(Journal) error
+	FailAfter      func(Phase) error
 }
 
 func (manager Manager) Apply(ctx context.Context, request Request) error {
@@ -113,6 +114,13 @@ func (manager Manager) Apply(ctx context.Context, request Request) error {
 		return err
 	}
 	defer owner.Close()
+	return manager.ApplyOwned(ctx, owner, request)
+}
+
+func (manager Manager) ApplyOwned(ctx context.Context, owner *Ownership, request Request) error {
+	if !owner.owns(manager.Layout) {
+		return errors.New("matching transaction ownership is required")
+	}
 	if err := manager.Layout.Ensure(); err != nil {
 		return err
 	}
@@ -150,6 +158,11 @@ func (manager Manager) Apply(ctx context.Context, request Request) error {
 	journal.RollbackState = ""
 	if err := manager.advance(&journal, PhasePreparing); err != nil {
 		return err
+	}
+	if manager.AfterPreparing != nil {
+		if err := manager.AfterPreparing(journal); err != nil {
+			return err
+		}
 	}
 
 	staging := filepath.Join(manager.Layout.StagingRoot(), request.TransactionID)

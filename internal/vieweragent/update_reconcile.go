@@ -20,9 +20,6 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 	if err != nil {
 		return false, err
 	}
-	if transaction.Phase != viewerinstall.PhaseCommitted {
-		return false, nil
-	}
 	path := filepath.Join(stateDir, "update.json")
 	journal, err := LoadUpdateJournal(path)
 	if err != nil {
@@ -31,16 +28,38 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 	matched := journal.TransactionID != "" && journal.TransactionID == transaction.TransactionID &&
 		journal.Generation == transaction.Generation && journal.TargetVersion == transaction.Release.Version &&
 		strings.EqualFold(journal.ArtifactSHA256, transaction.Release.Digest)
-	if !matched {
-		return false, nil
-	}
-	if journal.State == "committed" {
+	if matched && transaction.Phase == viewerinstall.PhaseCommitted {
+		if journal.State == "committed" {
+			return true, nil
+		}
+		journal.State = "committed"
+		journal.LastError = ""
+		if err := save(path, journal); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
-	journal.State = "committed"
-	journal.LastError = ""
-	if err := save(path, journal); err != nil {
-		return false, err
+	if journal.State != "installer_launched" {
+		return false, nil
 	}
-	return true, nil
+	if matched && incompleteTransactionPhase(transaction.Phase) {
+		return false, nil
+	}
+	if matched && transaction.Phase == viewerinstall.PhaseRolledBack {
+		for _, failed := range transaction.Quarantined {
+			if failed.Version == transaction.Release.Version && failed.Digest == transaction.Release.Digest && failed.Generation == transaction.Generation {
+				journal.State = "rejected"
+				journal.LastError = failed.Reason
+				journal.Quarantine(failed.Version, failed.Digest, failed.Generation, failed.At, failed.Reason)
+				return false, save(path, journal)
+			}
+		}
+	}
+	journal.State = "launching_installer"
+	journal.LastError = ""
+	return false, save(path, journal)
+}
+
+func incompleteTransactionPhase(phase viewerinstall.Phase) bool {
+	return phase != "" && phase != viewerinstall.PhaseCommitted && phase != viewerinstall.PhaseRolledBack
 }

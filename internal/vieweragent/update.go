@@ -196,6 +196,7 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 	}
 	journal.State = "launching_installer"
+	journal.LastError = ""
 	if err := SaveUpdateJournal(journalPath, journal); err != nil {
 		return err
 	}
@@ -203,11 +204,6 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		journal.State = "launch_failed"
 		journal.LastError = "launch_failed"
 		_ = SaveUpdateJournal(journalPath, journal)
-		return err
-	}
-	journal.State = "installer_launched"
-	journal.LastError = ""
-	if err := SaveUpdateJournal(journalPath, journal); err != nil {
 		return err
 	}
 	return ErrUpdateLaunched

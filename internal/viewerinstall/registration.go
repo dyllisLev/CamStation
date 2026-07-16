@@ -58,14 +58,6 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 	return result
 }
 
-func SCMRecoveryArgs() []string {
-	parts := make([]string, 0, len(SCMRecoveryActions()))
-	for _, action := range SCMRecoveryActions() {
-		parts = append(parts, fmt.Sprintf("%s/%d", action.Type, action.DelayMS))
-	}
-	return []string{"failure", ServiceName, "reset=", "86400", "actions=", strings.Join(parts, "/")}
-}
-
 func SCMRecoveryActions() []RecoveryAction {
 	return []RecoveryAction{
 		{Type: "restart", DelayMS: 5000},

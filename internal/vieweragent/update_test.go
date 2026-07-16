@@ -69,7 +69,7 @@ func TestUpdateRunnerDownloadsVerifiesAndLaunchesFixedSameOriginInstaller(t *tes
 		t.Fatalf("launch args=%v", args)
 	}
 	journal, err := LoadUpdateJournal(filepath.Join(runner.StateDir, "update.json"))
-	if err != nil || journal.State != "installer_launched" || journal.DownloadAttempts != 1 || journal.TransactionID != target.TransactionID {
+	if err != nil || journal.State != "launching_installer" || journal.DownloadAttempts != 1 || journal.TransactionID != target.TransactionID {
 		t.Fatalf("journal=%+v err=%v", journal, err)
 	}
 }
@@ -434,7 +434,7 @@ func TestReconcileResumesInterruptedUpdateBeforeInstallerLaunch(t *testing.T) {
 	}
 }
 
-func TestReconcileDoesNotRelaunchLiveInstallerTransaction(t *testing.T) {
+func TestReconcileRelaunchesStaleInstallerStateWithoutTransactionClaim(t *testing.T) {
 	dir := t.TempDir()
 	digest := sha256Hex([]byte("setup"))
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
@@ -445,8 +445,58 @@ func TestReconcileDoesNotRelaunchLiveInstallerTransaction(t *testing.T) {
 	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TargetVersion: "2.1.1", ArtifactSHA256: digest, Generation: 5, TransactionID: "update-83"}); err != nil {
 		t.Fatal(err)
 	}
+	called := 0
 	agent := Agent{Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
-		t.Fatal("live installer transaction was relaunched")
+		called++
+		return ErrUpdateLaunched
+	})}
+	_, err := agent.Reconcile(t.Context())
+	if !errors.Is(err, ErrAgentRestartRequested) || called != 1 {
+		t.Fatalf("err=%v calls=%d", err, called)
+	}
+}
+
+func TestReconcileDoesNotRelaunchExactDurablyClaimedTransaction(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256Hex([]byte("setup"))
+	target := UpdateTarget{Version: "2.1.1", SHA256: digest, Generation: 5, TransactionID: "update-83"}
+	source := filepath.Join(root, "release")
+	if err := os.MkdirAll(filepath.Join(source, "viewer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"camstation-viewer-agent.exe": []byte("agent"), "viewer/CamStationViewer.exe": []byte("viewer")} {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	injected := errors.New("stop after durable claim")
+	manager := viewerinstall.Manager{
+		Layout: layout, Registration: updateTestRegistration{},
+		FailAfter: func(phase viewerinstall.Phase) error {
+			if phase == viewerinstall.PhasePreparing {
+				return injected
+			}
+			return nil
+		},
+	}
+	request := viewerinstall.Request{TransactionID: target.TransactionID, Generation: target.Generation, SourceDir: source, Release: viewerinstall.Release{Version: target.Version, Digest: target.SHA256, ReleaseID: viewerinstall.ReleaseID(target.Version, target.SHA256)}}
+	if err := manager.Apply(t.Context(), request); !errors.Is(err, injected) {
+		t.Fatalf("Apply error=%v", err)
+	}
+	paths := MachinePaths{State: filepath.Join(layout.StateDir, "state.json"), Commands: filepath.Join(layout.StateDir, "commands.json"), Update: filepath.Join(layout.StateDir, "update.json")}
+	record := CommandRecord{ID: 83, Type: "update_app", PayloadHash: "p", OperationKey: target.TransactionID, DesiredVersion: target.Version, ArtifactSHA256: digest, Generation: target.Generation, State: CommandRunning}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"83": record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TargetVersion: target.Version, ArtifactSHA256: digest, Generation: target.Generation, TransactionID: target.TransactionID}); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
+		t.Fatal("durably claimed transaction was relaunched")
 		return nil
 	})}
 	results, err := agent.Reconcile(t.Context())
@@ -477,6 +527,73 @@ func TestReconcileRelaunchesExactLaunchingInstallerHandoff(t *testing.T) {
 	_, err := agent.Reconcile(t.Context())
 	if !errors.Is(err, ErrAgentRestartRequested) || called != 1 {
 		t.Fatalf("err=%v calls=%d", err, called)
+	}
+}
+
+func TestReconcileResumesPersistedMetadataRetryWait(t *testing.T) {
+	dir := t.TempDir()
+	digest := sha256Hex([]byte("setup"))
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	record := CommandRecord{ID: 85, Type: "update_app", PayloadHash: "p", OperationKey: "update-85", DesiredVersion: "2.1.3", ArtifactSHA256: digest, Generation: 7, State: CommandRunning}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"85": record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "metadata_retry_wait", TargetVersion: "2.1.3", ArtifactSHA256: digest, Generation: 7, TransactionID: "update-85", MetadataAttempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	agent := Agent{Paths: paths, Updater: updateExecutorFunc(func(_ context.Context, target UpdateTarget) error {
+		called++
+		if target.TransactionID != "update-85" || target.Generation != 7 {
+			t.Fatalf("target=%+v", target)
+		}
+		return ErrUpdateLaunched
+	})}
+	_, err := agent.Reconcile(t.Context())
+	if !errors.Is(err, ErrAgentRestartRequested) || called != 1 {
+		t.Fatalf("err=%v calls=%d", err, called)
+	}
+}
+
+func TestReconcileTerminatesPersistedMetadataFailure(t *testing.T) {
+	dir := t.TempDir()
+	digest := sha256Hex([]byte("setup"))
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	record := CommandRecord{ID: 86, Type: "update_app", PayloadHash: "p", OperationKey: "update-86", DesiredVersion: "2.1.4", ArtifactSHA256: digest, Generation: 8, State: CommandRunning}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"86": record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "metadata_failed", LastError: "metadata_request_failed", TargetVersion: "2.1.4", ArtifactSHA256: digest, Generation: 8, TransactionID: "update-86", MetadataAttempts: 4}); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
+		t.Fatal("terminal metadata failure was resumed")
+		return nil
+	})}
+	results, err := agent.Reconcile(t.Context())
+	if err != nil || len(results) != 1 || results[0].State != CommandFailed || results[0].Error != "metadata_request_failed" {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+	ledger, err := LoadCommandLedger(paths.Commands)
+	if err != nil || ledger.Records["86"].State != CommandFailed {
+		t.Fatalf("ledger=%+v err=%v", ledger, err)
+	}
+}
+
+func TestReconcileTerminatesPersistedRejectedUpdate(t *testing.T) {
+	dir := t.TempDir()
+	digest := sha256Hex([]byte("setup"))
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	record := CommandRecord{ID: 87, Type: "update_app", PayloadHash: "p", OperationKey: "update-87", DesiredVersion: "2.1.5", ArtifactSHA256: digest, Generation: 9, State: CommandRunning}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"87": record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "rejected", LastError: "validation_failed", TargetVersion: "2.1.5", ArtifactSHA256: digest, Generation: 9, TransactionID: "update-87"}); err != nil {
+		t.Fatal(err)
+	}
+	results, err := (&Agent{Paths: paths}).Reconcile(t.Context())
+	if err != nil || len(results) != 1 || results[0].State != CommandRejected || results[0].Error != "validation_failed" {
+		t.Fatalf("results=%+v err=%v", results, err)
 	}
 }
 
@@ -531,6 +648,38 @@ func TestCommittedTransactionNeverReconcilesMismatchedUpdateJournal(t *testing.T
 	}
 }
 
+func TestRolledBackQuarantinedTransactionReconcilesRejectedUpdate(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "release")
+	if err := os.MkdirAll(filepath.Join(source, "viewer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"camstation-viewer-agent.exe": []byte("agent"), "viewer/CamStationViewer.exe": []byte("viewer")} {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := UpdateTarget{Version: "2.2.2", SHA256: strings.Repeat("c", 64), Generation: 13, TransactionID: "update-13"}
+	request := viewerinstall.Request{TransactionID: target.TransactionID, Generation: target.Generation, SourceDir: source, Release: viewerinstall.Release{Version: target.Version, Digest: target.SHA256, ReleaseID: viewerinstall.ReleaseID(target.Version, target.SHA256)}}
+	manager := viewerinstall.Manager{Layout: layout, Registration: updateFailingRegistration{}}
+	if err := manager.Apply(t.Context(), request); err == nil {
+		t.Fatal("failed update transaction committed")
+	}
+	path := filepath.Join(layout.StateDir, "update.json")
+	if err := SaveUpdateJournal(path, UpdateJournal{State: "installer_launched", TransactionID: target.TransactionID, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256}); err != nil {
+		t.Fatal(err)
+	}
+	matched, err := ReconcileCommittedUpdate(layout.StateDir)
+	journal, loadErr := LoadUpdateJournal(path)
+	if err != nil || loadErr != nil || matched || journal.State != "rejected" || !journal.IsQuarantined(target.Version, target.SHA256, target.Generation) {
+		t.Fatalf("matched=%v journal=%+v err=%v loadErr=%v", matched, journal, err, loadErr)
+	}
+}
+
 func TestAgentReconcileFinishesCommandFromMatchingCommittedTransaction(t *testing.T) {
 	stateDir, target := committedUpdateFixture(t)
 	paths := MachinePaths{State: filepath.Join(stateDir, "state.json"), Commands: filepath.Join(stateDir, "commands.json"), Update: filepath.Join(stateDir, "update.json")}
@@ -576,6 +725,12 @@ type updateTestRegistration struct{}
 func (updateTestRegistration) Stop(context.Context) error                            { return nil }
 func (updateTestRegistration) Start(context.Context) error                           { return nil }
 func (updateTestRegistration) Validate(context.Context, viewerinstall.Journal) error { return nil }
+
+type updateFailingRegistration struct{ updateTestRegistration }
+
+func (updateFailingRegistration) Validate(context.Context, viewerinstall.Journal) error {
+	return errors.New("new release unhealthy")
+}
 
 func TestViewerReadyGateRequiresContinuousReadyWindow(t *testing.T) {
 	dir := t.TempDir()

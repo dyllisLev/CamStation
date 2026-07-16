@@ -7,7 +7,7 @@
 - Added the Windows per-machine installer with default UAC elevation, `/S`, `--update`, `--rollback`, `--recover`, and `--uninstall`. It installs stable launchers under `%ProgramFiles%\CamStation Viewer`, protected state under `%ProgramData%\CamStation\Viewer`, and removes transient extracted/embedded payloads.
 - Added `CamStationViewerAgent` automatic LocalSystem service registration, exact SCM recovery actions at 5/30/120 seconds with 86400-second reset and no fourth restart, configured-active-user `IgnoreNew` logon task, SYSTEM boot recovery task, ACLs, and uninstall registration. Stopping the logon task closes the bootstrap-owned Job and terminates its Electron tree.
 - Added a real default `update_app` path: fixed same-origin metadata/download endpoints, exact target version/size/SHA-256, installer-owned Authenticode thumbprint, explicit bounded development-unsigned policy, durable initial-plus-three download attempts with 1/5/30-minute waits, fresh Viewer/renderer 30-second readiness gate, detached updater handoff, and planned Agent replacement.
-- The updater rereads its own PE SHA-256 and exact durable Agent handoff before activation. Interrupted pre-launch work resumes once; an `installer_launched` transaction is never relaunched. Successful local validation commits the exact transaction; failure rolls back and quarantines it.
+- The updater rereads its own PE SHA-256 and exact durable Agent handoff before activation. Interrupted pre-claim work remains resumable; an exact durably claimed transaction is not relaunched. Successful local validation commits the exact transaction; failure rolls back and quarantines it.
 - Added a server-specific build that cross-compiles Host, bootstrap, Agent, and installer, packages Electron without Wine, creates and verifies a file-hashed ZIP payload, embeds it in the PE, and removes the transient embed file in `finally`.
 - Did not start/restart CamStation services or change camera media state.
 
@@ -88,12 +88,12 @@ Generated `viewer-app/build`, `viewer-app/dist`, `viewer-app/node_modules`, and 
 
 This pass reviewed and changed only the Task 7 installer/updater delta. It did not perform a whole-project review.
 
-- SCM recovery now has an explicit fourth `none/0` action, with an exact action-to-argument mapping test. The configured monitoring-user SID is present in both the logon trigger and task principal.
+- SCM recovery now uses the Windows service API for three `ServiceRestart` actions and a real fourth `NoAction`, with a pure policy test and Windows adapter compile test. The configured monitoring-user SID is present in both the logon trigger and task principal.
 - First-install recovery has a real no-release outcome: it clears `current.json`, removes the incomplete target and staging data, never starts the target, and remains idempotent across repeated recovery. Failed targets are quarantined; successful first installs still commit.
-- The updater owns and atomically promotes an exact `launching_installer` handoff under the machine-wide mutex before applying. A duplicate process cannot apply concurrently, and an already committed exact transaction is a no-op.
+- The updater keeps one machine-wide owner from exact handoff validation through durable transaction preparation, handoff promotion, and `ApplyOwned`. A duplicate process cannot apply concurrently; it succeeds only after bounded observation of the same exact committed transaction, and an already committed exact transaction is a no-op.
 - Transaction commit and `update.json` now reconcile across the power-loss boundary from the Agent path, installer path, and boot recovery path. Transaction ID, generation, version, and artifact digest must all match; mismatches never reconcile.
 - Release metadata and installer download requests have injectable per-attempt deadlines (15 seconds and 30 minutes by default). Both ledgers persist an initial attempt plus three retries with 1/5/30-minute waits, and restart tests prove exhausted budgets are not reset.
-- Uninstall disables and stops both scheduled tasks and the service before deleting registrations. Any disable/stop failure aborts before the first delete, so the outer installer cannot remove files.
+- Uninstall owns the same transaction mutex across disable/stop, registration deletion, and file removal. Ownership contention or disable/stop failure aborts before destructive mutation.
 - `/S` is case-insensitive, survives the unchanged elevation argument handoff, and suppresses all progress output. The default path reports phases but never waits for another confirmation after UAC.
 
 Focused review verification:
@@ -124,10 +124,10 @@ $ file viewer-app/dist/CamStationViewerSetup.exe
 PE32+ executable (console) x86-64, for MS Windows
 
 $ stat -c '%s bytes' viewer-app/dist/CamStationViewerSetup.exe
-383843328 bytes
+383864832 bytes
 
 $ sha256sum viewer-app/dist/CamStationViewerSetup.exe
-bdafdb66dd46d2a18335e06eef8196e4d51d9079437d5f79634fa04df4b05074
+be8d32490a55887db9d780b78b007955c248f3f97fe42e471627ca006d34a2c1
 
 $ test ! -e cmd/camstation-viewer-installer/payload/release.zip
 PASS
@@ -135,3 +135,11 @@ PASS
 $ git diff --check
 PASS
 ```
+
+The follow-up focused review also verified these restart/concurrency cases without expanding to a whole-project review:
+
+- `metadata_retry_wait` resumes through `Agent.Reconcile`; exhausted `metadata_failed` becomes a durable failed command.
+- A stale `installer_launched` state without a durable transaction claim becomes resumable. An exact incomplete claimed transaction remains single-owner, and a power-loss rollback without quarantine returns to `launching_installer`.
+- A quarantined rolled-back transaction reconciles to a rejected update and terminal rejected command.
+- An unrelated owner is never accepted as update success. Only the exact committed transaction can satisfy bounded ownership observation.
+- Update ownership blocks uninstall before unregister or file-removal callbacks execute.

@@ -204,6 +204,38 @@ func TestTransactionOwnershipIsExclusive(t *testing.T) {
 	}
 }
 
+func TestApplyOwnedKeepsOneOwnerThroughDurablePreparationAndCommit(t *testing.T) {
+	manager, request, _ := transactionFixture(t)
+	owner, err := Acquire(manager.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	prepared := false
+	manager.AfterPreparing = func(journal Journal) error {
+		persisted, err := LoadJournal(manager.Layout)
+		if err != nil || persisted.Phase != PhasePreparing || persisted.TransactionID != request.TransactionID {
+			t.Fatalf("persisted=%+v err=%v", persisted, err)
+		}
+		contender, err := Acquire(manager.Layout)
+		if contender != nil {
+			_ = contender.Close()
+		}
+		if !errors.Is(err, ErrUpdateOwned) {
+			t.Fatalf("preparation released owner: %v", err)
+		}
+		prepared = true
+		return nil
+	}
+	if err := manager.ApplyOwned(t.Context(), owner, request); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := LoadJournal(manager.Layout)
+	if err != nil || !prepared || journal.Phase != PhaseCommitted {
+		t.Fatalf("prepared=%v journal=%+v err=%v", prepared, journal, err)
+	}
+}
+
 func TestImmutableReleaseDirectoryCannotBeReusedWithDifferentContents(t *testing.T) {
 	manager, request, old := transactionFixture(t)
 	poisoned := manager.Layout.ReleaseDir(request.Release.ReleaseID)

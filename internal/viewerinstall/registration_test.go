@@ -31,10 +31,6 @@ func TestUnregisterAbortsBeforeDeletingAnythingWhenDisableOrStopFails(t *testing
 }
 
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
-	want := []string{"failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/30000/restart/120000/none/0"}
-	if got := SCMRecoveryArgs(); strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("recovery args=%v", got)
-	}
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {
 		t.Fatalf("Windows recovery action mapping=%+v want=%+v", got, wantActions)

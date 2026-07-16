@@ -68,10 +68,7 @@ func run(args []string) error {
 	switch options.mode {
 	case modeUninstall:
 		progress("Stopping and removing CamStation Viewer")
-		if err := viewerinstall.UnregisterAll(ctx, layout); err != nil {
-			return err
-		}
-		err = removeInstallation(layout)
+		err = uninstallInstallation(ctx, layout, viewerinstall.UnregisterAll, removeInstallation)
 	case modeRecover:
 		progress("Recovering the last installation transaction")
 		err = recoverAndReconcile(ctx, layout, viewerinstall.SystemRegistration{Layout: layout})
@@ -199,12 +196,21 @@ func installPayload(ctx context.Context, layout viewerinstall.Layout, options in
 		progress("Applying the verified update")
 		if err := installUpdate(ctx, layout, options, manifest, temp); err != nil {
 			if errors.Is(err, viewerinstall.ErrUpdateOwned) {
-				return nil
+				observeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				matched, observeErr := observeExactCommitted(observeCtx, layout, options, manifest.Version, 250*time.Millisecond)
+				cancel()
+				if observeErr != nil {
+					return errors.Join(err, observeErr)
+				}
+				if !matched {
+					return err
+				}
+			} else {
+				if !errors.Is(err, errCommitJournalBoundary) {
+					markUpdateFailed(layout, options, err)
+				}
+				return err
 			}
-			if !errors.Is(err, errCommitJournalBoundary) {
-				markUpdateFailed(layout, options, err)
-			}
-			return err
 		}
 		matched, err := vieweragent.ReconcileCommittedUpdate(layout.StateDir)
 		if err != nil {
@@ -257,7 +263,16 @@ func installInitial(ctx context.Context, layout viewerinstall.Layout, defaults v
 }
 
 func installUpdate(ctx context.Context, layout viewerinstall.Layout, options installerOptions, manifest viewerinstall.PayloadManifest, payloadDir string) error {
-	if err := promoteUpdateHandoff(layout, options, manifest.Version); err != nil {
+	owner, err := viewerinstall.Acquire(layout)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
+	journal, err := vieweragent.LoadUpdateJournal(filepath.Join(layout.StateDir, "update.json"))
+	if err != nil {
+		return err
+	}
+	if err := validateUpdateHandoff(journal, options, manifest.Version); err != nil {
 		return err
 	}
 	config, err := vieweragent.LoadConfig(filepath.Join(layout.StateDir, "config.json"))
@@ -269,15 +284,18 @@ func installUpdate(ctx context.Context, layout viewerinstall.Layout, options ins
 	}
 	release := viewerinstall.Release{Version: manifest.Version, Digest: options.expectedSHA, ReleaseID: viewerinstall.ReleaseID(manifest.Version, options.expectedSHA)}
 	request := viewerinstall.Request{TransactionID: options.transactionID, Generation: options.generation, SourceDir: filepath.Join(payloadDir, "release"), Release: release}
-	return (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Apply(ctx, request)
+	manager := viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}
+	manager.AfterPreparing = func(transaction viewerinstall.Journal) error {
+		return promoteUpdateHandoff(layout, options, manifest.Version, transaction)
+	}
+	return manager.ApplyOwned(ctx, owner, request)
 }
 
-func promoteUpdateHandoff(layout viewerinstall.Layout, options installerOptions, version string) error {
-	owner, err := viewerinstall.Acquire(layout)
-	if err != nil {
-		return err
+func promoteUpdateHandoff(layout viewerinstall.Layout, options installerOptions, version string, transaction viewerinstall.Journal) error {
+	if transaction.Phase != viewerinstall.PhasePreparing || transaction.TransactionID != options.transactionID ||
+		transaction.Generation != options.generation || transaction.Release.Version != version || !strings.EqualFold(transaction.Release.Digest, options.expectedSHA) {
+		return errors.New("durable transaction does not match update handoff")
 	}
-	defer owner.Close()
 	path := filepath.Join(layout.StateDir, "update.json")
 	journal, err := vieweragent.LoadUpdateJournal(path)
 	if err != nil {
@@ -291,6 +309,51 @@ func promoteUpdateHandoff(layout viewerinstall.Layout, options installerOptions,
 	}
 	journal.State = "installer_launched"
 	return vieweragent.SaveUpdateJournal(path, journal)
+}
+
+func observeExactCommitted(ctx context.Context, layout viewerinstall.Layout, options installerOptions, version string, interval time.Duration) (bool, error) {
+	if interval <= 0 {
+		return false, errors.New("positive observation interval is required")
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		transaction, err := viewerinstall.LoadJournal(layout)
+		if err != nil {
+			return false, err
+		}
+		empty := transaction.TransactionID == "" && transaction.Phase == ""
+		exact := transaction.TransactionID == options.transactionID && transaction.Generation == options.generation &&
+			transaction.Release.Version == version && strings.EqualFold(transaction.Release.Digest, options.expectedSHA)
+		if exact && transaction.Phase == viewerinstall.PhaseCommitted {
+			return true, nil
+		}
+		if !empty && (!exact || transaction.Phase == viewerinstall.PhaseRolledBack) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func uninstallInstallation(
+	ctx context.Context,
+	layout viewerinstall.Layout,
+	unregister func(context.Context, viewerinstall.Layout) error,
+	remove func(viewerinstall.Layout) error,
+) error {
+	owner, err := viewerinstall.Acquire(layout)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
+	if err := unregister(ctx, layout); err != nil {
+		return err
+	}
+	return remove(layout)
 }
 
 func verifyFileSHA(path, expected string) error {
