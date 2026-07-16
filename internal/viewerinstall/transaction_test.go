@@ -227,16 +227,8 @@ func TestOwnershipRejectsNestedAndConcurrentAcquisitionThenReacquires(t *testing
 	if concurrentErr := <-concurrent; !errors.Is(concurrentErr, ErrUpdateOwned) {
 		t.Fatalf("concurrent acquisition error=%v", concurrentErr)
 	}
-	owned, err := TransactionOwned(manager.Layout)
-	if err != nil || !owned {
-		t.Fatalf("owned=%v err=%v", owned, err)
-	}
 	if err := owner.Close(); err != nil {
 		t.Fatal(err)
-	}
-	owned, err = TransactionOwned(manager.Layout)
-	if err != nil || owned {
-		t.Fatalf("released ownership=%v err=%v", owned, err)
 	}
 	reacquired, err := Acquire(manager.Layout)
 	if err != nil {

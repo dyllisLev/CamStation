@@ -39,24 +39,23 @@ type UpdateExecutor interface {
 }
 
 type Agent struct {
-	Config                    Config
-	Paths                     MachinePaths
-	Executor                  Executor
-	Reporter                  CommandReporter
-	HTTPClient                *http.Client
-	HeartbeatInterval         time.Duration
-	HeartbeatRequestDeadline  time.Duration
-	ControlReadDeadline       time.Duration
-	ViewerCommandDeadline     time.Duration
-	ViewerRestartDeadline     time.Duration
-	AgentVersion              string
-	Now                       func() time.Time
-	LoadLedger                func(string) (CommandLedger, error)
-	SaveLedger                func(string, CommandLedger) error
-	ServePipe                 func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
-	Ready                     func()
-	Updater                   UpdateExecutor
-	TransactionOwnershipProbe func(viewerinstall.Layout) (bool, error)
+	Config                   Config
+	Paths                    MachinePaths
+	Executor                 Executor
+	Reporter                 CommandReporter
+	HTTPClient               *http.Client
+	HeartbeatInterval        time.Duration
+	HeartbeatRequestDeadline time.Duration
+	ControlReadDeadline      time.Duration
+	ViewerCommandDeadline    time.Duration
+	ViewerRestartDeadline    time.Duration
+	AgentVersion             string
+	Now                      func() time.Time
+	LoadLedger               func(string) (CommandLedger, error)
+	SaveLedger               func(string, CommandLedger) error
+	ServePipe                func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
+	Ready                    func()
+	Updater                  UpdateExecutor
 
 	stateMu          sync.Mutex
 	telemetryMu      sync.Mutex
@@ -309,22 +308,36 @@ func (agent *Agent) reconcileAbandonedInstallerHandoff() error {
 	if !filepath.IsAbs(layout.InstallDir) {
 		return errors.New("absolute Viewer install directory is required for ownership probe")
 	}
-	probe := agent.TransactionOwnershipProbe
-	if probe == nil {
-		probe = viewerinstall.TransactionOwned
-	}
-	owned, err := probe(layout)
-	if err != nil || owned {
-		return err
-	}
+	return withAvailableTransactionOwnership(layout, func(*viewerinstall.Ownership) error {
+		return agent.reconcileAbandonedInstallerHandoffOwned(layout)
+	})
+}
 
-	// Re-read both atomic journals after probing so a commit that raced the
-	// available-owner observation is never downgraded to a launch request.
-	transaction, err = viewerinstall.LoadJournal(layout)
+func withAvailableTransactionOwnership(layout viewerinstall.Layout, critical func(*viewerinstall.Ownership) error) (resultErr error) {
+	if critical == nil {
+		return errors.New("transaction critical section is required")
+	}
+	owner, err := viewerinstall.Acquire(layout)
+	if errors.Is(err, viewerinstall.ErrUpdateOwned) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	journal, err = LoadUpdateJournal(agent.Paths.Update)
+	defer func() {
+		resultErr = errors.Join(resultErr, owner.Close())
+	}()
+	return critical(owner)
+}
+
+func (agent *Agent) reconcileAbandonedInstallerHandoffOwned(layout viewerinstall.Layout) error {
+	// Re-read and save while retaining the machine-wide transaction owner so a
+	// live installer cannot commit between the observation and state change.
+	transaction, err := viewerinstall.LoadJournal(layout)
+	if err != nil {
+		return err
+	}
+	journal, err := LoadUpdateJournal(agent.Paths.Update)
 	if err != nil {
 		return err
 	}

@@ -531,6 +531,95 @@ func TestReconcileKeepsLiveExactOwnerThenCompletesAbandonedTransactionOnce(t *te
 	}
 }
 
+func TestAvailableTransactionOwnershipStaysHeldThroughCriticalSection(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withAvailableTransactionOwnership(layout, func(*viewerinstall.Ownership) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	contender, err := viewerinstall.Acquire(layout)
+	if contender != nil {
+		_ = contender.Close()
+	}
+	if !errors.Is(err, viewerinstall.ErrUpdateOwned) {
+		t.Fatalf("critical section released transaction ownership: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	reacquired, err := viewerinstall.Acquire(layout)
+	if err != nil {
+		t.Fatalf("ownership was not released after critical section: %v", err)
+	}
+	if err := reacquired.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAbandonedHandoffOwnedRereadNeverDowngradesRacedCommit(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "release")
+	if err := os.MkdirAll(filepath.Join(source, "viewer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"camstation-viewer-agent.exe": []byte("agent"), "viewer/CamStationViewer.exe": []byte("viewer")} {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest := sha256Hex([]byte("setup"))
+	target := UpdateTarget{Version: "2.1.1", SHA256: digest, Generation: 5, TransactionID: "update-83"}
+	request := viewerinstall.Request{TransactionID: target.TransactionID, Generation: target.Generation, SourceDir: source, Release: viewerinstall.Release{Version: target.Version, Digest: target.SHA256, ReleaseID: viewerinstall.ReleaseID(target.Version, target.SHA256)}}
+	injected := errors.New("stop after durable claim")
+	manager := viewerinstall.Manager{Layout: layout, Registration: updateTestRegistration{}, FailAfter: func(phase viewerinstall.Phase) error {
+		if phase == viewerinstall.PhasePreparing {
+			return injected
+		}
+		return nil
+	}}
+	if err := manager.Apply(t.Context(), request); !errors.Is(err, injected) {
+		t.Fatalf("Apply error=%v", err)
+	}
+	path := filepath.Join(layout.StateDir, "update.json")
+	if err := SaveUpdateJournal(path, UpdateJournal{State: "installer_launched", TargetVersion: target.Version, ArtifactSHA256: digest, Generation: target.Generation, TransactionID: target.TransactionID}); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Config: Config{InstallDir: layout.InstallDir}, Paths: MachinePaths{Update: path}}
+	manager.FailAfter = nil
+	if err := withAvailableTransactionOwnership(layout, func(owner *viewerinstall.Ownership) error {
+		if err := manager.ApplyOwned(t.Context(), owner, request); err != nil {
+			return err
+		}
+		return agent.reconcileAbandonedInstallerHandoffOwned(layout)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := viewerinstall.LoadJournal(layout)
+	if err != nil || transaction.Phase != viewerinstall.PhaseCommitted {
+		t.Fatalf("transaction=%+v err=%v", transaction, err)
+	}
+	journal, err := LoadUpdateJournal(path)
+	if err != nil || journal.State != "installer_launched" {
+		t.Fatalf("committed transaction was downgraded: journal=%+v err=%v", journal, err)
+	}
+}
+
 func TestReconcileNeverResumesMismatchedIncompleteTransaction(t *testing.T) {
 	root := t.TempDir()
 	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
