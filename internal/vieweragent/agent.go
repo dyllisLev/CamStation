@@ -158,6 +158,13 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 				generation = state.ExpectedViewerGeneration
 				return nil
 			}
+			if state.ViewerState == "restart_authorized" && state.ExpectedViewerGeneration > state.ViewerGeneration &&
+				(state.ViewerNonce == "" || state.ExpectedViewerPID == 0) {
+				generation = state.ExpectedViewerGeneration
+				state.ForcedViewerRestartID = command.Key()
+				state.ForcedViewerRestartAt = &now
+				return nil
+			}
 			var ok bool
 			ok, generation = state.AllowViewerRestart(now, true, command.Key())
 			if !ok {
@@ -324,6 +331,7 @@ func (agent *Agent) Run(ctx context.Context) error {
 		state.AgentBootGeneration++
 		state.ControlState = "control_degraded"
 		state.CommandEngineHealthy = false
+		convergeViewerAfterAgentStart(state)
 		if state.ViewerState == "" {
 			state.ViewerState = "not_logged_in"
 		}
@@ -374,6 +382,23 @@ func (agent *Agent) Run(ctx context.Context) error {
 		return nil
 	}
 	return controlErr
+}
+
+func convergeViewerAfterAgentStart(state *MachineState) {
+	authorized := state.ViewerState == "restart_authorized" && state.ExpectedViewerGeneration > state.ViewerGeneration
+	staleState := state.ViewerState == "running" || state.ViewerState == "starting" || state.ViewerState == "restarting"
+	staleIdentity := state.ViewerNonce != "" || state.ExpectedViewerPID != 0 || state.ExpectedViewerSession != 0
+	if !authorized && !staleState && !staleIdentity {
+		return
+	}
+	if state.ExpectedViewerGeneration <= state.ViewerGeneration {
+		state.ExpectedViewerGeneration = state.ViewerGeneration + 1
+	}
+	state.ViewerState = "restart_authorized"
+	state.RendererState = "not_ready"
+	state.ViewerNonce = ""
+	state.ExpectedViewerPID = 0
+	state.ExpectedViewerSession = 0
 }
 
 func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient) {

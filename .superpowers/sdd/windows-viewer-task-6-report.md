@@ -127,3 +127,35 @@ ASAR: /build/* and /package.json only
 $ git diff --check
 PASS
 ```
+
+## Focused Task 6 re-review: Agent recovery and Windows handles
+
+The next Task 6-only review covered only the preceding fix delta and found two remaining recovery boundaries:
+
+- Agent startup now converts a stale `running`, `starting`, `restarting`, or PID/nonce-bearing Viewer identity into one clean `restart_authorized` generation strictly above the current generation. It preserves an already authorized higher generation and leaves the true initial no-Viewer state unchanged.
+- A `restart_viewer` command received while that clean recovery is already authorized adopts the existing expected generation, sends no shutdown to the dead identity, and completes only when that generation becomes Viewer `running` plus renderer `ready`; the no-ready path remains bounded.
+- Bootstrap now waits for delayed Agent recovery authorization instead of making a one-shot state read. Authorization wait and the next generation's registration/renderer readiness share one bounded recovery deadline, so an unavailable Agent cannot create an unbounded relaunch loop.
+- Windows Job termination and process/thread handle disposal are separate. Setup/readiness timeout requests graceful stop, terminates the Job, and disposes handles only after `Wait` completes. If reap exceeds the bootstrap deadline, a bounded deferred reaper owns the final Dispose; the process handle is never closed beneath a pending `WaitForSingleObject`.
+
+RED evidence reproduced stale Agent state surviving startup, an authorized generation 8 being incorrectly advanced to 9, authorization waiting until the outer context rather than the recovery deadline, a fresh full startup budget after delayed authorization, and `CloseJob` disposing handles without a Wait-completion phase. The state-backed integration test runs actual Agent startup convergence, releases the waiting bootstrap, grants generation 8, and observes renderer readiness. Repeated focused tests and race checks pass.
+
+Fresh re-review verification:
+
+```text
+$ go test ./... -count=1
+PASS (including vieweragent 4.027s and viewerbootstrap 1.412s)
+
+$ go test -race ./internal/vieweragent ./internal/viewerbootstrap -count=1
+PASS
+
+$ go vet ./...
+PASS
+
+$ go build -o /tmp/camstationd-task6-c1-i1-final ./cmd/camstationd
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-bootstrap-task6-c1-i1-final.exe ./cmd/camstation-viewer-bootstrap
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/viewerbootstrap-task6-c1-i1-policy.test.exe ./internal/viewerbootstrap
+PASS; bootstrap and Windows policy test are PE32+ x86-64 executables
+
+$ cd viewer-app && npm test && npm run build && npm run package:win
+tests 13, pass 13, fail 0; build/package PASS; Viewer is PE32+ GUI x86-64
+```

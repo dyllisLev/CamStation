@@ -214,6 +214,70 @@ func TestAgentRestartReconcilesOnNextBoot(t *testing.T) {
 	}
 }
 
+func TestAgentStartupConvergesStaleViewerIdentityOnce(t *testing.T) {
+	tests := []struct {
+		name         string
+		state        MachineState
+		wantState    string
+		wantExpected int64
+		wantRenderer string
+	}{
+		{
+			name: "running Viewer from prior Agent boot",
+			state: MachineState{ViewerGeneration: 7, ExpectedViewerGeneration: 7, ViewerState: "running", RendererState: "ready",
+				ViewerNonce: "old", ExpectedViewerPID: 99, ExpectedViewerSession: 3},
+			wantState: "restart_authorized", wantExpected: 8, wantRenderer: "not_ready",
+		},
+		{
+			name: "starting Viewer preserves higher expected generation",
+			state: MachineState{ViewerGeneration: 7, ExpectedViewerGeneration: 9, ViewerState: "starting", RendererState: "not_ready",
+				ViewerNonce: "old", ExpectedViewerPID: 99, ExpectedViewerSession: 3},
+			wantState: "restart_authorized", wantExpected: 9, wantRenderer: "not_ready",
+		},
+		{
+			name: "old identity converges regardless of stale label",
+			state: MachineState{ViewerGeneration: 7, ExpectedViewerGeneration: 7, ViewerState: "failed", RendererState: "failed",
+				ViewerNonce: "old", ExpectedViewerPID: 99, ExpectedViewerSession: 3},
+			wantState: "restart_authorized", wantExpected: 8, wantRenderer: "not_ready",
+		},
+		{
+			name:      "true initial no Viewer state is unchanged",
+			state:     MachineState{ViewerState: "not_logged_in", RendererState: "not_ready"},
+			wantState: "not_logged_in", wantExpected: 0, wantRenderer: "not_ready",
+		},
+		{
+			name:      "already authorized generation is not incremented again",
+			state:     MachineState{ViewerGeneration: 7, ExpectedViewerGeneration: 9, ViewerState: "restart_authorized", RendererState: "not_ready"},
+			wantState: "restart_authorized", wantExpected: 9, wantRenderer: "not_ready",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+			if err := SaveMachineState(paths.State, tt.state); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			agent := NewAgent(Config{ClientID: "startup-client", ServerURL: "http://127.0.0.1:1", DisplayName: "Viewer", InstallDir: dir}, paths)
+			agent.Ready = cancel
+			if err := agent.Run(ctx); err != nil {
+				t.Fatal(err)
+			}
+			state, err := LoadMachineState(paths.State)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.ViewerState != tt.wantState || state.ExpectedViewerGeneration != tt.wantExpected || state.RendererState != tt.wantRenderer {
+				t.Fatalf("state=%+v", state)
+			}
+			if state.ViewerNonce != "" || state.ExpectedViewerPID != 0 || state.ExpectedViewerSession != 0 {
+				t.Fatalf("stale Viewer identity survived Agent startup: %+v", state)
+			}
+		})
+	}
+}
+
 func TestQuarantinedUpdateIsRejectedWithoutExecution(t *testing.T) {
 	dir := t.TempDir()
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}

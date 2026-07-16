@@ -40,7 +40,8 @@ type ManagedProcess interface {
 	Resume() error
 	Wait() error
 	RequestStop() error
-	CloseJob() error
+	TerminateJob() error
+	Dispose() error
 }
 
 type GenerationGate struct {
@@ -117,15 +118,27 @@ func RunWithDeadlines(ctx context.Context, installDir string, adapter ProcessAda
 		return errors.New("invalid Viewer bootstrap policy")
 	}
 	var gate GenerationGate
+	var recoveryDeadline time.Time
 	for {
-		generation, childErr, err := runGeneration(ctx, installDir, adapter, &gate, gracefulDeadline, totalDeadline)
+		startupBudget := totalDeadline
+		if !recoveryDeadline.IsZero() {
+			startupBudget = time.Until(recoveryDeadline)
+			recoveryDeadline = time.Time{}
+			if startupBudget <= 0 {
+				return errors.New("Viewer recovery timed out before relaunch")
+			}
+		}
+		generation, childErr, err := runGeneration(ctx, installDir, adapter, &gate, gracefulDeadline, startupBudget)
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		authorized, err := adapter.RelaunchAuthorized(ctx, generation)
+		recoveryDeadline = time.Now().Add(totalDeadline)
+		recoveryCtx, cancelRecovery := context.WithDeadline(ctx, recoveryDeadline)
+		authorized, err := adapter.RelaunchAuthorized(recoveryCtx, generation)
+		cancelRecovery()
 		if err != nil {
 			return err
 		}
@@ -167,39 +180,45 @@ func runGeneration(
 	if err != nil {
 		return 0, nil, err
 	}
+	done := make(chan error, 1)
+	go func() { done <- process.Wait() }()
 	if err := process.AssignKillOnCloseJob(); err != nil {
-		_ = process.CloseJob()
+		_ = process.TerminateJob()
+		waitAndDispose(process, done, setupCtx, gracefulDeadline)
 		return 0, nil, fmt.Errorf("assign Viewer Job: %w", err)
 	}
 	if err := process.Resume(); err != nil {
-		_ = process.CloseJob()
+		_ = process.TerminateJob()
+		waitAndDispose(process, done, setupCtx, gracefulDeadline)
 		return 0, nil, fmt.Errorf("resume Viewer: %w", err)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- process.Wait() }()
 	ready := make(chan error, 1)
 	go func() { ready <- adapter.WaitReady(setupCtx, grant.Generation) }()
 	select {
 	case childErr := <-done:
-		_ = process.CloseJob()
+		_ = process.TerminateJob()
+		_ = process.Dispose()
 		return grant.Generation, childErr, errors.New("Viewer exited before renderer readiness")
 	case readyErr := <-ready:
 		if readyErr != nil {
-			_ = process.CloseJob()
-			waitForExitBefore(done, setupCtx, gracefulDeadline)
+			_ = process.RequestStop()
+			_ = process.TerminateJob()
+			waitAndDispose(process, done, setupCtx, gracefulDeadline)
 			return grant.Generation, nil, fmt.Errorf("Viewer readiness failed: %w", readyErr)
 		}
 		cancelSetup()
 	case <-setupCtx.Done():
-		_ = process.CloseJob()
-		waitForExitBefore(done, setupCtx, gracefulDeadline)
+		_ = process.RequestStop()
+		_ = process.TerminateJob()
+		waitAndDispose(process, done, setupCtx, gracefulDeadline)
 		return grant.Generation, nil, errors.New("Viewer startup timed out")
 	}
 
 	select {
 	case childErr := <-done:
-		_ = process.CloseJob()
+		_ = process.TerminateJob()
+		_ = process.Dispose()
 		return grant.Generation, childErr, nil
 	case <-ctx.Done():
 		_ = process.RequestStop()
@@ -208,30 +227,30 @@ func runGeneration(
 	defer timer.Stop()
 	select {
 	case <-done:
-		_ = process.CloseJob()
+		_ = process.TerminateJob()
+		_ = process.Dispose()
 		return grant.Generation, nil, nil
 	case <-timer.C:
-		_ = process.CloseJob()
-		waitForExit(done, gracefulDeadline)
+		_ = process.TerminateJob()
+		waitAndDispose(process, done, context.Background(), gracefulDeadline)
 		return grant.Generation, nil, nil
 	}
 }
 
-func waitForExitBefore(done <-chan error, ctx context.Context, maximum time.Duration) {
+func waitAndDispose(process ManagedProcess, done <-chan error, ctx context.Context, maximum time.Duration) {
 	timer := time.NewTimer(maximum)
 	defer timer.Stop()
 	select {
 	case <-done:
+		_ = process.Dispose()
 	case <-ctx.Done():
+		go disposeAfterWait(process, done)
 	case <-timer.C:
+		go disposeAfterWait(process, done)
 	}
 }
 
-func waitForExit(done <-chan error, deadline time.Duration) {
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-	}
+func disposeAfterWait(process ManagedProcess, done <-chan error) {
+	<-done
+	_ = process.Dispose()
 }

@@ -1,6 +1,7 @@
 package vieweragent
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -305,6 +306,108 @@ func TestDefaultRestartViewerFailsBoundedWithoutReadyGeneration(t *testing.T) {
 	state, err := agent.loadState()
 	if err != nil || state.ViewerState != "recovery_failed" || state.ExpectedViewerGeneration != state.ViewerGeneration {
 		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
+func TestRestartViewerDuringAgentRecoveryUsesAuthorizedGenerationWithoutDeadShutdown(t *testing.T) {
+	agent := pipeTestAgent(t)
+	agent.ViewerRestartDeadline = 10 * time.Second
+	if err := SaveMachineState(agent.Paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 8, ViewerState: "restart_authorized", RendererState: "not_ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type commandResult struct {
+		record CommandRecord
+		err    error
+	}
+	commandCtx, cancelCommand := context.WithCancel(t.Context())
+	done := make(chan commandResult, 1)
+	commandFinished := false
+	go func() {
+		record, err := agent.HandleCommand(commandCtx, Command{ID: 52, Type: "restart_viewer", PayloadHash: "restart-52", TTLSeconds: 300})
+		done <- commandResult{record: record, err: err}
+	}()
+	defer func() {
+		cancelCommand()
+		if commandFinished {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}()
+
+	var grant PipeMessage
+	deadline := time.Now().Add(5 * time.Second)
+	running := false
+	for time.Now().Before(deadline) {
+		ledger, _ := agent.loadCommandLedger()
+		if ledger.Records["52"].State == CommandRunning {
+			running = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !running {
+		t.Fatal("restart command did not enter running state")
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		grant, _ = agent.handlePipeMessage(PipeMessage{Version: 1, RequestID: "recovery-bootstrap", Type: "bootstrap_request", PID: 43, SessionID: 3})
+		if grant.Type == "bootstrap_grant" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if grant.Generation != 8 {
+		t.Fatalf("recovery grant=%+v", grant)
+	}
+	if command := agent.pendingViewerCommand(); command != nil {
+		t.Fatalf("dead Viewer received shutdown during Agent recovery: %s", command)
+	}
+	if _, err := agent.handlePipeMessage(PipeMessage{
+		Version: 1, RequestID: "recovery-register", Type: "viewer_register", PID: 100, SessionID: 3,
+		Generation: grant.Generation, Nonce: grant.Nonce,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.handlePipeMessage(PipeMessage{
+		Version: 1, RequestID: "recovery-ready", Type: "renderer_status", PID: 100, SessionID: 3,
+		Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		commandFinished = true
+		if result.err != nil || result.record.State != CommandSucceeded || result.record.Generation != 8 {
+			t.Fatalf("record=%+v err=%v", result.record, result.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("restart command did not complete on the authorized recovery generation")
+	}
+}
+
+func TestRestartViewerDuringAgentRecoveryFailsBoundedWithoutReadyGeneration(t *testing.T) {
+	agent := pipeTestAgent(t)
+	agent.ViewerRestartDeadline = 50 * time.Millisecond
+	if err := SaveMachineState(agent.Paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 8, ViewerState: "restart_authorized", RendererState: "not_ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	record, err := agent.HandleCommand(t.Context(), Command{ID: 53, Type: "restart_viewer", PayloadHash: "restart-53", TTLSeconds: 300})
+	if err == nil || record.State != CommandFailed || record.Generation != 8 {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatalf("recovery command exceeded its deadline: %v", time.Since(started))
+	}
+	if command := agent.pendingViewerCommand(); command != nil {
+		t.Fatalf("dead Viewer received shutdown during failed recovery: %s", command)
 	}
 }
 

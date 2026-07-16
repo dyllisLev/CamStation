@@ -3,12 +3,15 @@ package viewerbootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
+
+	"camstation/internal/vieweragent"
 )
 
 func TestBuildLaunchSpecUsesCurrentViewerAndAcceptedIdentity(t *testing.T) {
@@ -80,7 +83,7 @@ func TestRunAssignsKillJobBeforeResume(t *testing.T) {
 		t.Fatal("unexpected Viewer exit was treated as a successful bootstrap")
 	}
 	events := adapter.Events()
-	if eventIndex(events, "assign_job") < 0 || eventIndex(events, "resume") <= eventIndex(events, "assign_job") || eventIndex(events, "wait_ready") < 0 || eventIndex(events, "close_job") < 0 {
+	if eventIndex(events, "assign_job") < 0 || eventIndex(events, "resume") <= eventIndex(events, "assign_job") || eventIndex(events, "wait_ready") < 0 || eventIndex(events, "terminate_job") < 0 || eventIndex(events, "dispose") < 0 {
 		t.Fatalf("events=%v", events)
 	}
 	if adapter.setupDeadline < 44*time.Second || adapter.setupDeadline > 45*time.Second {
@@ -106,7 +109,7 @@ func TestRunRequestsGracefulStopBeforeClosingJob(t *testing.T) {
 	}
 	events := adapter.Events()
 	stop := eventIndex(events, "request_stop")
-	close := eventIndex(events, "close_job")
+	close := eventIndex(events, "terminate_job")
 	if stop < 0 || close <= stop {
 		t.Fatalf("events=%v", events)
 	}
@@ -123,7 +126,7 @@ func TestRunKillsViewerThatNeverBecomesReadyWithinTotalDeadline(t *testing.T) {
 		t.Fatalf("err=%v elapsed=%v", err, time.Since(started))
 	}
 	events := adapter.Events()
-	if eventIndex(events, "wait_ready") < 0 || eventIndex(events, "close_job") < 0 {
+	if eventIndex(events, "wait_ready") < 0 || eventIndex(events, "terminate_job") < 0 {
 		t.Fatalf("events=%v", events)
 	}
 }
@@ -156,18 +159,208 @@ func TestRunRelaunchesOnlyAnAuthorizedHigherGeneration(t *testing.T) {
 	}
 }
 
+func TestRecoveryWindowIncludesDelayedAuthorizationAndNextRendererReadiness(t *testing.T) {
+	first := &fakeProcess{wait: make(chan error, 1)}
+	second := &fakeProcess{wait: make(chan error, 1)}
+	authorization := make(chan struct{})
+	adapter := &fakeAdapter{
+		grants: []LaunchGrant{
+			{Generation: 7, Nonce: "nonce-7", SessionID: 3},
+			{Generation: 8, Nonce: "nonce-8", SessionID: 3},
+		},
+		processes: []*fakeProcess{first, second}, authorization: authorization,
+		exitAfterReady: true, blockReadyAt: 2,
+	}
+	go func() {
+		time.Sleep(70 * time.Millisecond)
+		close(authorization)
+	}()
+	err := RunWithDeadlines(t.Context(), t.TempDir(), adapter, 5*time.Millisecond, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("missing second-generation renderer readiness succeeded")
+	}
+	deadlines := adapter.SetupDeadlines()
+	if len(deadlines) != 2 || deadlines[1] >= 60*time.Millisecond {
+		t.Fatalf("setup deadlines=%v; authorization time was not charged to the recovery window", deadlines)
+	}
+}
+
+func TestRecoveryStopsWhenAgentNeverPublishesAuthorization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	process := &fakeProcess{wait: make(chan error, 1)}
+	adapter := &fakeAdapter{
+		grants:    []LaunchGrant{{Generation: 7, Nonce: "nonce-7", SessionID: 3}},
+		processes: []*fakeProcess{process}, authorizationNever: true, exitAfterReady: true,
+	}
+	started := time.Now()
+	err := RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, 15*time.Millisecond)
+	if err == nil || time.Since(started) >= 100*time.Millisecond {
+		t.Fatalf("err=%v elapsed=%v", err, time.Since(started))
+	}
+}
+
+func TestAgentRestartConvergenceDrivesBootstrapToReadyNextGeneration(t *testing.T) {
+	dir := t.TempDir()
+	paths := vieweragent.MachinePaths{
+		State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json"),
+	}
+	if err := vieweragent.SaveMachineState(paths.State, vieweragent.MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 7, ViewerState: "running", RendererState: "ready",
+		ViewerNonce: "old", ExpectedViewerPID: 99, ExpectedViewerSession: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authorization := make(chan struct{})
+	secondReady := make(chan struct{})
+	first := &fakeProcess{wait: make(chan error, 1)}
+	second := &fakeProcess{wait: make(chan error), waitStarted: make(chan struct{})}
+	adapter := &fakeAdapter{
+		grants: []LaunchGrant{
+			{Generation: 7, Nonce: "old", SessionID: 3},
+			{Generation: 8, Nonce: "new", SessionID: 3},
+		},
+		processes: []*fakeProcess{first, second}, authorization: authorization, exitAfterReady: true,
+		readyHook: func(generation int64) {
+			if generation != 8 {
+				return
+			}
+			state, err := vieweragent.LoadMachineState(paths.State)
+			if err != nil {
+				return
+			}
+			state.ViewerGeneration = 8
+			state.ExpectedViewerGeneration = 8
+			state.ViewerState = "running"
+			state.RendererState = "ready"
+			if vieweragent.SaveMachineState(paths.State, state) == nil {
+				close(secondReady)
+			}
+		},
+	}
+	agentResult := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && eventIndex(adapter.Events(), "relaunch_authorized") < 0 {
+			time.Sleep(time.Millisecond)
+		}
+		agentCtx, cancelAgent := context.WithCancel(t.Context())
+		agent := vieweragent.NewAgent(vieweragent.Config{
+			ClientID: "recovery-client", ServerURL: "http://127.0.0.1:1", DisplayName: "Viewer", InstallDir: dir,
+		}, paths)
+		agent.Ready = cancelAgent
+		if err := agent.Run(agentCtx); err != nil {
+			agentResult <- err
+			return
+		}
+		state, err := vieweragent.LoadMachineState(paths.State)
+		if err != nil || state.ViewerState != "restart_authorized" || state.ExpectedViewerGeneration != 8 ||
+			state.ViewerNonce != "" || state.ExpectedViewerPID != 0 {
+			agentResult <- fmt.Errorf("startup state=%+v err=%v", state, err)
+			return
+		}
+		close(authorization)
+		agentResult <- nil
+	}()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- RunWithDeadlines(ctx, dir, adapter, 5*time.Millisecond, 5*time.Second) }()
+	select {
+	case <-secondReady:
+		cancel()
+	case err := <-done:
+		cancel()
+		var startupErr error
+		select {
+		case startupErr = <-agentResult:
+		default:
+		}
+		state, stateErr := vieweragent.LoadMachineState(paths.State)
+		t.Fatalf("bootstrap stopped before next generation ready: %v agent=%v state=%+v stateErr=%v events=%v deadlines=%v",
+			err, startupErr, state, stateErr, adapter.Events(), adapter.SetupDeadlines())
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("next generation did not become ready")
+	}
+	if err := <-agentResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	state, err := vieweragent.LoadMachineState(paths.State)
+	if err != nil || state.ViewerGeneration != 8 || state.ViewerState != "running" || state.RendererState != "ready" {
+		t.Fatalf("final state=%+v err=%v", state, err)
+	}
+}
+
+func TestNormalExitTerminatesJobAfterWaitAndDisposesHandlesLast(t *testing.T) {
+	process := &fakeProcess{wait: make(chan error, 1)}
+	adapter := &fakeAdapter{
+		grants:    []LaunchGrant{{Generation: 7, Nonce: "nonce", SessionID: 3}},
+		processes: []*fakeProcess{process}, exitAfterReady: true,
+	}
+	if err := RunWithDeadlines(t.Context(), t.TempDir(), adapter, 5*time.Millisecond, time.Second); err == nil {
+		t.Fatal("unexpected Viewer exit succeeded")
+	}
+	events := adapter.Events()
+	waitDone := eventIndex(events, "wait_done")
+	terminate := eventIndex(events, "terminate_job")
+	dispose := eventIndex(events, "dispose")
+	if waitDone < 0 || terminate <= waitDone || dispose <= terminate {
+		t.Fatalf("events=%v", events)
+	}
+}
+
+func TestTimeoutTerminatesJobThenDisposesOnlyAfterWaitCompletes(t *testing.T) {
+	process := &fakeProcess{wait: make(chan error, 1), closeDoesNotExit: true}
+	adapter := &fakeAdapter{
+		grants:    []LaunchGrant{{Generation: 7, Nonce: "nonce", SessionID: 3}},
+		processes: []*fakeProcess{process}, readyBlock: true,
+	}
+	started := time.Now()
+	if err := RunWithDeadlines(t.Context(), t.TempDir(), adapter, 5*time.Millisecond, 15*time.Millisecond); err == nil {
+		t.Fatal("never-ready Viewer succeeded")
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("cleanup exceeded bounded recovery: %v", time.Since(started))
+	}
+	events := adapter.Events()
+	if eventIndex(events, "request_stop") < 0 || eventIndex(events, "terminate_job") <= eventIndex(events, "request_stop") {
+		t.Fatalf("graceful/Job termination order=%v", events)
+	}
+	if eventIndex(events, "dispose") >= 0 {
+		t.Fatalf("process handle disposed while Wait was pending: %v", events)
+	}
+	process.wait <- nil
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && eventIndex(adapter.Events(), "dispose") < 0 {
+		time.Sleep(time.Millisecond)
+	}
+	events = adapter.Events()
+	if eventIndex(events, "wait_done") < 0 || eventIndex(events, "dispose") <= eventIndex(events, "wait_done") {
+		t.Fatalf("deferred handle disposal order=%v", events)
+	}
+}
+
 type fakeAdapter struct {
-	mu             sync.Mutex
-	grants         []LaunchGrant
-	grantIndex     int
-	processes      []*fakeProcess
-	processIndex   int
-	authorized     []bool
-	authorizeIndex int
-	events         []string
-	setupDeadline  time.Duration
-	readyBlock     bool
-	exitAfterReady bool
+	mu                 sync.Mutex
+	grants             []LaunchGrant
+	grantIndex         int
+	processes          []*fakeProcess
+	processIndex       int
+	authorized         []bool
+	authorizeIndex     int
+	events             []string
+	setupDeadline      time.Duration
+	setupDeadlines     []time.Duration
+	readyBlock         bool
+	exitAfterReady     bool
+	blockReadyAt       int
+	authorization      <-chan struct{}
+	authorizationNever bool
+	readyHook          func(int64)
 }
 
 func (adapter *fakeAdapter) record(event string) {
@@ -182,6 +375,12 @@ func (adapter *fakeAdapter) Events() []string {
 	return append([]string(nil), adapter.events...)
 }
 
+func (adapter *fakeAdapter) SetupDeadlines() []time.Duration {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return append([]time.Duration(nil), adapter.setupDeadlines...)
+}
+
 func (adapter *fakeAdapter) CurrentViewer(context.Context, string) (string, error) {
 	adapter.record("load_current")
 	return "releases/2/viewer/CamStationViewer.exe", nil
@@ -191,6 +390,7 @@ func (adapter *fakeAdapter) RequestGrant(ctx context.Context) (LaunchGrant, erro
 	adapter.record("grant")
 	if deadline, ok := ctx.Deadline(); ok {
 		adapter.setupDeadline = time.Until(deadline)
+		adapter.setupDeadlines = append(adapter.setupDeadlines, adapter.setupDeadline)
 	}
 	if adapter.grantIndex >= len(adapter.grants) {
 		return LaunchGrant{}, errors.New("no authorized grant")
@@ -208,9 +408,12 @@ func (adapter *fakeAdapter) StartSuspended(_ context.Context, _ LaunchSpec) (Man
 	return process, nil
 }
 
-func (adapter *fakeAdapter) WaitReady(ctx context.Context, _ int64) error {
+func (adapter *fakeAdapter) WaitReady(ctx context.Context, generation int64) error {
 	adapter.record("wait_ready")
-	if adapter.readyBlock {
+	if adapter.readyHook != nil {
+		adapter.readyHook(generation)
+	}
+	if adapter.readyBlock || adapter.blockReadyAt == adapter.processIndex {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -224,8 +427,20 @@ func (adapter *fakeAdapter) WaitReady(ctx context.Context, _ int64) error {
 	return nil
 }
 
-func (adapter *fakeAdapter) RelaunchAuthorized(context.Context, int64) (bool, error) {
+func (adapter *fakeAdapter) RelaunchAuthorized(ctx context.Context, _ int64) (bool, error) {
 	adapter.record("relaunch_authorized")
+	if adapter.authorizationNever {
+		<-ctx.Done()
+		return false, ctx.Err()
+	}
+	if adapter.authorization != nil {
+		select {
+		case <-adapter.authorization:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 	if adapter.authorizeIndex >= len(adapter.authorized) {
 		return false, nil
 	}
@@ -254,7 +469,9 @@ func (process *fakeProcess) Wait() error {
 	if process.waitStarted != nil {
 		close(process.waitStarted)
 	}
-	return <-process.wait
+	err := <-process.wait
+	process.record("wait_done")
+	return err
 }
 func (process *fakeProcess) RequestStop() error {
 	process.record("request_stop")
@@ -269,6 +486,23 @@ func (process *fakeProcess) CloseJob() error {
 	case process.wait <- errors.New("Job closed"):
 	default:
 	}
+	return nil
+}
+
+func (process *fakeProcess) TerminateJob() error {
+	process.record("terminate_job")
+	if process.closeDoesNotExit {
+		return nil
+	}
+	select {
+	case process.wait <- errors.New("Job terminated"):
+	default:
+	}
+	return nil
+}
+
+func (process *fakeProcess) Dispose() error {
+	process.record("dispose")
 	return nil
 }
 

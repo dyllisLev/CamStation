@@ -118,7 +118,10 @@ func (windowsAdapter) StartSuspended(ctx context.Context, spec LaunchSpec) (Mana
 	}
 	process := &windowsProcess{job: job, process: info.Process, thread: info.Thread, pid: info.ProcessId}
 	if err := ctx.Err(); err != nil {
-		_ = process.CloseJob()
+		done := make(chan error, 1)
+		go func() { done <- process.Wait() }()
+		_ = process.TerminateJob()
+		waitAndDispose(process, done, context.Background(), GracefulShutdownDeadline)
 		return nil, err
 	}
 	return process, nil
@@ -147,17 +150,26 @@ func (windowsAdapter) WaitReady(ctx context.Context, generation int64) error {
 }
 
 func (windowsAdapter) RelaunchAuthorized(ctx context.Context, generation int64) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := vieweragent.LoadMachineState(vieweragent.PathsFromConfig(vieweragent.DefaultConfigPath()).State)
+		if err != nil {
+			return false, err
+		}
+		if state.ViewerGeneration == generation && state.ExpectedViewerGeneration > generation &&
+			state.ViewerState == "restart_authorized" && state.ViewerNonce == "" && state.ExpectedViewerPID == 0 {
+			return true, nil
+		}
+		if state.ViewerGeneration > generation || state.ViewerState == "recovery_failed" {
+			return false, errors.New("Agent rejected Viewer recovery generation")
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
 	}
-	state, err := vieweragent.LoadMachineState(vieweragent.PathsFromConfig(vieweragent.DefaultConfigPath()).State)
-	if err != nil {
-		return false, err
-	}
-	return state.ViewerGeneration == generation &&
-		state.ExpectedViewerGeneration > generation &&
-		state.ViewerState == "restart_authorized" &&
-		state.ViewerNonce == "" && state.ExpectedViewerPID == 0, nil
 }
 
 type windowsProcess struct {
@@ -224,14 +236,27 @@ func (process *windowsProcess) RequestStop() error {
 	return windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, process.pid)
 }
 
-func (process *windowsProcess) CloseJob() error {
+func (process *windowsProcess) TerminateJob() error {
 	process.mu.Lock()
 	defer process.mu.Unlock()
 	var first error
 	if !process.assigned && process.process != 0 {
 		_ = windows.TerminateProcess(process.process, 1)
 	}
-	for _, handle := range []*windows.Handle{&process.job, &process.thread, &process.process} {
+	if process.job != 0 {
+		if err := windows.CloseHandle(process.job); err != nil {
+			first = err
+		}
+		process.job = 0
+	}
+	return first
+}
+
+func (process *windowsProcess) Dispose() error {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	var first error
+	for _, handle := range []*windows.Handle{&process.thread, &process.process} {
 		if *handle != 0 {
 			if err := windows.CloseHandle(*handle); err != nil && first == nil {
 				first = err
