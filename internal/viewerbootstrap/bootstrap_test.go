@@ -77,10 +77,18 @@ func TestBootstrapDeadlinesRemainFiveAndFortyFiveSeconds(t *testing.T) {
 }
 
 func TestRunAssignsKillJobBeforeResume(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
 	process := &fakeProcess{wait: make(chan error, 1)}
 	adapter := &fakeAdapter{grants: []LaunchGrant{{Generation: 7, Nonce: "nonce", SessionID: 3}}, processes: []*fakeProcess{process}, exitAfterReady: true}
-	if err := RunWithDeadlines(t.Context(), t.TempDir(), adapter, 5*time.Second, 45*time.Second); err == nil {
-		t.Fatal("unexpected Viewer exit was treated as a successful bootstrap")
+	done := make(chan error, 1)
+	go func() { done <- RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Second, 45*time.Second) }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && eventIndex(adapter.Events(), "dispose") < 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 	events := adapter.Events()
 	if eventIndex(events, "assign_job") < 0 || eventIndex(events, "resume") <= eventIndex(events, "assign_job") || eventIndex(events, "wait_ready") < 0 || eventIndex(events, "terminate_job") < 0 || eventIndex(events, "dispose") < 0 {
@@ -189,6 +197,69 @@ func TestRunningBootstrapReceivesAuthorizedRelaunchGeneration(t *testing.T) {
 	}
 }
 
+func TestRecoveryFailedMonitorObservesFutureForcedRestart(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		exitAfterReady bool
+		authorized     []bool
+	}{
+		{name: "running child", authorized: []bool{false, true}},
+		{name: "exited child", exitAfterReady: true, authorized: []bool{false, false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			first := &fakeProcess{wait: make(chan error, 1)}
+			second := &fakeProcess{wait: make(chan error), waitStarted: make(chan struct{})}
+			adapter := &fakeAdapter{
+				grants: []LaunchGrant{
+					{Generation: 7, Nonce: "nonce-7", SessionID: 3},
+					{Generation: 8, Nonce: "nonce-8", SessionID: 3},
+				},
+				processes: []*fakeProcess{first, second}, authorized: test.authorized, exitAfterReady: test.exitAfterReady,
+			}
+			done := make(chan error, 1)
+			go func() { done <- RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, 10*time.Millisecond) }()
+			select {
+			case <-second.waitStarted:
+				cancel()
+			case err := <-done:
+				cancel()
+				t.Fatalf("bootstrap stopped before forced generation: err=%v events=%v", err, adapter.Events())
+			case <-time.After(500 * time.Millisecond):
+				cancel()
+				<-done
+				t.Fatalf("future forced generation was not observed: events=%v", adapter.Events())
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if adapter.AuthorizationCalls() < 2 {
+				t.Fatalf("authorization monitor was disabled: calls=%d events=%v", adapter.AuthorizationCalls(), adapter.Events())
+			}
+		})
+	}
+}
+
+func TestRecoveryFailedMonitorDoesNotHotLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	process := &fakeProcess{wait: make(chan error)}
+	adapter := &fakeAdapter{
+		grants:    []LaunchGrant{{Generation: 7, Nonce: "nonce-7", SessionID: 3}},
+		processes: []*fakeProcess{process},
+	}
+	done := make(chan error, 1)
+	go func() { done <- RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, 10*time.Millisecond) }()
+	time.Sleep(45 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	calls := adapter.AuthorizationCalls()
+	if calls < 2 || calls > 6 {
+		t.Fatalf("authorization probes hot-looped or stopped: calls=%d events=%v", calls, adapter.Events())
+	}
+}
+
 func TestRecoveryWindowIncludesDelayedAuthorizationAndNextRendererReadiness(t *testing.T) {
 	first := &fakeProcess{wait: make(chan error, 1)}
 	second := &fakeProcess{wait: make(chan error, 1)}
@@ -215,7 +286,7 @@ func TestRecoveryWindowIncludesDelayedAuthorizationAndNextRendererReadiness(t *t
 	}
 }
 
-func TestRecoveryStopsWhenAgentNeverPublishesAuthorization(t *testing.T) {
+func TestExitedViewerWaitsForFutureAuthorizationUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	process := &fakeProcess{wait: make(chan error, 1)}
@@ -225,7 +296,7 @@ func TestRecoveryStopsWhenAgentNeverPublishesAuthorization(t *testing.T) {
 	}
 	started := time.Now()
 	err := RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, 15*time.Millisecond)
-	if err == nil || time.Since(started) >= 100*time.Millisecond {
+	if err != nil || time.Since(started) < 150*time.Millisecond {
 		t.Fatalf("err=%v elapsed=%v", err, time.Since(started))
 	}
 }
@@ -331,13 +402,21 @@ func TestAgentRestartConvergenceDrivesBootstrapToReadyNextGeneration(t *testing.
 }
 
 func TestNormalExitTerminatesJobAfterWaitAndDisposesHandlesLast(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
 	process := &fakeProcess{wait: make(chan error, 1)}
 	adapter := &fakeAdapter{
 		grants:    []LaunchGrant{{Generation: 7, Nonce: "nonce", SessionID: 3}},
 		processes: []*fakeProcess{process}, exitAfterReady: true,
 	}
-	if err := RunWithDeadlines(t.Context(), t.TempDir(), adapter, 5*time.Millisecond, time.Second); err == nil {
-		t.Fatal("unexpected Viewer exit succeeded")
+	done := make(chan error, 1)
+	go func() { done <- RunWithDeadlines(ctx, t.TempDir(), adapter, 5*time.Millisecond, time.Second) }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && eventIndex(adapter.Events(), "dispose") < 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 	events := adapter.Events()
 	waitDone := eventIndex(events, "wait_done")
@@ -387,6 +466,7 @@ type fakeAdapter struct {
 	processIndex       int
 	authorized         []bool
 	authorizeIndex     int
+	authorizationCalls int
 	events             []string
 	setupDeadline      time.Duration
 	setupDeadlines     []time.Duration
@@ -464,6 +544,9 @@ func (adapter *fakeAdapter) WaitReady(ctx context.Context, generation int64) err
 
 func (adapter *fakeAdapter) RelaunchAuthorized(ctx context.Context, _ int64) (bool, error) {
 	adapter.record("relaunch_authorized")
+	adapter.mu.Lock()
+	adapter.authorizationCalls++
+	adapter.mu.Unlock()
 	if adapter.authorizationNever {
 		<-ctx.Done()
 		return false, ctx.Err()
@@ -482,6 +565,12 @@ func (adapter *fakeAdapter) RelaunchAuthorized(ctx context.Context, _ int64) (bo
 	value := adapter.authorized[adapter.authorizeIndex]
 	adapter.authorizeIndex++
 	return value, nil
+}
+
+func (adapter *fakeAdapter) AuthorizationCalls() int {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.authorizationCalls
 }
 
 type fakeProcess struct {

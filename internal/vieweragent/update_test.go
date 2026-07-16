@@ -910,6 +910,7 @@ func TestViewerReadyGateRequiresContinuousReadyWindow(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	now := time.Now()
 	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 1, ExpectedViewerGeneration: 1,
 		ViewerState: "running", RendererState: "ready", ViewerLastHeartbeatAt: &now, RendererLastHeartbeatAt: &now,
 	}); err != nil {
 		t.Fatal(err)
@@ -935,6 +936,68 @@ func TestViewerReadyGateDoesNotTrustStaleGreenState(t *testing.T) {
 	defer cancel()
 	if err := (&Agent{Paths: paths}).waitViewerReady(ctx, 5*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("stale Viewer opened update gate: %v", err)
+	}
+}
+
+func TestUpdateActivationRejectsReadinessGenerationRace(t *testing.T) {
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Update: filepath.Join(dir, "update.json")}
+	now := time.Now().UTC()
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 7,
+		ViewerState: "running", RendererState: "ready",
+		ViewerLastHeartbeatAt: &now, RendererLastHeartbeatAt: &now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	launches := 0
+	prepared := preparedUpdate{
+		journalPath:   paths.Update,
+		journal:       UpdateJournal{State: "verified", TargetVersion: "2.9.2", ArtifactSHA256: strings.Repeat("b", 64), Generation: 4, TransactionID: "update-race"},
+		installerPath: filepath.Join(dir, "CamStationViewerSetup.exe"),
+		args:          []string{"--update"},
+		launch: func(string, []string) error {
+			launches++
+			return nil
+		},
+	}
+	if err := prepared.markWaiting(); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{Paths: paths}
+	readyGeneration, err := agent.waitViewerReadyGeneration(t.Context(), 10*time.Millisecond)
+	if err != nil || readyGeneration != 7 {
+		t.Fatalf("ready generation=%d err=%v", readyGeneration, err)
+	}
+
+	racedAt := time.Now().UTC()
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 8,
+		ViewerState: "restart_authorized", RendererState: "not_ready",
+		ViewerLastHeartbeatAt: &racedAt, RendererLastHeartbeatAt: &racedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	launched, err := agent.launchPreparedUpdateIfReady(t.Context(), prepared, readyGeneration)
+	if err != nil || launched || launches != 0 {
+		t.Fatalf("raced activation launched=%v calls=%d err=%v", launched, launches, err)
+	}
+
+	readyAt := time.Now().UTC()
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 8, ExpectedViewerGeneration: 8,
+		ViewerState: "running", RendererState: "ready",
+		ViewerLastHeartbeatAt: &readyAt, RendererLastHeartbeatAt: &readyAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readyGeneration, err = agent.waitViewerReadyGeneration(t.Context(), 10*time.Millisecond)
+	if err != nil || readyGeneration != 8 {
+		t.Fatalf("replacement generation=%d err=%v", readyGeneration, err)
+	}
+	launched, err = agent.launchPreparedUpdateIfReady(t.Context(), prepared, readyGeneration)
+	if !errors.Is(err, ErrUpdateLaunched) || !launched || launches != 1 {
+		t.Fatalf("exact activation launched=%v calls=%d err=%v", launched, launches, err)
 	}
 }
 

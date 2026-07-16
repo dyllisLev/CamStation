@@ -491,6 +491,58 @@ func TestAutomaticViewerRecoveryPersistsCooldownAndHourlyBudgetExhaustion(t *tes
 	}
 }
 
+func TestPendingUpdateDoesNotBlockAutomaticViewerRecovery(t *testing.T) {
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	now := time.Now().UTC()
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 7,
+		ViewerState: "running", RendererState: "unresponsive",
+		ViewerLastHeartbeatAt: &now, RendererLastHeartbeatAt: &now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	updateStarted := make(chan struct{})
+	agent := NewAgent(Config{ClientID: "update-recovery-client"}, paths)
+	agent.ViewerRestartDeadline = time.Second
+	agent.Updater = updateExecutorFunc(func(ctx context.Context, _ UpdateTarget) error {
+		close(updateStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := agent.HandleCommand(ctx, Command{
+			ID: 901, Type: "update_app", PayloadHash: "pending-update", TTLSeconds: 300,
+			DesiredVersion: "2.9.1", ArtifactSHA256: strings.Repeat("a", 64), Generation: 9,
+		})
+		updateDone <- err
+	}()
+	<-updateStarted
+
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- agent.recoverViewerIfUnhealthy(ctx) }()
+	deadline := time.Now().Add(150 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		state, err := LoadMachineState(paths.State)
+		if err == nil && state.ViewerState == "restart_authorized" && state.ExpectedViewerGeneration == 8 {
+			cancel()
+			<-updateDone
+			<-recoveryDone
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-updateDone
+	<-recoveryDone
+	state, err := LoadMachineState(paths.State)
+	t.Fatalf("automatic recovery was blocked by pending update: state=%+v err=%v", state, err)
+}
+
 func TestUnsupportedViewerCommandsAreNotInAgentAllowlist(t *testing.T) {
 	for _, commandType := range []string{"restart_stream", "capture_diagnostics"} {
 		if supportedCommand(commandType) {
@@ -499,7 +551,7 @@ func TestUnsupportedViewerCommandsAreNotInAgentAllowlist(t *testing.T) {
 	}
 }
 
-func TestRestartAndUpdateSideEffectsShareOneProductionBoundary(t *testing.T) {
+func TestPendingUpdateDoesNotSerializeViewerRestartExecution(t *testing.T) {
 	agent := Agent{}
 	started := make(chan string, 2)
 	release := make(chan struct{})
@@ -510,26 +562,26 @@ func TestRestartAndUpdateSideEffectsShareOneProductionBoundary(t *testing.T) {
 	})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- agent.executeCommand(t.Context(), executor, Command{Type: "restart_viewer"}, "viewer-generation-2")
+		firstDone <- agent.executeCommand(t.Context(), executor, Command{Type: "update_app"}, "update-2")
 	}()
-	if first := <-started; first != "restart_viewer" {
+	if first := <-started; first != "update_app" {
 		t.Fatalf("first side effect=%q", first)
 	}
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- agent.executeCommand(t.Context(), executor, Command{Type: "update_app"}, "update-2")
+		secondDone <- agent.executeCommand(t.Context(), executor, Command{Type: "restart_viewer"}, "viewer-generation-2")
 	}()
 	select {
 	case second := <-started:
-		t.Fatalf("concurrent side effect started: %q", second)
-	case <-time.After(20 * time.Millisecond):
+		if second != "restart_viewer" {
+			t.Fatalf("second side effect=%q", second)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Viewer restart was blocked by pending update")
 	}
 	close(release)
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
-	}
-	if second := <-started; second != "update_app" {
-		t.Fatalf("second side effect=%q", second)
 	}
 	if err := <-secondDone; err != nil {
 		t.Fatal(err)

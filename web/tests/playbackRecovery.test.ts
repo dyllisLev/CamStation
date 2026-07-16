@@ -88,6 +88,21 @@ test("a media stall breaks the stable-progress reset interval", () => {
   assert.equal(episode.recordProgress(312_001), true);
 });
 
+test("a reported failure resets the continuous stable-progress interval", () => {
+  const episode = new PlaybackRecovery(["yard-live"]);
+
+  assert.equal(episode.recordProgress(1_000), false);
+  for (let now = 10_000; now <= 280_000; now += 9_000) {
+    assert.equal(episode.recordProgress(now), false);
+  }
+  episode.recordFailure(281_000);
+  assert.equal(episode.recordProgress(282_000), false);
+  for (let now = 291_000; now < 582_000; now += 9_000) {
+    assert.equal(episode.recordProgress(now), false);
+  }
+  assert.equal(episode.recordProgress(582_000), true);
+});
+
 test("brief progress cannot rearm the original 30-second episode", () => {
   const episode = new PlaybackRecovery(["yard-live"]);
   assert.equal(episode.nextFailure(1_000).attempt, 2);

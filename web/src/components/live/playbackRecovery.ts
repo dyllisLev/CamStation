@@ -43,7 +43,9 @@ export class PlaybackRecovery {
 
   recordProgress(now: number): boolean {
     this.stallStartedAt = null;
-    if (this.lastProgressAt === null || now - this.lastProgressAt > PLAYBACK_STALL_MS) this.stableSince = now;
+    if (this.stableSince === null || this.lastProgressAt === null || now - this.lastProgressAt > PLAYBACK_STALL_MS) {
+      this.stableSince = now;
+    }
     this.lastProgressAt = now;
     if (this.stableSince === null || now - this.stableSince < PLAYBACK_STABLE_RESET_MS) return false;
     this.episodeStartedAt = null;
@@ -53,6 +55,7 @@ export class PlaybackRecovery {
   }
 
   recordFailure(now: number): void {
+    this.stableSince = null;
     if (this.stallStartedAt === null) {
       this.stallStartedAt = now;
       if (this.episodeStartedAt === null) this.episodeStartedAt = now;

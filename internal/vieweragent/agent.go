@@ -103,13 +103,6 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	if !supportedCommand(command.Type) {
 		return agent.rejectCommand(ctx, command, "unsupported command")
 	}
-	if serializedSideEffect(command.Type) {
-		agent.sideEffectMu.Lock()
-		defer agent.sideEffectMu.Unlock()
-		if err := ctx.Err(); err != nil {
-			return CommandRecord{}, err
-		}
-	}
 	if command.TTLSeconds <= 0 {
 		command.TTLSeconds = 300
 	}
@@ -175,6 +168,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	switch command.Type {
 	case "restart_viewer":
 		var generation int64
+		agent.sideEffectMu.Lock()
 		allowed, stateErr := agent.updateState(func(state *MachineState) error {
 			if state.ForcedViewerRestartID == command.Key() && state.ExpectedViewerGeneration > state.ViewerGeneration {
 				generation = state.ExpectedViewerGeneration
@@ -195,6 +189,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 			state.ViewerState = "restart_authorized"
 			return nil
 		})
+		agent.sideEffectMu.Unlock()
 		if stateErr != nil || !allowed {
 			return agent.finishCommand(ctx, command, ledger, record, CommandRejected, "restart budget exhausted")
 		}
@@ -223,7 +218,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 	if executor == nil {
 		executor = agent
 	}
-	executionErr := executor.Execute(ctx, command, record.OperationKey)
+	executionErr := agent.executeCommand(ctx, executor, command, record.OperationKey)
 	if errors.Is(executionErr, ErrAgentRestartRequested) {
 		return record, ErrAgentRestartRequested
 	}
@@ -658,18 +653,19 @@ func (agent *Agent) recoverViewerIfUnhealthy(ctx context.Context) error {
 	}()
 
 	agent.sideEffectMu.Lock()
-	defer agent.sideEffectMu.Unlock()
 	if err := ctx.Err(); err != nil {
+		agent.sideEffectMu.Unlock()
 		return err
 	}
 	now := agent.now().UTC()
 	state, err := agent.loadState()
 	if err != nil || viewerRecoveryCause(state, now) == "" {
+		agent.sideEffectMu.Unlock()
 		return err
 	}
 	var generation int64
 	var allowed bool
-	if _, err := agent.updateState(func(state *MachineState) error {
+	_, err = agent.updateState(func(state *MachineState) error {
 		if viewerRecoveryCause(*state, now) == "" {
 			return nil
 		}
@@ -680,7 +676,9 @@ func (agent *Agent) recoverViewerIfUnhealthy(ctx context.Context) error {
 		}
 		state.ViewerState = "restart_authorized"
 		return nil
-	}); err != nil || !allowed {
+	})
+	agent.sideEffectMu.Unlock()
+	if err != nil || !allowed {
 		return err
 	}
 	return agent.executeViewerRestart(ctx, Command{Type: "restart_viewer", Generation: generation}, fmt.Sprintf("viewer-generation-%d", generation))
@@ -967,7 +965,7 @@ func (agent *Agent) now() time.Time {
 }
 
 func (agent *Agent) executeCommand(ctx context.Context, executor Executor, command Command, operationKey string) error {
-	if !serializedSideEffect(command.Type) {
+	if command.Type != "restart_agent" {
 		return executor.Execute(ctx, command, operationKey)
 	}
 	agent.sideEffectMu.Lock()
@@ -976,15 +974,6 @@ func (agent *Agent) executeCommand(ctx context.Context, executor Executor, comma
 		return err
 	}
 	return executor.Execute(ctx, command, operationKey)
-}
-
-func serializedSideEffect(commandType string) bool {
-	switch commandType {
-	case "restart_viewer", "restart_agent", "update_app":
-		return true
-	default:
-		return false
-	}
 }
 
 func supportedCommand(commandType string) bool {
@@ -1137,19 +1126,25 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 	case "restart_agent":
 		return ErrAgentRestartRequested
 	case "update_app":
-		updater := agent.Updater
-		if updater == nil {
-			updater = UpdateRunner{
+		target := UpdateTarget{
+			Version: command.DesiredVersion, SHA256: strings.ToLower(command.ArtifactSHA256),
+			Generation: command.Generation, TransactionID: operationKey,
+		}
+		var err error
+		if agent.Updater != nil {
+			err = agent.Updater.Run(ctx, target)
+		} else {
+			runner := UpdateRunner{
 				HTTPClient: agent.HTTPClient, ServerURL: agent.Config.ServerURL, StateDir: filepath.Dir(agent.Paths.Update),
 				AllowDevelopmentUnsigned: agent.Config.AllowDevelopmentUnsigned,
 				ExpectedSignerThumbprint: agent.Config.SignerThumbprint,
-				WaitViewerReady:          agent.waitViewerReady,
+			}
+			var prepared preparedUpdate
+			prepared, err = runner.prepare(ctx, target)
+			if err == nil {
+				err = agent.activatePreparedUpdate(ctx, prepared)
 			}
 		}
-		err := updater.Run(ctx, UpdateTarget{
-			Version: command.DesiredVersion, SHA256: strings.ToLower(command.ArtifactSHA256),
-			Generation: command.Generation, TransactionID: operationKey,
-		})
 		if errors.Is(err, ErrUpdateLaunched) {
 			return ErrAgentRestartRequested
 		}
@@ -1162,8 +1157,13 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 }
 
 func (agent *Agent) waitViewerReady(ctx context.Context, stableFor time.Duration) error {
+	_, err := agent.waitViewerReadyGeneration(ctx, stableFor)
+	return err
+}
+
+func (agent *Agent) waitViewerReadyGeneration(ctx context.Context, stableFor time.Duration) (int64, error) {
 	if stableFor <= 0 {
-		return errors.New("invalid Viewer-ready duration")
+		return 0, errors.New("invalid Viewer-ready duration")
 	}
 	interval := stableFor / 4
 	if interval < 5*time.Millisecond {
@@ -1175,30 +1175,74 @@ func (agent *Agent) waitViewerReady(ctx context.Context, stableFor time.Duration
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var readySince time.Time
+	var readyGeneration int64
 	for {
 		state, err := agent.loadState()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		now := agent.now()
-		freshViewer := state.ViewerLastHeartbeatAt != nil && !state.ViewerLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.ViewerLastHeartbeatAt) <= 15*time.Second
-		freshRenderer := state.RendererLastHeartbeatAt != nil && !state.RendererLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.RendererLastHeartbeatAt) <= 15*time.Second
-		if state.ViewerState == "running" && state.RendererState == "ready" && freshViewer && freshRenderer {
-			if readySince.IsZero() {
+		generation := readyViewerGeneration(state, now)
+		if generation > 0 {
+			if readySince.IsZero() || readyGeneration != generation {
 				readySince = now
+				readyGeneration = generation
 			}
 			if now.Sub(readySince) >= stableFor {
-				return nil
+				return readyGeneration, nil
 			}
 		} else {
 			readySince = time.Time{}
+			readyGeneration = 0
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return 0, ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func readyViewerGeneration(state MachineState, now time.Time) int64 {
+	freshViewer := state.ViewerLastHeartbeatAt != nil && !state.ViewerLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.ViewerLastHeartbeatAt) <= viewerHealthStaleAfter
+	freshRenderer := state.RendererLastHeartbeatAt != nil && !state.RendererLastHeartbeatAt.After(now.Add(5*time.Second)) && now.Sub(*state.RendererLastHeartbeatAt) <= viewerHealthStaleAfter
+	if state.ViewerGeneration <= 0 || state.ExpectedViewerGeneration != state.ViewerGeneration ||
+		state.ViewerState != "running" || state.RendererState != "ready" || !freshViewer || !freshRenderer {
+		return 0
+	}
+	return state.ViewerGeneration
+}
+
+func (agent *Agent) activatePreparedUpdate(ctx context.Context, prepared preparedUpdate) error {
+	if err := prepared.markWaiting(); err != nil {
+		return err
+	}
+	for {
+		generation, err := agent.waitViewerReadyGeneration(ctx, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		launched, err := agent.launchPreparedUpdateIfReady(ctx, prepared, generation)
+		if err != nil || launched {
+			return err
+		}
+	}
+}
+
+func (agent *Agent) launchPreparedUpdateIfReady(ctx context.Context, prepared preparedUpdate, generation int64) (bool, error) {
+	agent.sideEffectMu.Lock()
+	defer agent.sideEffectMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	state, err := agent.loadState()
+	if err != nil {
+		return false, err
+	}
+	if readyViewerGeneration(state, agent.now()) != generation {
+		return false, nil
+	}
+	return true, prepared.launchInstaller()
 }
 
 func (agent *Agent) executeViewerCommand(ctx context.Context, command Command, operationKey string) error {

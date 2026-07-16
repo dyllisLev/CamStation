@@ -54,18 +54,44 @@ type UpdateRunner struct {
 	Sleep                    func(context.Context, time.Duration) error
 }
 
+type preparedUpdate struct {
+	journalPath   string
+	journal       UpdateJournal
+	installerPath string
+	args          []string
+	launch        func(path string, args []string) error
+}
+
 func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
+	prepared, err := runner.prepare(ctx, target)
+	if err != nil {
+		return err
+	}
+	if err := prepared.markWaiting(); err != nil {
+		return err
+	}
+	waitReady := runner.WaitViewerReady
+	if waitReady == nil {
+		return errors.New("Viewer-ready gate is required")
+	}
+	if err := waitReady(ctx, 30*time.Second); err != nil {
+		return err
+	}
+	return prepared.launchInstaller()
+}
+
+func (runner UpdateRunner) prepare(ctx context.Context, target UpdateTarget) (preparedUpdate, error) {
 	serverURL, err := ValidateServerURL(runner.ServerURL)
 	if err != nil || !validUpdateTarget(target) || !filepath.IsAbs(runner.StateDir) {
-		return errors.New("invalid update target configuration")
+		return preparedUpdate{}, errors.New("invalid update target configuration")
 	}
 	journalPath := filepath.Join(runner.StateDir, "update.json")
 	journal, err := LoadUpdateJournal(journalPath)
 	if err != nil {
-		return err
+		return preparedUpdate{}, err
 	}
 	if journal.IsQuarantined(target.Version, target.SHA256, target.Generation) {
-		return ErrUpdateHardReject
+		return preparedUpdate{}, ErrUpdateHardReject
 	}
 	if journal.TargetVersion != target.Version || !strings.EqualFold(journal.ArtifactSHA256, target.SHA256) || journal.Generation != target.Generation {
 		journal.MetadataAttempts = 0
@@ -78,29 +104,29 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 	journal.Generation = target.Generation
 	journal.TransactionID = target.TransactionID
 	if err := SaveUpdateJournal(journalPath, journal); err != nil {
-		return err
+		return preparedUpdate{}, err
 	}
 
 	metadata, err := runner.loadMetadataRetried(ctx, serverURL, journalPath, &journal)
 	if err != nil {
-		return err
+		return preparedUpdate{}, err
 	}
 	if err := validateMetadata(metadata, target, runner.AllowDevelopmentUnsigned, runner.ExpectedSignerThumbprint); err != nil {
-		return runner.reject(journalPath, journal, target, "metadata_mismatch", err)
+		return preparedUpdate{}, runner.reject(journalPath, journal, target, "metadata_mismatch", err)
 	}
 
 	stageDir := filepath.Join(runner.StateDir, "updates", target.Version+"-"+target.SHA256+"-"+strconv.FormatInt(target.Generation, 10))
 	if err := os.MkdirAll(stageDir, 0o700); err != nil {
-		return err
+		return preparedUpdate{}, err
 	}
 	installerPath := filepath.Join(stageDir, "CamStationViewerSetup.exe")
 	delays := [...]time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
 	staged, stageErr := verifyStagedInstaller(installerPath, metadata)
 	if stageErr != nil {
-		return runner.reject(journalPath, journal, target, "staged_installer_invalid", stageErr)
+		return preparedUpdate{}, runner.reject(journalPath, journal, target, "staged_installer_invalid", stageErr)
 	}
 	if !staged && journal.DownloadAttempts >= len(delays)+1 {
-		return errors.New("download retry ledger is exhausted")
+		return preparedUpdate{}, errors.New("download retry ledger is exhausted")
 	}
 	for !staged && journal.DownloadAttempts < len(delays)+1 {
 		if journal.NextAttemptAt != nil && time.Now().Before(*journal.NextAttemptAt) {
@@ -109,18 +135,18 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 				sleep = waitContext
 			}
 			if err := sleep(ctx, time.Until(*journal.NextAttemptAt)); err != nil {
-				return err
+				return preparedUpdate{}, err
 			}
 			journal.NextAttemptAt = nil
 			if err := SaveUpdateJournal(journalPath, journal); err != nil {
-				return err
+				return preparedUpdate{}, err
 			}
 		}
 		journal.DownloadAttempts++
 		journal.NextAttemptAt = nil
 		journal.State = "downloading"
 		if err := SaveUpdateJournal(journalPath, journal); err != nil {
-			return err
+			return preparedUpdate{}, err
 		}
 		downloadCtx, cancelDownload := context.WithTimeout(ctx, runner.downloadDeadline())
 		err = runner.download(downloadCtx, serverURL, metadata, installerPath)
@@ -131,59 +157,48 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		}
 		var hard *hardUpdateError
 		if errors.As(err, &hard) {
-			return runner.reject(journalPath, journal, target, hard.category, hard)
+			return preparedUpdate{}, runner.reject(journalPath, journal, target, hard.category, hard)
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return preparedUpdate{}, ctx.Err()
 		}
 		if journal.DownloadAttempts == len(delays)+1 {
 			journal.State = "download_failed"
 			journal.LastError = "download_failed"
 			_ = SaveUpdateJournal(journalPath, journal)
-			return fmt.Errorf("download retries exhausted: %w", err)
+			return preparedUpdate{}, fmt.Errorf("download retries exhausted: %w", err)
 		}
 		journal.State = "download_retry_wait"
 		delay := delays[journal.DownloadAttempts-1]
 		next := time.Now().UTC().Add(delay)
 		journal.NextAttemptAt = &next
 		if err := SaveUpdateJournal(journalPath, journal); err != nil {
-			return err
+			return preparedUpdate{}, err
 		}
 		sleep := runner.Sleep
 		if sleep == nil {
 			sleep = waitContext
 		}
 		if err := sleep(ctx, delay); err != nil {
-			return err
+			return preparedUpdate{}, err
 		}
 		journal.NextAttemptAt = nil
 		if err := SaveUpdateJournal(journalPath, journal); err != nil {
-			return err
+			return preparedUpdate{}, err
 		}
 	}
 	journal.NextAttemptAt = nil
 	journal.State = "verified"
 	journal.InstallerPath = installerPath
 	if err := SaveUpdateJournal(journalPath, journal); err != nil {
-		return err
+		return preparedUpdate{}, err
 	}
 	verify := runner.VerifySignature
 	if verify == nil {
 		verify = verifyAuthenticode
 	}
 	if err := verify(installerPath, metadata.SignerThumbprint, metadata.DevelopmentUnsigned && runner.AllowDevelopmentUnsigned); err != nil {
-		return runner.reject(journalPath, journal, target, "signature_invalid", err)
-	}
-	waitReady := runner.WaitViewerReady
-	if waitReady == nil {
-		return errors.New("Viewer-ready gate is required")
-	}
-	journal.State = "waiting_for_viewer_session"
-	if err := SaveUpdateJournal(journalPath, journal); err != nil {
-		return err
-	}
-	if err := waitReady(ctx, 30*time.Second); err != nil {
-		return err
+		return preparedUpdate{}, runner.reject(journalPath, journal, target, "signature_invalid", err)
 	}
 	launch := runner.LaunchDetached
 	if launch == nil {
@@ -195,15 +210,24 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		"--expected-sha", target.SHA256,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 	}
-	journal.State = "launching_installer"
-	journal.LastError = ""
-	if err := SaveUpdateJournal(journalPath, journal); err != nil {
+	return preparedUpdate{journalPath: journalPath, journal: journal, installerPath: installerPath, args: args, launch: launch}, nil
+}
+
+func (prepared *preparedUpdate) markWaiting() error {
+	prepared.journal.State = "waiting_for_viewer_session"
+	return SaveUpdateJournal(prepared.journalPath, prepared.journal)
+}
+
+func (prepared *preparedUpdate) launchInstaller() error {
+	prepared.journal.State = "launching_installer"
+	prepared.journal.LastError = ""
+	if err := SaveUpdateJournal(prepared.journalPath, prepared.journal); err != nil {
 		return err
 	}
-	if err := launch(installerPath, args); err != nil {
-		journal.State = "launch_failed"
-		journal.LastError = "launch_failed"
-		_ = SaveUpdateJournal(journalPath, journal)
+	if err := prepared.launch(prepared.installerPath, prepared.args); err != nil {
+		prepared.journal.State = "launch_failed"
+		prepared.journal.LastError = "launch_failed"
+		_ = SaveUpdateJournal(prepared.journalPath, prepared.journal)
 		return err
 	}
 	return ErrUpdateLaunched
