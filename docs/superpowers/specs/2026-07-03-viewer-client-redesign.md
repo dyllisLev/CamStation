@@ -2,7 +2,13 @@
 
 ## Status
 
-Approved planning record. Implementation has not started from this spec.
+Superseded planning record. Implementation has not started from this spec.
+
+The approved replacement is
+`docs/superpowers/specs/2026-07-16-windows-viewer-control-and-playback-design.md`.
+It adds a Windows service control agent, unattended server-directed updates,
+bounded recovery, and WebRTC-to-MSE playback fallback. The implementation plan
+linked below must be rewritten against the replacement design before execution.
 
 ## Goal
 
@@ -10,12 +16,17 @@ Build a CamStation 2.0 Windows viewer EXE that asks for a server address and vie
 
 ## Decisions
 
-- Client runtime: hardened Electron first, not a thin webview shell.
+- Client runtime: machine-wide Windows Agent service plus a hardened Electron
+  Viewer, not a thin webview shell.
 - Live surface: keep the CamStation 2.0 web live UI for first release.
-- Liveness/control owner: Electron main process, not renderer JavaScript.
+- Liveness/control owner: Windows Agent service, not Electron or renderer
+  JavaScript.
 - Identity: operator-entered display name plus generated stable internal `clientId`.
-- First release scope: setup, settings, live load, main-process heartbeat, command delivery/ack, restart/reload, per-stream resubscribe, diagnostics, EXE version/download.
-- Excluded first release scope: login/pairing token, auto-update, native mpv/libVLC player, legacy `/new`.
+- First release scope: complete installer, service registration, setup, settings,
+  live load, service heartbeat, command delivery/ack, restart/reload, per-stream
+  resubscribe, diagnostics, and unattended server-directed updates.
+- Excluded first release scope: login/pairing token, native mpv/libVLC player,
+  legacy `/new`, and arbitrary remote shell or desktop control.
 
 ## Stability Requirements
 
