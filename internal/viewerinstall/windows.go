@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,28 +17,35 @@ import (
 )
 
 type Ownership struct {
-	handle   windows.Handle
-	stateDir string
+	handle       windows.Handle
+	stateDir     string
+	threadLocked bool
 }
 
 func Acquire(layout Layout) (*Ownership, error) {
+	// Windows mutex ownership belongs to an OS thread, not a goroutine.
+	// Every production caller defers Close on this same goroutine.
+	runtime.LockOSThread()
 	name, err := windows.UTF16PtrFromString(`Global\CamStationViewerUpdate`)
 	if err != nil {
+		runtime.UnlockOSThread()
 		return nil, err
 	}
 	handle, err := windows.CreateMutex(nil, false, name)
 	if err != nil {
+		runtime.UnlockOSThread()
 		return nil, err
 	}
 	result, err := windows.WaitForSingleObject(handle, 0)
 	if err != nil || (result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED) {
 		windows.CloseHandle(handle)
+		runtime.UnlockOSThread()
 		if err == nil {
 			err = ErrUpdateOwned
 		}
 		return nil, err
 	}
-	owner := &Ownership{handle: handle, stateDir: filepath.Clean(layout.StateDir)}
+	owner := &Ownership{handle: handle, stateDir: filepath.Clean(layout.StateDir), threadLocked: true}
 	if err := layout.Ensure(); err != nil {
 		_ = owner.Close()
 		return nil, err
@@ -51,7 +59,12 @@ func (owner *Ownership) Close() error {
 	}
 	handle := owner.handle
 	owner.handle = 0
-	return errors.Join(windows.ReleaseMutex(handle), windows.CloseHandle(handle))
+	err := errors.Join(windows.ReleaseMutex(handle), windows.CloseHandle(handle))
+	if owner.threadLocked {
+		owner.threadLocked = false
+		runtime.UnlockOSThread()
+	}
+	return err
 }
 
 func (owner *Ownership) owns(layout Layout) bool {

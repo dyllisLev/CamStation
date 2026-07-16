@@ -143,3 +143,4 @@ The follow-up focused review also verified these restart/concurrency cases witho
 - A quarantined rolled-back transaction reconciles to a rejected update and terminal rejected command.
 - An unrelated owner is never accepted as update success. Only the exact committed transaction can satisfy bounded ownership observation.
 - Update ownership blocks uninstall before unregister or file-removal callbacks execute.
+- Windows named-mutex acquisition pins the owning goroutine to its OS thread until `Ownership.Close`, satisfying Win32 mutex release semantics across the full transaction.
