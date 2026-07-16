@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -110,7 +111,9 @@ func (client ControlClient) StreamSSE(ctx context.Context, onFrame func(ControlR
 		return 0, err
 	}
 	request.Header.Set("Accept", "text/event-stream")
+	headerTimer := time.AfterFunc(client.deadline(), cancel)
 	response, err := client.httpClient().Do(request)
+	headerTimer.Stop()
 	if err != nil {
 		return 0, err
 	}
@@ -166,6 +169,7 @@ func scanSSE(ctx context.Context, reader io.Reader, frames chan<- sseFrame) {
 	scanner.Buffer(make([]byte, 1024), maxControlMessageBytes)
 	keepalive := false
 	data := make([]string, 0, 1)
+	frameBytes := 0
 	send := func(frame sseFrame) bool {
 		select {
 		case frames <- frame:
@@ -176,6 +180,11 @@ func scanSSE(ctx context.Context, reader io.Reader, frames chan<- sseFrame) {
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
+		frameBytes += len(line) + 1
+		if frameBytes > maxControlMessageBytes {
+			send(sseFrame{err: errors.New("SSE frame exceeds 64 KiB")})
+			return
+		}
 		if line != "" {
 			if strings.HasPrefix(line, ":") {
 				keepalive = true
@@ -204,6 +213,7 @@ func scanSSE(ctx context.Context, reader io.Reader, frames chan<- sseFrame) {
 		}
 		keepalive = false
 		data = data[:0]
+		frameBytes = 0
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		send(sseFrame{err: err})
@@ -254,57 +264,157 @@ func (client ControlClient) RunControl(ctx context.Context, probes *ReconnectSta
 	if probes == nil {
 		probes = &ReconnectState{}
 	}
-	for {
-		var callbackErr error
-		frames, _ := client.StreamSSE(ctx, func(result ControlResult) error {
-			callbackErr = onResult(result)
-			return callbackErr
-		})
-		if callbackErr != nil {
-			return callbackErr
+	runCtx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	var sseCancel, pollCancel context.CancelFunc
+	var probeTimer, pollTimer *time.Timer
+	defer func() {
+		cancel()
+		if sseCancel != nil {
+			sseCancel()
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if pollCancel != nil {
+			pollCancel()
 		}
-		probes.ObserveSSESession(frames)
-		delay := probes.NextDelay()
-		if err := onResult(ControlResult{Transport: ControlTransportLongPoll}); err != nil {
-			return err
+		stopControlTimer(probeTimer)
+		stopControlTimer(pollTimer)
+		workers.Wait()
+	}()
+
+	type sseEvent struct {
+		result ControlResult
+		frame  bool
+		frames int
+	}
+	type pollEvent struct {
+		result ControlResult
+		err    error
+	}
+	sseEvents := make(chan sseEvent)
+	pollEvents := make(chan pollEvent)
+	sseActive := false
+	pollActive := false
+	fallback := false
+	var probeC, pollC <-chan time.Time
+
+	startSSE := func() {
+		if sseActive {
+			return
 		}
-		probeAt := time.Now().Add(delay)
-		for time.Until(probeAt) > 0 {
-			pollCtx, cancel := context.WithDeadline(ctx, probeAt)
-			result, pollErr := client.longPoll(pollCtx)
-			cancel()
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if pollErr == nil {
-				if err := onResult(result); err != nil {
-					return err
+		var sseCtx context.Context
+		sseCtx, sseCancel = context.WithCancel(runCtx)
+		sseActive = true
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			frames, _ := client.StreamSSE(sseCtx, func(result ControlResult) error {
+				select {
+				case sseEvents <- sseEvent{result: result, frame: true}:
+					return nil
+				case <-sseCtx.Done():
+					return sseCtx.Err()
 				}
-				if result.Command == nil {
-					remaining := time.Until(probeAt)
-					if remaining > time.Second {
-						remaining = time.Second
+			})
+			select {
+			case sseEvents <- sseEvent{frames: frames}:
+			case <-runCtx.Done():
+			}
+		}()
+	}
+	startPoll := func() {
+		if pollActive || !fallback {
+			return
+		}
+		var pollCtx context.Context
+		pollCtx, pollCancel = context.WithCancel(runCtx)
+		pollActive = true
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			result, err := client.longPoll(pollCtx)
+			select {
+			case pollEvents <- pollEvent{result: result, err: err}:
+			case <-runCtx.Done():
+			}
+		}()
+	}
+	scheduleProbe := func() {
+		probeTimer = time.NewTimer(probes.NextDelay())
+		probeC = probeTimer.C
+	}
+	schedulePoll := func() {
+		pollTimer = time.NewTimer(time.Second)
+		pollC = pollTimer.C
+	}
+
+	startSSE()
+	for {
+		select {
+		case <-runCtx.Done():
+			return runCtx.Err()
+		case event := <-sseEvents:
+			if event.frame {
+				if event.result.Proven && fallback {
+					fallback = false
+					stopControlTimer(pollTimer)
+					pollTimer, pollC = nil, nil
+					if pollCancel != nil {
+						pollCancel()
 					}
-					if remaining > 0 && waitContext(ctx, remaining) != nil {
-						return ctx.Err()
-					}
+				}
+				if err := onResult(event.result); err != nil {
+					return err
 				}
 				continue
 			}
-			remaining := time.Until(probeAt)
-			if remaining <= 0 {
-				break
+			sseActive = false
+			sseCancel = nil
+			if runCtx.Err() != nil {
+				return runCtx.Err()
 			}
-			if remaining > time.Second {
-				remaining = time.Second
+			probes.ObserveSSESession(event.frames)
+			if !fallback {
+				fallback = true
+				if err := onResult(ControlResult{Transport: ControlTransportLongPoll}); err != nil {
+					return err
+				}
+				startPoll()
 			}
-			if waitContext(ctx, remaining) != nil {
-				return ctx.Err()
+			scheduleProbe()
+		case event := <-pollEvents:
+			pollActive = false
+			pollCancel = nil
+			if event.err == nil {
+				if err := onResult(event.result); err != nil {
+					return err
+				}
+				if event.result.Command != nil {
+					startPoll()
+					continue
+				}
 			}
+			if fallback {
+				schedulePoll()
+			}
+		case <-probeC:
+			probeTimer, probeC = nil, nil
+			if fallback {
+				startSSE()
+			}
+		case <-pollC:
+			pollTimer, pollC = nil, nil
+			startPoll()
 		}
+	}
+}
+
+func stopControlTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 

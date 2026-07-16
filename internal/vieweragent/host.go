@@ -74,7 +74,6 @@ func RunChildSupervisor(ctx context.Context, run func(context.Context) ChildExit
 	delays := [...]time.Duration{5 * time.Second, 30 * time.Second, 120 * time.Second}
 	var lastErr error
 	crashRestarts := 0
-	plannedReloaded := false
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -83,12 +82,8 @@ func RunChildSupervisor(ctx context.Context, run func(context.Context) ChildExit
 		if ctx.Err() != nil {
 			return nil
 		}
-		if exit.Kind == ChildPlannedRestart && !plannedReloaded {
-			plannedReloaded = true
-			continue
-		}
 		if exit.Kind == ChildPlannedRestart {
-			exit = ChildExit{Kind: ChildCrashed, Err: errors.New("repeated planned restart")}
+			continue
 		}
 		switch exit.Kind {
 		case ChildStopped:

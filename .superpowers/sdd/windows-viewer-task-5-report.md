@@ -67,6 +67,44 @@ ok camstation/internal/vieweragent 2.018s
 ok camstation/cmd/camstation-viewer-agent 1.029s
 ```
 
+## Second re-review transport delta
+
+The second review reported no critical findings and left two important and one minor issue. This delta addresses only those new findings:
+
+- SSE response-header acquisition is bounded by the configured 25-second deadline, but that timer is stopped as soon as `Do` returns headers; a healthy persistent stream then uses only the per-frame inactivity timer;
+- fallback uses one serialized callback event loop with at most one SSE probe/session and one long poll. Probe scheduling no longer truncates the poll's own full deadline, and proven SSE recovery cancels the poll;
+- every ready-session planned Agent exit reloads immediately without consuming crash delays; exit 75 before readiness remains a Windows startup failure before the supervisor sees a child session;
+- the SSE parser counts the entire normalized frame before accumulating data and rejects a cumulative frame over 64 KiB.
+
+Second-review RED evidence:
+
+```text
+--- FAIL: TestSSEHeaderBlackholeFallsBackWithinDeadline (0.50s)
+    result={Transport: Command:<nil> Proven:false} polls=0 elapsed=500.479989ms err=context deadline exceeded
+--- FAIL: TestSSEProbesDoNotShortenLongPoll (0.50s)
+    context deadline exceeded
+--- FAIL: TestLongPollCommandArrivesWhileSSEProbePending (0.50s)
+    context deadline exceeded
+
+--- FAIL: TestMultiplePlannedAgentRestartsNeverConsumeCrashBudget
+    err=<nil> runs=5 delays=[5s 30s 2m0s]
+
+--- FAIL: TestSSERejectsCumulativeOversizedFrame
+    oversized frame err=decode SSE command: invalid character 'x' looking for beginning of value
+```
+
+Fresh focused GREEN after the second-review delta:
+
+```text
+$ go test ./internal/vieweragent ./cmd/camstation-viewer-agent -count=1
+ok camstation/internal/vieweragent 0.957s
+ok camstation/cmd/camstation-viewer-agent 0.015s
+
+$ go test -race ./internal/vieweragent ./cmd/camstation-viewer-agent -count=1
+ok camstation/internal/vieweragent 7.321s
+ok camstation/cmd/camstation-viewer-agent 1.022s
+```
+
 ## Verification
 
 ```text
@@ -89,6 +127,25 @@ $ git diff --check
 PASS
 ```
 
+Fresh second-review full verification:
+
+```text
+$ go test ./... -count=1
+PASS (camstationd 55.267s, store 34.020s, vieweragent 2.182s)
+
+$ go vet ./...
+PASS
+
+$ go build -o /tmp/camstationd-task5-rereview ./cmd/camstationd
+PASS
+
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-agent-rereview.exe ./cmd/camstation-viewer-agent
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-host-rereview.exe ./cmd/camstation-viewer-host
+$ file /tmp/camstation-viewer-agent-rereview.exe /tmp/camstation-viewer-host-rereview.exe
+/tmp/camstation-viewer-agent-rereview.exe: PE32+ executable (console) x86-64, for MS Windows, 16 sections
+/tmp/camstation-viewer-host-rereview.exe:  PE32+ executable (console) x86-64, for MS Windows, 16 sections
+```
+
 ## Deliberate Task 5 boundary
 
 The core has injected executors for Viewer reload/restart, stream actions, diagnostics, and update activation. Task 6 supplies the Electron/bootstrap/Job integration; Task 7 supplies updater/installer activation. `ping` and idempotent `restart_agent` boot-generation handoff work in Task 5 without those later adapters.
@@ -98,3 +155,5 @@ The core has injected executors for Viewer reload/restart, stream actions, diagn
 `6bf2806 feat(viewer-agent): add Windows control service`
 
 Post-review hardening: `fix(viewer-agent): harden control service recovery`
+
+Second re-review transport delta: `fix(viewer-agent): isolate control transport deadlines`

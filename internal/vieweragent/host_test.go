@@ -49,19 +49,25 @@ func TestPlannedAgentRestartReloadsImmediatelyWithoutCrashBudget(t *testing.T) {
 	}
 }
 
-func TestRepeatedPlannedRestartCannotTightLoopForever(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	runs := 0
-	err := RunChildSupervisor(ctx, func(context.Context) ChildExit {
+func TestMultiplePlannedAgentRestartsNeverConsumeCrashBudget(t *testing.T) {
+	var runs int
+	var delays []time.Duration
+	err := RunChildSupervisor(t.Context(), func(context.Context) ChildExit {
 		runs++
-		if runs > 10 {
-			cancel()
+		switch {
+		case runs <= 3:
+			return ChildExit{Kind: ChildPlannedRestart}
+		case runs == 4:
+			return ChildExit{Kind: ChildCrashed, Err: errors.New("crashed")}
+		default:
+			return ChildExit{Kind: ChildStopped}
 		}
-		return ChildExit{Kind: ChildPlannedRestart}
-	}, func(context.Context, time.Duration) error { return nil })
-	if err == nil || runs != 5 {
-		t.Fatalf("err=%v runs=%d", err, runs)
+	}, func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	if err != nil || runs != 5 || !reflect.DeepEqual(delays, []time.Duration{5 * time.Second}) {
+		t.Fatalf("err=%v runs=%d delays=%v", err, runs, delays)
 	}
 }
 

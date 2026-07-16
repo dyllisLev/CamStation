@@ -211,3 +211,166 @@ func TestImmediateEmptyPollCannotTightLoopBeforeNextSSEProbe(t *testing.T) {
 		t.Fatalf("empty long poll spun %d times in one probe interval", pollCalls.Load())
 	}
 }
+
+func TestSSEHeaderBlackholeFallsBackWithinDeadline(t *testing.T) {
+	var pollCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/control"):
+			<-r.Context().Done()
+		case strings.HasSuffix(r.URL.Path, "/commands/next"):
+			pollCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-header-blackhole", ReadDeadline: 30 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	result, err := client.Next(ctx)
+	if err != nil || result.Transport != ControlTransportLongPoll || pollCalls.Load() != 1 {
+		t.Fatalf("result=%+v polls=%d elapsed=%v err=%v", result, pollCalls.Load(), time.Since(started), err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("header blackhole fallback took %v", elapsed)
+	}
+}
+
+func TestSSEHeaderDeadlineDoesNotEndHealthyStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for range 5 {
+			_, _ = fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+			time.Sleep(12 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-header-healthy", ReadDeadline: 30 * time.Millisecond}
+	seen, err := client.StreamSSE(t.Context(), func(ControlResult) error { return nil })
+	if err == nil || seen < 5 {
+		t.Fatalf("healthy stream ended before all frames: seen=%d err=%v", seen, err)
+	}
+}
+
+func TestSSEProbesDoNotShortenLongPoll(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	var sseCalls, pollCalls, earlyCancels, overlappingPolls, activePolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/control") {
+			sseCalls.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		pollCalls.Add(1)
+		if activePolls.Add(1) > 1 {
+			overlappingPolls.Add(1)
+		}
+		defer activePolls.Add(-1)
+		select {
+		case <-time.After(70 * time.Millisecond):
+			_ = json.NewEncoder(w).Encode(Command{ID: 70, Type: "ping", PayloadHash: "poll-70", TTLSeconds: 300})
+		case <-r.Context().Done():
+			earlyCancels.Add(1)
+		}
+	}))
+	defer server.Close()
+
+	probes := ReconnectState{delays: []time.Duration{5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond, 20 * time.Millisecond}}
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-full-poll", ReadDeadline: 150 * time.Millisecond}
+	var commandID atomic.Int64
+	err := client.RunControl(ctx, &probes, func(result ControlResult) error {
+		if result.Command != nil {
+			commandID.Store(result.Command.ID)
+			cancel()
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if commandID.Load() != 70 || sseCalls.Load() < 4 || pollCalls.Load() != 1 || earlyCancels.Load() != 0 || overlappingPolls.Load() != 0 {
+		t.Fatalf("command=%d sse=%d polls=%d earlyCancel=%d overlap=%d", commandID.Load(), sseCalls.Load(), pollCalls.Load(), earlyCancels.Load(), overlappingPolls.Load())
+	}
+}
+
+func TestLongPollCommandArrivesWhileSSEProbePending(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	var sseCalls atomic.Int32
+	var probeActive atomic.Bool
+	var commandDuringProbe atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/control") {
+			if sseCalls.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			probeActive.Store(true)
+			defer probeActive.Store(false)
+			<-r.Context().Done()
+			return
+		}
+		time.Sleep(30 * time.Millisecond)
+		commandDuringProbe.Store(probeActive.Load())
+		_ = json.NewEncoder(w).Encode(Command{ID: 71, Type: "ping", PayloadHash: "poll-71", TTLSeconds: 300})
+	}))
+	defer server.Close()
+
+	probes := ReconnectState{delays: []time.Duration{5 * time.Millisecond}}
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-pending-probe", ReadDeadline: 100 * time.Millisecond}
+	var commandID atomic.Int64
+	err := client.RunControl(ctx, &probes, func(result ControlResult) error {
+		if result.Command != nil {
+			commandID.Store(result.Command.ID)
+			cancel()
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if commandID.Load() != 71 || !commandDuringProbe.Load() {
+		t.Fatalf("command=%d duringProbe=%v sseCalls=%d", commandID.Load(), commandDuringProbe.Load(), sseCalls.Load())
+	}
+}
+
+func TestSSERejectsCumulativeOversizedFrame(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for range 700 {
+			_, _ = fmt.Fprintf(w, "data: %s\n", strings.Repeat("x", 100))
+		}
+		_, _ = fmt.Fprint(w, "\n")
+	}))
+	defer server.Close()
+
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-large-frame", ReadDeadline: time.Second}
+	_, err := client.StreamSSE(t.Context(), func(ControlResult) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "SSE frame exceeds 64 KiB") {
+		t.Fatalf("oversized frame err=%v", err)
+	}
+}
+
+func TestSSEAcceptsWhitespacePaddedFrame(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data:    {\"id\":72,\"type\":\"ping\",\"payloadHash\":\"space\",\"ttlSeconds\":300}   \n\n")
+	}))
+	defer server.Close()
+
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-space-frame", ReadDeadline: time.Second}
+	var commandID int64
+	_, err := client.StreamSSE(t.Context(), func(result ControlResult) error {
+		commandID = result.Command.ID
+		return errStopSSETest
+	})
+	if !errors.Is(err, errStopSSETest) || commandID != 72 {
+		t.Fatalf("command=%d err=%v", commandID, err)
+	}
+}
