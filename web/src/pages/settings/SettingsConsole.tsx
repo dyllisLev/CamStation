@@ -8,6 +8,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../../components/ui/panel";
 import { settingsLabels } from "./settingsLabels";
+import { ViewerClientDownloadCard } from "./ViewerClientDownloadCard";
 
 type SettingsForm = {
   readonly segmentMinutes: string;
@@ -129,6 +130,8 @@ export function SettingsConsole() {
           <div className="new-feature-card text-xs text-slate-400">{t("applyImmediately")}</div>
         </PanelBody>
       </Panel>
+
+      <ViewerClientDownloadCard />
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel>

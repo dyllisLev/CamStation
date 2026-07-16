@@ -17,6 +17,7 @@ export * from "./eventsIncidentsQueries";
 export * from "./recordingsQueries";
 export * from "./settingsJobsQueries";
 export * from "./streamsViewersSystemQueries";
+export * from "./viewerReleaseQueries";
 
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 15000 });
