@@ -153,7 +153,7 @@ export function useWebRtcMseStream(
         lastBinaryAt: null,
         lastProgressAt: null,
         readyState: video.readyState,
-        stalledForMs: 0,
+        stalledForMs: recovery.stalledForMs(Date.now()),
         attempt: options.attempt,
         reconnectCount: counts.reconnect,
         fallbackCount: counts.fallback,
@@ -169,7 +169,7 @@ export function useWebRtcMseStream(
         ...current,
         phase: "cooldown",
         readyState: video.readyState,
-        stalledForMs: current.lastProgressAt ? Math.max(0, Date.now() - current.lastProgressAt) : 0,
+        stalledForMs: recovery.stalledForMs(Date.now()),
         errorCategory: "episode_exhausted",
       }));
       if (scheduleProbe && !lowFrequencyProbeUsed) {
@@ -211,13 +211,15 @@ export function useWebRtcMseStream(
 
     function failAttempt(token: number, errorCategory: PlaybackErrorCategory) {
       if (destroyed || token !== generation) return;
+      const now = Date.now();
+      recovery.recordFailure(now);
       generation++;
       teardownAttempt();
       if (terminalAttempt) {
-        enterCooldown(Date.now() + PLAYBACK_COOLDOWN_MS, false);
+        enterCooldown(now + PLAYBACK_COOLDOWN_MS, false);
         return;
       }
-      advance(recovery.nextFailure(Date.now()), errorCategory);
+      advance(recovery.nextFailure(now), errorCategory);
     }
 
     function resetStallTimer(token: number) {
@@ -268,9 +270,11 @@ export function useWebRtcMseStream(
     ) {
       if (destroyed) return;
       teardownAttempt();
-      const remainingMs = recovery.remainingMs(Date.now());
+      const now = Date.now();
+      const remainingMs = recovery.remainingMs(now);
       if (!terminal && remainingMs === 0) {
-        advance(recovery.nextFailure(Date.now()), "episode_exhausted");
+        recovery.recordFailure(now);
+        advance(recovery.nextFailure(now), "episode_exhausted");
         return;
       }
       const token = ++generation;

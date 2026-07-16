@@ -78,3 +78,37 @@ test("late attempts are bounded by the original remaining deadline", () => {
   assert.equal(episode.remainingMs(30_000), 0);
   assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 330_000 });
 });
+
+test("stall duration spans retry transitions and terminal cooldown", () => {
+  const episode = new PlaybackRecovery(["yard-live", "yard-focus"], 0);
+
+  episode.recordFailure(1_000);
+  assert.equal(episode.stalledForMs(1_000), 0);
+  assert.equal(episode.nextFailure(1_000).attempt, 2);
+
+  episode.recordFailure(5_000);
+  assert.equal(episode.stalledForMs(5_000), 4_000);
+  assert.equal(episode.nextFailure(5_000).attempt, 3);
+
+  episode.recordFailure(10_000);
+  assert.equal(episode.nextFailure(10_000).attempt, 4);
+  episode.recordFailure(20_000);
+  assert.equal(episode.nextFailure(20_000).attempt, 5);
+  episode.recordFailure(30_000);
+
+  assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 330_000 });
+  assert.equal(episode.stalledForMs(30_000), 29_000);
+});
+
+test("genuine media progress clears stall telemetry without rearming the episode", () => {
+  const episode = new PlaybackRecovery(["yard-live"], 0);
+
+  episode.recordFailure(1_000);
+  assert.equal(episode.stalledForMs(4_000), 3_000);
+  assert.equal(episode.recordProgress(5_000), false);
+
+  assert.equal(episode.stalledForMs(6_000), 0);
+  assert.equal(episode.remainingMs(6_000), 24_000);
+  episode.recordFailure(8_000);
+  assert.equal(episode.stalledForMs(10_000), 2_000);
+});

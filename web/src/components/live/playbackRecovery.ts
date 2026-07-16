@@ -17,6 +17,7 @@ export class PlaybackRecovery {
   private step = 0;
   private stableSince: number | null = null;
   private lastProgressAt: number | null = null;
+  private stallStartedAt: number | null = null;
 
   constructor(streamNames: readonly string[], startedAt: number) {
     this.streamNames = streamNames.filter((name, index) => Boolean(name) && streamNames.indexOf(name) === index);
@@ -41,6 +42,7 @@ export class PlaybackRecovery {
   }
 
   recordProgress(now: number): boolean {
+    this.stallStartedAt = null;
     if (this.lastProgressAt === null || now - this.lastProgressAt > PLAYBACK_STALL_MS) this.stableSince = now;
     this.lastProgressAt = now;
     if (this.stableSince === null || now - this.stableSince < PLAYBACK_STABLE_RESET_MS) return false;
@@ -48,6 +50,14 @@ export class PlaybackRecovery {
     this.step = 0;
     this.stableSince = now;
     return true;
+  }
+
+  recordFailure(now: number): void {
+    if (this.stallStartedAt === null) this.stallStartedAt = now;
+  }
+
+  stalledForMs(now: number): number {
+    return this.stallStartedAt === null ? 0 : Math.max(0, now - this.stallStartedAt);
   }
 
   remainingMs(now: number): number {
