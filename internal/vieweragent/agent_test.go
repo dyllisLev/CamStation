@@ -26,6 +26,12 @@ func (f reporterFunc) Report(ctx context.Context, command Command, state Command
 	return f(ctx, command, state, operationKey, commandError)
 }
 
+func serveTestViewerPipe(ctx context.Context, _ Config, _ func(PipeMessage) (PipeMessage, error), ready func()) error {
+	ready()
+	<-ctx.Done()
+	return nil
+}
+
 func TestCommandRunningIntentIsDurableBeforeExecution(t *testing.T) {
 	dir := t.TempDir()
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
@@ -260,6 +266,7 @@ func TestAgentStartupConvergesStaleViewerIdentityOnce(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			agent := NewAgent(Config{ClientID: "startup-client", ServerURL: "http://127.0.0.1:1", DisplayName: "Viewer", InstallDir: dir}, paths)
+			agent.ServePipe = serveTestViewerPipe
 			agent.Ready = cancel
 			if err := agent.Run(ctx); err != nil {
 				t.Fatal(err)
@@ -321,6 +328,7 @@ func TestAgentHeartbeatContinuesWithoutViewerIPC(t *testing.T) {
 	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "No Login", InstallDir: dir, ClientID: "client-hb"}
 	agent := NewAgent(config, MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")})
 	agent.HTTPClient = server.Client()
+	agent.ServePipe = serveTestViewerPipe
 	agent.HeartbeatInterval = 10 * time.Millisecond
 	agent.ControlReadDeadline = time.Second
 	ctx, cancel := context.WithCancel(t.Context())
@@ -376,6 +384,7 @@ func TestCorruptLedgerFailsStartupBeforeAnyOnlineHeartbeat(t *testing.T) {
 	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Broken", InstallDir: dir, ClientID: "broken-ledger"}
 	agent := NewAgent(config, paths)
 	agent.HTTPClient = server.Client()
+	agent.ServePipe = serveTestViewerPipe
 	readyCalls := 0
 	agent.Ready = func() { readyCalls++ }
 	err := agent.Run(t.Context())
@@ -401,6 +410,7 @@ func TestAgentSignalsReadyAfterCommandEngineHealthCheck(t *testing.T) {
 	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Ready", InstallDir: dir, ClientID: "ready-agent"}
 	agent := NewAgent(config, paths)
 	agent.HTTPClient = server.Client()
+	agent.ServePipe = serveTestViewerPipe
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan struct{})
 	agent.Ready = func() {
@@ -416,6 +426,162 @@ func TestAgentSignalsReadyAfterCommandEngineHealthCheck(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgentStartsViewerPipeBeforeReconcilingDurableRestart(t *testing.T) {
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	if err := SaveMachineState(paths.State, MachineState{
+		ViewerGeneration: 7, ExpectedViewerGeneration: 8, ViewerState: "running", RendererState: "ready",
+		ViewerNonce: "stale", ExpectedViewerPID: 99, ExpectedViewerSession: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"61": {
+		ID: 61, Type: "restart_viewer", PayloadHash: "restart-61", OperationKey: "viewer-generation-8",
+		Generation: 8, State: CommandRunning,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	pipeHandlers := make(chan func(PipeMessage) (PipeMessage, error))
+	pipeStopped := make(chan struct{})
+	bootstrapDone := make(chan error, 1)
+	go func() {
+		handler := <-pipeHandlers
+		grant, err := handler(PipeMessage{Version: 1, RequestID: "recovery-bootstrap", Type: "bootstrap_request", PID: 43, SessionID: 3})
+		if err == nil && grant.Generation != 8 {
+			err = errors.New("bootstrap did not preserve generation 8")
+		}
+		if err == nil {
+			_, err = handler(PipeMessage{Version: 1, RequestID: "recovery-register", Type: "viewer_register", PID: 100, SessionID: 3,
+				Generation: grant.Generation, Nonce: grant.Nonce})
+		}
+		if err == nil {
+			_, err = handler(PipeMessage{Version: 1, RequestID: "recovery-ready", Type: "renderer_status", PID: 100, SessionID: 3,
+				Generation: grant.Generation, Nonce: grant.Nonce, Payload: json.RawMessage(`{"state":"ready"}`)})
+		}
+		bootstrapDone <- err
+	}()
+
+	config := Config{SchemaVersion: SchemaVersion, ServerURL: "http://127.0.0.1:1", DisplayName: "Recovery", InstallDir: dir, ClientID: "recovery-agent"}
+	agent := NewAgent(config, paths)
+	agent.ViewerRestartDeadline = time.Second
+	agent.ServePipe = func(ctx context.Context, _ Config, handler func(PipeMessage) (PipeMessage, error), ready func()) error {
+		ready()
+		pipeHandlers <- handler
+		<-ctx.Done()
+		close(pipeStopped)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var readyCalls atomic.Int32
+	agent.Ready = func() {
+		readyCalls.Add(1)
+		cancel()
+	}
+	if err := agent.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-bootstrapDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-pipeStopped:
+	default:
+		t.Fatal("early Viewer pipe was not joined on Agent shutdown")
+	}
+	ledger, err := LoadCommandLedger(paths.Commands)
+	if err != nil || ledger.Records["61"].State != CommandSucceeded || ledger.Records["61"].Generation != 8 {
+		t.Fatalf("record=%+v err=%v", ledger.Records["61"], err)
+	}
+	state, err := LoadMachineState(paths.State)
+	if err != nil || state.ViewerGeneration != 8 || state.ExpectedViewerGeneration != 8 || state.RendererState != "ready" || !state.CommandEngineHealthy {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	if readyCalls.Load() != 1 {
+		t.Fatalf("ready calls=%d", readyCalls.Load())
+	}
+}
+
+func TestAgentPipeBindFailureAbortsStartupBeforeReadyOrHeartbeat(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	agent := NewAgent(Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Bind failure", InstallDir: dir, ClientID: "bind-failure"}, paths)
+	agent.HTTPClient = server.Client()
+	agent.ServePipe = func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error {
+		return errors.New("pipe bind failed")
+	}
+	var readyCalls atomic.Int32
+	agent.Ready = func() { readyCalls.Add(1) }
+	started := time.Now()
+	err := agent.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "pipe bind failed") || time.Since(started) > time.Second {
+		t.Fatalf("err=%v elapsed=%v", err, time.Since(started))
+	}
+	if readyCalls.Load() != 0 || requests.Load() != 0 {
+		t.Fatalf("ready=%d requests=%d", readyCalls.Load(), requests.Load())
+	}
+}
+
+func TestAgentStartupFailureCancelsAndJoinsEarlyViewerPipe(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*Agent, MachinePaths) error
+	}{
+		{name: "reconcile failure", setup: func(_ *Agent, paths MachinePaths) error {
+			return os.WriteFile(paths.Commands, []byte("not-json"), 0o600)
+		}},
+		{name: "command engine health failure", setup: func(agent *Agent, _ MachinePaths) error {
+			agent.LoadLedger = func(string) (CommandLedger, error) {
+				return CommandLedger{SchemaVersion: SchemaVersion, Records: map[string]CommandRecord{}}, nil
+			}
+			agent.SaveLedger = func(string, CommandLedger) error { return errors.New("disk full") }
+			return nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			dir := t.TempDir()
+			paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+			agent := NewAgent(Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Startup failure", InstallDir: dir, ClientID: "startup-failure"}, paths)
+			agent.HTTPClient = server.Client()
+			if err := test.setup(&agent, paths); err != nil {
+				t.Fatal(err)
+			}
+			pipeStopped := make(chan struct{})
+			agent.ServePipe = func(ctx context.Context, _ Config, _ func(PipeMessage) (PipeMessage, error), ready func()) error {
+				ready()
+				<-ctx.Done()
+				close(pipeStopped)
+				return nil
+			}
+			var readyCalls atomic.Int32
+			agent.Ready = func() { readyCalls.Add(1) }
+			if err := agent.Run(t.Context()); err == nil {
+				t.Fatal("startup failure was reported as success")
+			}
+			select {
+			case <-pipeStopped:
+			default:
+				t.Fatal("early Viewer pipe was not joined after startup failure")
+			}
+			if readyCalls.Load() != 0 || requests.Load() != 0 {
+				t.Fatalf("ready=%d requests=%d", readyCalls.Load(), requests.Load())
+			}
+		})
 	}
 }
 
@@ -435,6 +601,7 @@ func TestAgentReturnsLocalControlStateFailure(t *testing.T) {
 	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Broken state", InstallDir: dir, ClientID: "broken-state"}
 	agent := NewAgent(config, paths)
 	agent.HTTPClient = server.Client()
+	agent.ServePipe = serveTestViewerPipe
 	agent.Ready = func() {
 		if err := os.WriteFile(paths.State, []byte("not-json"), 0o600); err != nil {
 			t.Error(err)

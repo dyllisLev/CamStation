@@ -159,3 +159,40 @@ PASS; bootstrap and Windows policy test are PE32+ x86-64 executables
 $ cd viewer-app && npm test && npm run build && npm run package:win
 tests 13, pass 13, fail 0; build/package PASS; Viewer is PE32+ GUI x86-64
 ```
+
+## Focused Task 6 re-review: startup pipe ordering
+
+This review covered only the Agent-startup ordering delta. A durable `restart_viewer` command could previously wait for the next Viewer while the local named-pipe server had not yet started, preventing bootstrap registration until the 45-second command deadline.
+
+- Agent startup now binds the local Viewer pipe and receives an explicit readiness callback before running durable-command reconciliation.
+- Server readiness and heartbeats remain gated behind successful reconciliation and command-engine health checks.
+- Pipe bind failure aborts startup before readiness or any server request. Reconciliation or health-check failure cancels and joins the early pipe; a pipe failure during reconciliation cancels and joins reconciliation as well.
+- The recovery integration starts from stale running Viewer state plus a durable running generation-8 restart, then obtains the bootstrap grant, registers the new Viewer, reports renderer readiness, and completes on the preserved generation without the 45-second timeout.
+
+RED evidence:
+
+```text
+$ go test ./internal/vieweragent -run 'TestAgentStartsViewerPipeBeforeReconcilingDurableRestart|TestAgentPipeBindFailureAbortsStartupBeforeReadyOrHeartbeat|TestAgentStartupFailureCancelsAndJoinsEarlyViewerPipe' -count=1
+agent.ServePipe undefined
+FAIL
+```
+
+Fresh focused-delta verification:
+
+```text
+$ go test ./... -count=1
+PASS (including vieweragent 2.107s and viewerbootstrap 0.230s)
+
+$ go test -race ./internal/vieweragent ./internal/viewerbootstrap -count=1
+PASS
+
+$ go vet ./...
+PASS
+
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-agent-task6-order.exe ./cmd/camstation-viewer-agent
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-bootstrap-task6-order.exe ./cmd/camstation-viewer-bootstrap
+$ go build -o /tmp/camstationd-task6-order ./cmd/camstationd
+PASS; Agent and bootstrap are PE32+ Windows x86-64 executables
+```
+
+Electron sources were not changed by this delta, so the conditional Electron test/package step was not repeated.

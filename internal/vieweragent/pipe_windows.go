@@ -15,9 +15,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func ServeViewerPipe(ctx context.Context, config Config, handler func(PipeMessage) (PipeMessage, error)) error {
+func ServeViewerPipe(ctx context.Context, config Config, handler func(PipeMessage) (PipeMessage, error), ready func()) error {
 	if handler == nil {
 		return errors.New("pipe handler is required")
+	}
+	if ready == nil {
+		return errors.New("pipe ready callback is required")
 	}
 	listener, err := winio.ListenPipe(ViewerPipeName, &winio.PipeConfig{
 		SecurityDescriptor: pipeSecurityDescriptor(config),
@@ -29,6 +32,7 @@ func ServeViewerPipe(ctx context.Context, config Config, handler func(PipeMessag
 		return err
 	}
 	defer listener.Close()
+	ready()
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()

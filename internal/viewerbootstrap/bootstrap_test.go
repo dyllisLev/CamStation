@@ -248,6 +248,11 @@ func TestAgentRestartConvergenceDrivesBootstrapToReadyNextGeneration(t *testing.
 		agent := vieweragent.NewAgent(vieweragent.Config{
 			ClientID: "recovery-client", ServerURL: "http://127.0.0.1:1", DisplayName: "Viewer", InstallDir: dir,
 		}, paths)
+		agent.ServePipe = func(ctx context.Context, _ vieweragent.Config, _ func(vieweragent.PipeMessage) (vieweragent.PipeMessage, error), ready func()) error {
+			ready()
+			<-ctx.Done()
+			return nil
+		}
 		agent.Ready = cancelAgent
 		if err := agent.Run(agentCtx); err != nil {
 			agentResult <- err

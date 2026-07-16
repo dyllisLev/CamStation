@@ -46,6 +46,7 @@ type Agent struct {
 	Now                      func() time.Time
 	LoadLedger               func(string) (CommandLedger, error)
 	SaveLedger               func(string, CommandLedger) error
+	ServePipe                func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
 	Ready                    func()
 
 	stateMu          sync.Mutex
@@ -339,11 +340,78 @@ func (agent *Agent) Run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	if _, err := agent.Reconcile(runCtx); err != nil {
-		return err
+
+	servePipe := agent.ServePipe
+	if servePipe == nil {
+		servePipe = ServeViewerPipe
+	}
+	pipeReady := make(chan struct{})
+	pipeDone := make(chan struct{})
+	var pipeReadyOnce sync.Once
+	var pipeErr error
+	go func() {
+		defer close(pipeDone)
+		pipeErr = servePipe(runCtx, agent.Config, agent.handlePipeMessage, func() {
+			pipeReadyOnce.Do(func() { close(pipeReady) })
+		})
+		if pipeErr != nil && runCtx.Err() == nil {
+			_ = agent.markPipeFailure()
+		}
+	}()
+	joinPipe := func() {
+		cancel()
+		<-pipeDone
+	}
+	pipeFailure := func() error {
+		if pipeErr == nil {
+			return errors.New("Viewer pipe stopped during Agent startup")
+		}
+		return fmt.Errorf("start Viewer pipe: %w", pipeErr)
+	}
+	select {
+	case <-pipeReady:
+	case <-pipeDone:
+		return pipeFailure()
+	case <-ctx.Done():
+		joinPipe()
+		return nil
+	}
+
+	reconcileDone := make(chan error, 1)
+	go func() {
+		_, err := agent.Reconcile(runCtx)
+		reconcileDone <- err
+	}()
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			joinPipe()
+			return err
+		}
+	case <-pipeDone:
+		cancel()
+		<-reconcileDone
+		if ctx.Err() != nil {
+			return nil
+		}
+		return pipeFailure()
+	case <-ctx.Done():
+		cancel()
+		<-reconcileDone
+		<-pipeDone
+		return nil
 	}
 	if err := agent.checkCommandEngine(); err != nil {
+		joinPipe()
 		return err
+	}
+	select {
+	case <-pipeDone:
+		return pipeFailure()
+	case <-ctx.Done():
+		joinPipe()
+		return nil
+	default:
 	}
 	if agent.Ready != nil {
 		agent.Ready()
@@ -353,13 +421,6 @@ func (agent *Agent) Run(ctx context.Context) error {
 	go func() {
 		defer close(heartbeatDone)
 		agent.runHeartbeats(runCtx, client)
-	}()
-	pipeDone := make(chan struct{})
-	go func() {
-		defer close(pipeDone)
-		if err := ServeViewerPipe(runCtx, agent.Config, agent.handlePipeMessage); err != nil && runCtx.Err() == nil {
-			_ = agent.markPipeFailure()
-		}
 	}()
 	shutdown := func() {
 		cancel()
