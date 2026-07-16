@@ -3,34 +3,71 @@ package viewerinstall
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
+func TestUnregisterAbortsBeforeDeletingAnythingWhenDisableOrStopFails(t *testing.T) {
+	stopErr := errors.New("service did not stop")
+	deleted := 0
+	err := unregisterSequence(t.Context(), func(context.Context) error {
+		return stopErr
+	}, func(context.Context) error {
+		deleted++
+		return nil
+	})
+	if !errors.Is(err, stopErr) || deleted != 0 {
+		t.Fatalf("err=%v deleted=%d", err, deleted)
+	}
+}
+
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
-	want := []string{"failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/30000/restart/120000"}
+	want := []string{"failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/30000/restart/120000/none/0"}
 	if got := SCMRecoveryArgs(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("recovery args=%v", got)
 	}
-	if strings.Contains(strings.Join(SCMRecoveryArgs(), "/"), "restart/0") {
-		t.Fatal("unbounded fourth restart was configured")
+	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
+	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {
+		t.Fatalf("Windows recovery action mapping=%+v want=%+v", got, wantActions)
 	}
 }
 
 func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
-	xml, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
+	taskXML, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"<UserId>S-1-5-21-123</UserId>", "<LogonType>InteractiveToken</LogonType>", "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>", "--install-dir", "CamStationViewerBootstrap.exe"} {
-		if !strings.Contains(xml, required) {
-			t.Fatalf("task XML missing %q: %s", required, xml)
+	for _, required := range []string{"<LogonType>InteractiveToken</LogonType>", "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>", "--install-dir", "CamStationViewerBootstrap.exe"} {
+		if !strings.Contains(taskXML, required) {
+			t.Fatalf("task XML missing %q: %s", required, taskXML)
 		}
+	}
+	var task struct {
+		Triggers struct {
+			LogonTrigger struct {
+				UserID string `xml:"UserId"`
+			} `xml:"LogonTrigger"`
+		} `xml:"Triggers"`
+		Principals struct {
+			Principal struct {
+				UserID string `xml:"UserId"`
+			} `xml:"Principal"`
+		} `xml:"Principals"`
+	}
+	if err := xml.Unmarshal([]byte(taskXML), &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Triggers.LogonTrigger.UserID != "S-1-5-21-123" || task.Principals.Principal.UserID != "S-1-5-21-123" {
+		t.Fatalf("SID trigger=%q principal=%q", task.Triggers.LogonTrigger.UserID, task.Principals.Principal.UserID)
 	}
 }
 

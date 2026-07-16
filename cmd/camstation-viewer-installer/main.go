@@ -33,6 +33,8 @@ const (
 	modeRecover   installerMode = "recover"
 )
 
+var errCommitJournalBoundary = errors.New("transaction committed before update journal")
+
 type installerOptions struct {
 	mode          installerMode
 	silent        bool
@@ -58,25 +60,46 @@ func run(args []string) error {
 	if err != nil || relaunched {
 		return err
 	}
+	progress := installerProgress(options.silent, os.Stdout)
+	progress("Preparing installation")
 	layout := viewerinstall.DefaultLayout()
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 	switch options.mode {
 	case modeUninstall:
+		progress("Stopping and removing CamStation Viewer")
 		if err := viewerinstall.UnregisterAll(ctx, layout); err != nil {
 			return err
 		}
-		return removeInstallation(layout)
+		err = removeInstallation(layout)
 	case modeRecover:
-		return (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Recover(ctx)
+		progress("Recovering the last installation transaction")
+		err = recoverAndReconcile(ctx, layout, viewerinstall.SystemRegistration{Layout: layout})
 	case modeRollback:
-		return (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Rollback(ctx, options.transactionID)
+		progress("Rolling back CamStation Viewer")
+		err = (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Rollback(ctx, options.transactionID)
 	case modeUpdate:
+		progress("Waiting for the running agent to stop")
 		if err := waitParent(options.parentPID, 30*time.Second); err != nil {
 			return err
 		}
+		err = installPayload(ctx, layout, options, progress)
+	default:
+		err = installPayload(ctx, layout, options, progress)
 	}
-	return installPayload(ctx, layout, options)
+	if err == nil {
+		progress("Installation complete")
+	}
+	return err
+}
+
+func installerProgress(silent bool, output io.Writer) func(string) {
+	if silent || output == nil {
+		return func(string) {}
+	}
+	return func(message string) {
+		_, _ = fmt.Fprintln(output, "CamStation Viewer Setup:", message)
+	}
 }
 
 func parseInstallerArgs(args []string) (installerOptions, error) {
@@ -144,7 +167,7 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 	return options, nil
 }
 
-func installPayload(ctx context.Context, layout viewerinstall.Layout, options installerOptions) error {
+func installPayload(ctx context.Context, layout viewerinstall.Layout, options installerOptions, progress func(string)) error {
 	if options.mode == modeUpdate {
 		executable, err := os.Executable()
 		if err != nil {
@@ -154,6 +177,7 @@ func installPayload(ctx context.Context, layout viewerinstall.Layout, options in
 			return err
 		}
 	}
+	progress("Verifying the embedded release")
 	payload, err := payloadFS.ReadFile("payload/release.zip")
 	if err != nil {
 		return errors.New("embedded Viewer release payload is missing")
@@ -172,12 +196,26 @@ func installPayload(ctx context.Context, layout viewerinstall.Layout, options in
 		return err
 	}
 	if options.mode == modeUpdate {
+		progress("Applying the verified update")
 		if err := installUpdate(ctx, layout, options, manifest, temp); err != nil {
-			markUpdateFailed(layout, options, err)
+			if errors.Is(err, viewerinstall.ErrUpdateOwned) {
+				return nil
+			}
+			if !errors.Is(err, errCommitJournalBoundary) {
+				markUpdateFailed(layout, options, err)
+			}
 			return err
 		}
-		return markUpdateCommitted(layout, options, manifest.Version)
+		matched, err := vieweragent.ReconcileCommittedUpdate(layout.StateDir)
+		if err != nil {
+			return errors.Join(errCommitJournalBoundary, err)
+		}
+		if !matched {
+			return errors.Join(errCommitJournalBoundary, errors.New("committed transaction did not match update handoff"))
+		}
+		return nil
 	}
+	progress("Installing CamStation Viewer services")
 	return installInitial(ctx, layout, defaults, manifest, temp)
 }
 
@@ -219,11 +257,7 @@ func installInitial(ctx context.Context, layout viewerinstall.Layout, defaults v
 }
 
 func installUpdate(ctx context.Context, layout viewerinstall.Layout, options installerOptions, manifest viewerinstall.PayloadManifest, payloadDir string) error {
-	journal, err := vieweragent.LoadUpdateJournal(filepath.Join(layout.StateDir, "update.json"))
-	if err != nil {
-		return err
-	}
-	if err := validateUpdateHandoff(journal, options, manifest.Version); err != nil {
+	if err := promoteUpdateHandoff(layout, options, manifest.Version); err != nil {
 		return err
 	}
 	config, err := vieweragent.LoadConfig(filepath.Join(layout.StateDir, "config.json"))
@@ -236,6 +270,27 @@ func installUpdate(ctx context.Context, layout viewerinstall.Layout, options ins
 	release := viewerinstall.Release{Version: manifest.Version, Digest: options.expectedSHA, ReleaseID: viewerinstall.ReleaseID(manifest.Version, options.expectedSHA)}
 	request := viewerinstall.Request{TransactionID: options.transactionID, Generation: options.generation, SourceDir: filepath.Join(payloadDir, "release"), Release: release}
 	return (viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}).Apply(ctx, request)
+}
+
+func promoteUpdateHandoff(layout viewerinstall.Layout, options installerOptions, version string) error {
+	owner, err := viewerinstall.Acquire(layout)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
+	path := filepath.Join(layout.StateDir, "update.json")
+	journal, err := vieweragent.LoadUpdateJournal(path)
+	if err != nil {
+		return err
+	}
+	if err := validateUpdateHandoff(journal, options, version); err != nil {
+		return err
+	}
+	if journal.State == "installer_launched" {
+		return nil
+	}
+	journal.State = "installer_launched"
+	return vieweragent.SaveUpdateJournal(path, journal)
 }
 
 func verifyFileSHA(path, expected string) error {
@@ -259,7 +314,7 @@ func verifyFileSHA(path, expected string) error {
 }
 
 func validateUpdateHandoff(journal vieweragent.UpdateJournal, options installerOptions, version string) error {
-	if journal.State != "installer_launched" || journal.TransactionID != options.transactionID || journal.Generation != options.generation ||
+	if (journal.State != "launching_installer" && journal.State != "installer_launched") || journal.TransactionID != options.transactionID || journal.Generation != options.generation ||
 		journal.ArtifactSHA256 != options.expectedSHA || journal.TargetVersion != version {
 		return errors.New("update ledger does not match Agent handoff")
 	}
@@ -284,20 +339,6 @@ func loadDefaults(path string) (viewerinstall.PayloadDefaults, error) {
 	return defaults, nil
 }
 
-func markUpdateCommitted(layout viewerinstall.Layout, options installerOptions, version string) error {
-	path := filepath.Join(layout.StateDir, "update.json")
-	journal, err := vieweragent.LoadUpdateJournal(path)
-	if err != nil {
-		return err
-	}
-	if journal.TransactionID != options.transactionID || journal.Generation != options.generation || journal.ArtifactSHA256 != options.expectedSHA || journal.TargetVersion != version {
-		return errors.New("update ledger does not match committed transaction")
-	}
-	journal.State = "committed"
-	journal.LastError = ""
-	return vieweragent.SaveUpdateJournal(path, journal)
-}
-
 func markUpdateFailed(layout viewerinstall.Layout, options installerOptions, cause error) {
 	path := filepath.Join(layout.StateDir, "update.json")
 	journal, err := vieweragent.LoadUpdateJournal(path)
@@ -309,6 +350,14 @@ func markUpdateFailed(layout viewerinstall.Layout, options installerOptions, cau
 	journal.Quarantine(journal.TargetVersion, options.expectedSHA, options.generation, time.Now().UTC(), "installation_failed")
 	_ = vieweragent.SaveUpdateJournal(path, journal)
 	_ = cause
+}
+
+func recoverAndReconcile(ctx context.Context, layout viewerinstall.Layout, registration viewerinstall.Registration) error {
+	if err := (viewerinstall.Manager{Layout: layout, Registration: registration}).Recover(ctx); err != nil {
+		return err
+	}
+	_, err := vieweragent.ReconcileCommittedUpdate(layout.StateDir)
+	return err
 }
 
 func safeIdentifier(value string, maximum int) bool {

@@ -113,6 +113,17 @@ func SaveCurrent(layout Layout, current Current) error {
 	return atomicWriteJSON(layout.CurrentPath(), current)
 }
 
+func RemoveCurrent(layout Layout) error {
+	err := os.Remove(layout.CurrentPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return syncDir(layout.InstallDir)
+}
+
 func ReleaseID(version, digest string) string {
 	if !validVersion(version) || !validDigest(digest) {
 		return ""

@@ -126,6 +126,9 @@ func (manager Manager) Apply(ctx context.Context, request Request) error {
 	if err != nil {
 		return err
 	}
+	if journal.Phase == PhaseCommitted && journalMatchesRequest(journal, request) {
+		return nil
+	}
 	if incomplete(journal.Phase) {
 		if err := manager.recoverLocked(ctx, &journal); err != nil {
 			return err
@@ -206,6 +209,12 @@ func (manager Manager) Apply(ctx context.Context, request Request) error {
 		return manager.rollbackFailure(ctx, &journal, "validation_failed", err)
 	}
 	return manager.advance(&journal, PhaseCommitted)
+}
+
+func journalMatchesRequest(journal Journal, request Request) bool {
+	return journal.TransactionID == request.TransactionID && journal.Generation == request.Generation &&
+		journal.Release.Version == request.Release.Version && journal.Release.Digest == request.Release.Digest &&
+		journal.Release.ReleaseID == request.Release.ReleaseID
 }
 
 func equalTrees(left, right string) (bool, error) {
@@ -303,16 +312,30 @@ func (manager Manager) recoverLocked(ctx context.Context, journal *Journal) erro
 		return errors.New("registration adapter is required")
 	}
 	if journal.Previous == nil {
-		if err := SaveCurrent(manager.Layout, currentFor(journal.Release)); err != nil {
+		if err := manager.Registration.Stop(ctx); err != nil {
 			return err
 		}
-		if err := manager.Registration.Start(ctx); err != nil {
+		if err := RemoveCurrent(manager.Layout); err != nil {
 			return err
 		}
-		if err := manager.Registration.Validate(ctx, *journal); err != nil {
+		if journal.Release.ReleaseID != "" {
+			if err := os.RemoveAll(manager.Layout.ReleaseDir(journal.Release.ReleaseID)); err != nil {
+				return err
+			}
+			if err := syncDir(manager.Layout.ReleaseRoot()); err != nil {
+				return err
+			}
+		}
+		if journal.TransactionID != "" {
+			if err := os.RemoveAll(filepath.Join(manager.Layout.StagingRoot(), journal.TransactionID)); err != nil {
+				return err
+			}
+		}
+		journal.RollbackState = "clean_no_release"
+		if err := manager.advance(journal, PhaseRolledBack); err != nil {
 			return err
 		}
-		return manager.advance(journal, PhaseCommitted)
+		return nil
 	}
 	if journal.Phase != PhaseRollingBack {
 		if err := manager.advance(journal, PhaseRollingBack); err != nil {

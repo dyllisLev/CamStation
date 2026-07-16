@@ -52,6 +52,71 @@ func TestTransactionRecoveryAlwaysLeavesOneCompleteRelease(t *testing.T) {
 	}
 }
 
+func TestFirstInstallPowerLossNeverForcesIncompleteTargetActive(t *testing.T) {
+	phases := []Phase{
+		PhasePreparing,
+		PhaseStaged,
+		PhasePointerBackedUp,
+		PhaseActivated,
+		PhaseServiceStarted,
+		PhaseValidating,
+		PhaseRollingBack,
+	}
+	for _, failedAfter := range phases {
+		t.Run(string(failedAfter), func(t *testing.T) {
+			manager, request := transactionFixtureWithoutPrevious(t)
+			if failedAfter == PhaseRollingBack {
+				manager.Registration = failingValidationRegistration{}
+			}
+			manager.FailAfter = func(phase Phase) error {
+				if phase == failedAfter {
+					return errInjectedPowerLoss
+				}
+				return nil
+			}
+			if err := manager.Apply(t.Context(), request); err == nil {
+				t.Fatal("injected first-install failure was ignored")
+			}
+
+			reopened := Manager{Layout: manager.Layout, Registration: noOpRegistration{}}
+			if err := reopened.Recover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := reopened.Recover(t.Context()); err != nil {
+				t.Fatalf("repeated recovery failed: %v", err)
+			}
+			if _, err := LoadCurrent(manager.Layout); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed first install left current pointer: %v", err)
+			}
+			if _, err := os.Stat(manager.Layout.ReleaseDir(request.Release.ReleaseID)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed first install left target release: %v", err)
+			}
+			journal, err := LoadJournal(manager.Layout)
+			if err != nil || journal.Phase != PhaseRolledBack {
+				t.Fatalf("journal=%+v err=%v", journal, err)
+			}
+			if failedAfter == PhaseRollingBack && !journal.IsQuarantined(request.Release.Version, request.Release.Digest, request.Generation) {
+				t.Fatalf("failed validation target was not quarantined: %+v", journal.Quarantined)
+			}
+		})
+	}
+}
+
+func TestFirstInstallCommitsOnlyAfterSuccessfulValidation(t *testing.T) {
+	manager, request := transactionFixtureWithoutPrevious(t)
+	if err := manager.Apply(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	current, err := LoadCurrent(manager.Layout)
+	if err != nil || current.ReleaseID != request.Release.ReleaseID {
+		t.Fatalf("current=%+v err=%v", current, err)
+	}
+	journal, err := LoadJournal(manager.Layout)
+	if err != nil || journal.Phase != PhaseCommitted {
+		t.Fatalf("journal=%+v err=%v", journal, err)
+	}
+}
+
 func TestCommittedTransactionKeepsNewReleaseAcrossRecovery(t *testing.T) {
 	manager, request, _ := transactionFixture(t)
 	if err := manager.Apply(t.Context(), request); err != nil {
@@ -67,6 +132,22 @@ func TestCommittedTransactionKeepsNewReleaseAcrossRecovery(t *testing.T) {
 	journal, err := LoadJournal(manager.Layout)
 	if err != nil || journal.Phase != PhaseCommitted {
 		t.Fatalf("journal=%+v err=%v", journal, err)
+	}
+}
+
+func TestCommittedExactTransactionIsIdempotent(t *testing.T) {
+	manager, request, _ := transactionFixture(t)
+	registration := &countingRegistration{}
+	manager.Registration = registration
+	if err := manager.Apply(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	firstStarts, firstValidations := registration.starts, registration.validations
+	if err := manager.Apply(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if registration.starts != firstStarts || registration.validations != firstValidations {
+		t.Fatalf("committed transaction repeated side effects: starts=%d validations=%d", registration.starts, registration.validations)
 	}
 }
 
@@ -158,6 +239,27 @@ func (failingValidationRegistration) Validate(context.Context, Journal) error {
 	return errors.New("new release unhealthy")
 }
 
+type countingRegistration struct {
+	stops       int
+	starts      int
+	validations int
+}
+
+func (registration *countingRegistration) Stop(context.Context) error {
+	registration.stops++
+	return nil
+}
+
+func (registration *countingRegistration) Start(context.Context) error {
+	registration.starts++
+	return nil
+}
+
+func (registration *countingRegistration) Validate(context.Context, Journal) error {
+	registration.validations++
+	return nil
+}
+
 func transactionFixture(t *testing.T) (Manager, Request, Current) {
 	t.Helper()
 	root := t.TempDir()
@@ -185,6 +287,24 @@ func transactionFixture(t *testing.T) (Manager, Request, Current) {
 		Release:       Release{Version: "2.0.0", Digest: newDigest, ReleaseID: ReleaseID("2.0.0", newDigest)},
 	}
 	return Manager{Layout: layout, Registration: noOpRegistration{}}, request, old
+}
+
+func transactionFixtureWithoutPrevious(t *testing.T) (Manager, Request) {
+	t.Helper()
+	root := t.TempDir()
+	layout := Layout{InstallDir: filepath.Join(root, "program-files"), StateDir: filepath.Join(root, "program-data")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	newSource := makeReleaseSource(t, root, "new")
+	newDigest := directoryDigest(t, newSource)
+	request := Request{
+		TransactionID: "first-install-1",
+		Generation:    1,
+		SourceDir:     newSource,
+		Release:       Release{Version: "2.0.0", Digest: newDigest, ReleaseID: ReleaseID("2.0.0", newDigest)},
+	}
+	return Manager{Layout: layout, Registration: noOpRegistration{}}, request
 }
 
 func makeReleaseSource(t *testing.T, root, value string) string {

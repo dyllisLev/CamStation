@@ -116,23 +116,31 @@ func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions
 }
 
 func UnregisterAll(ctx context.Context, layout Layout) error {
-	_ = stopRegistered(ctx, layout)
-	var result error
-	for _, command := range [][]string{
+	commands := [][]string{
 		{"schtasks.exe", "/Delete", "/TN", ViewerTaskName, "/F"},
 		{"schtasks.exe", "/Delete", "/TN", RecoveryTaskName, "/F"},
 		{"sc.exe", "delete", ServiceName},
 		{"reg.exe", "delete", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`, "/f"},
-	} {
-		if _, err := runWindows(ctx, command[0], command[1:]...); err != nil {
+	}
+	deletes := make([]func(context.Context) error, 0, len(commands))
+	for _, command := range commands {
+		command := command
+		deletes = append(deletes, func(ctx context.Context) error {
+			_, err := runWindows(ctx, command[0], command[1:]...)
+			if err == nil {
+				return nil
+			}
 			// Missing registrations are already in the desired uninstall state.
 			lower := strings.ToLower(err.Error())
-			if !strings.Contains(lower, "1060") && !strings.Contains(lower, "cannot find") && !strings.Contains(lower, "not exist") {
-				result = errors.Join(result, err)
+			if strings.Contains(lower, "1060") || strings.Contains(lower, "cannot find") || strings.Contains(lower, "not exist") {
+				return nil
 			}
-		}
+			return err
+		})
 	}
-	return result
+	return unregisterSequence(ctx, func(ctx context.Context) error {
+		return disableAndStopRegistered(ctx, layout)
+	}, deletes...)
 }
 
 func ActiveConsoleUserSID(ctx context.Context) (string, error) {
@@ -165,6 +173,14 @@ func stopRegistered(ctx context.Context, _ Layout) error {
 	// Ending the task terminates the bootstrap; closing its Job handle kills the full Electron tree.
 	script := `$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
 		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s -and $s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}`
+	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	return err
+}
+
+func disableAndStopRegistered(ctx context.Context, _ Layout) error {
+	// Disable every automatic entry point before waiting for the live processes to stop.
+	script := `$names=@('` + ViewerTaskName + `','` + RecoveryTaskName + `'); foreach($name in $names){$t=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; if($t){Disable-ScheduledTask -InputObject $t -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $t -ErrorAction Stop}}; ` +
+		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}`
 	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	return err
 }

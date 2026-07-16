@@ -44,6 +44,8 @@ type UpdateRunner struct {
 	HTTPClient               *http.Client
 	ServerURL                string
 	StateDir                 string
+	MetadataDeadline         time.Duration
+	DownloadDeadline         time.Duration
 	AllowDevelopmentUnsigned bool
 	ExpectedSignerThumbprint string
 	VerifySignature          func(path, thumbprint string, allowUnsigned bool) error
@@ -66,18 +68,20 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		return ErrUpdateHardReject
 	}
 	if journal.TargetVersion != target.Version || !strings.EqualFold(journal.ArtifactSHA256, target.SHA256) || journal.Generation != target.Generation {
+		journal.MetadataAttempts = 0
+		journal.MetadataNextAt = nil
 		journal.DownloadAttempts = 0
+		journal.NextAttemptAt = nil
 	}
 	journal.TargetVersion = target.Version
 	journal.ArtifactSHA256 = target.SHA256
 	journal.Generation = target.Generation
 	journal.TransactionID = target.TransactionID
-	journal.State = "checking_release"
 	if err := SaveUpdateJournal(journalPath, journal); err != nil {
 		return err
 	}
 
-	metadata, err := runner.loadMetadata(ctx, serverURL)
+	metadata, err := runner.loadMetadataRetried(ctx, serverURL, journalPath, &journal)
 	if err != nil {
 		return err
 	}
@@ -118,7 +122,9 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		if err := SaveUpdateJournal(journalPath, journal); err != nil {
 			return err
 		}
-		err = runner.download(ctx, serverURL, metadata, installerPath)
+		downloadCtx, cancelDownload := context.WithTimeout(ctx, runner.downloadDeadline())
+		err = runner.download(downloadCtx, serverURL, metadata, installerPath)
+		cancelDownload()
 		if err == nil {
 			staged = true
 			break
@@ -126,6 +132,9 @@ func (runner UpdateRunner) Run(ctx context.Context, target UpdateTarget) error {
 		var hard *hardUpdateError
 		if errors.As(err, &hard) {
 			return runner.reject(journalPath, journal, target, hard.category, hard)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if journal.DownloadAttempts == len(delays)+1 {
 			journal.State = "download_failed"
@@ -251,6 +260,70 @@ func (runner UpdateRunner) loadMetadata(ctx context.Context, serverURL string) (
 	return metadata, nil
 }
 
+func (runner UpdateRunner) loadMetadataRetried(ctx context.Context, serverURL, journalPath string, journal *UpdateJournal) (ReleaseMetadata, error) {
+	delays := [...]time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
+	if journal.MetadataAttempts >= len(delays)+1 {
+		return ReleaseMetadata{}, errors.New("metadata retry ledger is exhausted")
+	}
+	for journal.MetadataAttempts < len(delays)+1 {
+		if journal.MetadataNextAt != nil && time.Now().Before(*journal.MetadataNextAt) {
+			if err := runner.sleep(ctx, time.Until(*journal.MetadataNextAt)); err != nil {
+				return ReleaseMetadata{}, err
+			}
+			journal.MetadataNextAt = nil
+			if err := SaveUpdateJournal(journalPath, *journal); err != nil {
+				return ReleaseMetadata{}, err
+			}
+		}
+
+		journal.MetadataAttempts++
+		journal.MetadataNextAt = nil
+		journal.State = "checking_release"
+		if err := SaveUpdateJournal(journalPath, *journal); err != nil {
+			return ReleaseMetadata{}, err
+		}
+
+		requestCtx, cancelRequest := context.WithTimeout(ctx, runner.metadataDeadline())
+		metadata, err := runner.loadMetadata(requestCtx, serverURL)
+		cancelRequest()
+		if err == nil {
+			journal.MetadataAttempts = 0
+			journal.MetadataNextAt = nil
+			journal.LastError = ""
+			if err := SaveUpdateJournal(journalPath, *journal); err != nil {
+				return ReleaseMetadata{}, err
+			}
+			return metadata, nil
+		}
+		if ctx.Err() != nil {
+			return ReleaseMetadata{}, ctx.Err()
+		}
+		if journal.MetadataAttempts == len(delays)+1 {
+			journal.State = "metadata_failed"
+			journal.LastError = "metadata_request_failed"
+			_ = SaveUpdateJournal(journalPath, *journal)
+			return ReleaseMetadata{}, fmt.Errorf("metadata retries exhausted: %w", err)
+		}
+
+		journal.State = "metadata_retry_wait"
+		delay := delays[journal.MetadataAttempts-1]
+		next := time.Now().UTC().Add(delay)
+		journal.MetadataNextAt = &next
+		journal.LastError = "metadata_request_failed"
+		if err := SaveUpdateJournal(journalPath, *journal); err != nil {
+			return ReleaseMetadata{}, err
+		}
+		if err := runner.sleep(ctx, delay); err != nil {
+			return ReleaseMetadata{}, err
+		}
+		journal.MetadataNextAt = nil
+		if err := SaveUpdateJournal(journalPath, *journal); err != nil {
+			return ReleaseMetadata{}, err
+		}
+	}
+	return ReleaseMetadata{}, errors.New("metadata retry ledger is exhausted")
+}
+
 func (runner UpdateRunner) download(ctx context.Context, serverURL string, metadata ReleaseMetadata, destination string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, serverURL+"/api/viewers/app/download", nil)
 	if err != nil {
@@ -313,6 +386,27 @@ func (runner UpdateRunner) client() *http.Client {
 		return runner.HTTPClient
 	}
 	return http.DefaultClient
+}
+
+func (runner UpdateRunner) metadataDeadline() time.Duration {
+	if runner.MetadataDeadline > 0 {
+		return runner.MetadataDeadline
+	}
+	return 15 * time.Second
+}
+
+func (runner UpdateRunner) downloadDeadline() time.Duration {
+	if runner.DownloadDeadline > 0 {
+		return runner.DownloadDeadline
+	}
+	return 30 * time.Minute
+}
+
+func (runner UpdateRunner) sleep(ctx context.Context, delay time.Duration) error {
+	if runner.Sleep != nil {
+		return runner.Sleep(ctx, delay)
+	}
+	return waitContext(ctx, delay)
 }
 
 type hardUpdateError struct {

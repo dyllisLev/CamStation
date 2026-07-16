@@ -233,6 +233,9 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 			_ = agent.markCommandEngineFailure()
 		}
 	}()
+	if _, err := ReconcileCommittedUpdate(filepath.Dir(agent.Paths.Update)); err != nil {
+		return nil, err
+	}
 	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		return nil, err
@@ -285,7 +288,7 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 
 func updateCanResume(state string) bool {
 	switch state {
-	case "", "checking_release", "downloading", "download_retry_wait", "verified", "waiting_for_viewer_session", "launch_failed":
+	case "", "checking_release", "downloading", "download_retry_wait", "verified", "waiting_for_viewer_session", "launching_installer", "launch_failed":
 		return true
 	default:
 		return false

@@ -21,6 +21,11 @@ type RegistrationOptions struct {
 	DisplayName       string
 }
 
+type RecoveryAction struct {
+	Type    string
+	DelayMS int
+}
+
 type SystemRegistration struct{ Layout Layout }
 
 func (registration SystemRegistration) Stop(ctx context.Context) error {
@@ -42,8 +47,32 @@ func (registration SystemRegistration) Validate(ctx context.Context, journal Jou
 	return validateRegistered(ctx, registration.Layout)
 }
 
+func unregisterSequence(ctx context.Context, disableAndStop func(context.Context) error, deletes ...func(context.Context) error) error {
+	if err := disableAndStop(ctx); err != nil {
+		return err
+	}
+	var result error
+	for _, remove := range deletes {
+		result = errors.Join(result, remove(ctx))
+	}
+	return result
+}
+
 func SCMRecoveryArgs() []string {
-	return []string{"failure", ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/30000/restart/120000"}
+	parts := make([]string, 0, len(SCMRecoveryActions()))
+	for _, action := range SCMRecoveryActions() {
+		parts = append(parts, fmt.Sprintf("%s/%d", action.Type, action.DelayMS))
+	}
+	return []string{"failure", ServiceName, "reset=", "86400", "actions=", strings.Join(parts, "/")}
+}
+
+func SCMRecoveryActions() []RecoveryAction {
+	return []RecoveryAction{
+		{Type: "restart", DelayMS: 5000},
+		{Type: "restart", DelayMS: 30000},
+		{Type: "restart", DelayMS: 120000},
+		{Type: "none", DelayMS: 0},
+	}
 }
 
 func ViewerTaskXML(bootstrapPath, installDir, userSID string) (string, error) {
@@ -51,7 +80,7 @@ func ViewerTaskXML(bootstrapPath, installDir, userSID string) (string, error) {
 		return "", errors.New("invalid Viewer task configuration")
 	}
 	return taskXML(
-		`<LogonTrigger><Enabled>true</Enabled></LogonTrigger>`, userSID, "InteractiveToken", "LeastPrivilege",
+		`<LogonTrigger><Enabled>true</Enabled><UserId>`+xmlEscape(userSID)+`</UserId></LogonTrigger>`, userSID, "InteractiveToken", "LeastPrivilege",
 		bootstrapPath, `--install-dir &quot;`+xmlEscape(installDir)+`&quot;`,
 	), nil
 }

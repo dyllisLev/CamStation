@@ -83,3 +83,55 @@ PASS
 ```
 
 Generated `viewer-app/build`, `viewer-app/dist`, `viewer-app/node_modules`, and the transient embedded `release.zip` are ignored and are not part of the commit.
+
+## Focused Task 7 review remediation
+
+This pass reviewed and changed only the Task 7 installer/updater delta. It did not perform a whole-project review.
+
+- SCM recovery now has an explicit fourth `none/0` action, with an exact action-to-argument mapping test. The configured monitoring-user SID is present in both the logon trigger and task principal.
+- First-install recovery has a real no-release outcome: it clears `current.json`, removes the incomplete target and staging data, never starts the target, and remains idempotent across repeated recovery. Failed targets are quarantined; successful first installs still commit.
+- The updater owns and atomically promotes an exact `launching_installer` handoff under the machine-wide mutex before applying. A duplicate process cannot apply concurrently, and an already committed exact transaction is a no-op.
+- Transaction commit and `update.json` now reconcile across the power-loss boundary from the Agent path, installer path, and boot recovery path. Transaction ID, generation, version, and artifact digest must all match; mismatches never reconcile.
+- Release metadata and installer download requests have injectable per-attempt deadlines (15 seconds and 30 minutes by default). Both ledgers persist an initial attempt plus three retries with 1/5/30-minute waits, and restart tests prove exhausted budgets are not reset.
+- Uninstall disables and stops both scheduled tasks and the service before deleting registrations. Any disable/stop failure aborts before the first delete, so the outer installer cannot remove files.
+- `/S` is case-insensitive, survives the unchanged elevation argument handoff, and suppresses all progress output. The default path reports phases but never waits for another confirmation after UAC.
+
+Focused review verification:
+
+```text
+$ go test -race ./internal/viewerinstall ./internal/vieweragent ./cmd/camstation-viewer-installer -count=1
+PASS
+
+$ go test ./...
+PASS
+
+$ go vet ./...
+PASS
+
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ... Host/Bootstrap/Agent/Installer
+PASS; all four are PE32+ x86-64 Windows executables
+
+$ go build -o /tmp/camstationd-task7-review ./cmd/camstationd
+PASS
+
+$ cd viewer-app && npm test && npm run build && npm run package:win
+tests 15, pass 15, fail 0; build/package PASS
+
+$ npm run build:installer -- --server-url http://10.0.0.29:18080 --version 2.0.0-dev.1
+embedded production extractor test PASS
+
+$ file viewer-app/dist/CamStationViewerSetup.exe
+PE32+ executable (console) x86-64, for MS Windows
+
+$ stat -c '%s bytes' viewer-app/dist/CamStationViewerSetup.exe
+383843328 bytes
+
+$ sha256sum viewer-app/dist/CamStationViewerSetup.exe
+bdafdb66dd46d2a18335e06eef8196e4d51d9079437d5f79634fa04df4b05074
+
+$ test ! -e cmd/camstation-viewer-installer/payload/release.zip
+PASS
+
+$ git diff --check
+PASS
+```
