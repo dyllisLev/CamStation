@@ -15,6 +15,7 @@ import (
 	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
+	"camstation/internal/viewerrelease"
 )
 
 type streamController interface {
@@ -51,6 +52,7 @@ type routeDeps struct {
 	recordingsDir     string
 	tempDir           string
 	viewerReleasesDir string
+	viewerReleases    *viewerrelease.Catalog
 	maxStorageBytes   int64
 	recordingEnabled  bool
 	cameraController  cameraControlService
@@ -97,6 +99,9 @@ func (d routeDeps) handler() (http.Handler, error) {
 	}
 	if d.viewerReleasesDir == "" {
 		d.viewerReleasesDir = filepath.Join(filepath.Dir(d.recordingsDir), "viewer-releases")
+	}
+	if d.viewerReleases == nil {
+		d.viewerReleases = viewerrelease.NewCatalog(d.viewerReleasesDir)
 	}
 	mux := http.NewServeMux()
 	previews := newPreviewRegistry()

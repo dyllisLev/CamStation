@@ -15,7 +15,7 @@ import (
 	"camstation/internal/store"
 )
 
-func TestViewerHeartbeatReturnsIndependentHealthAndDesiredRelease(t *testing.T) {
+func TestViewerHeartbeatEnsuresExactDesiredReleaseCommand(t *testing.T) {
 	server := newTestRouteServer(t)
 	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
 	digest := publishViewerFixture(t, releaseDir, []byte("installer"))
@@ -38,31 +38,70 @@ func TestViewerHeartbeatReturnsIndependentHealthAndDesiredRelease(t *testing.T) 
 		t.Fatalf("heartbeat viewer health = %#v", body["viewer"])
 	}
 	desired, ok := body["desiredRelease"].(map[string]any)
-	if !ok || desired["version"] != "2.0.0-dev.1" || desired["sha256"] != digest || desired["generation"] != float64(0) {
+	if !ok || desired["version"] != "2.0.0-dev.1" || desired["sha256"] != digest || desired["generation"] != float64(1) {
 		t.Fatalf("desired release = %#v", body["desiredRelease"])
 	}
-	updateCommand, err := server.db.CreateViewerCommand(t.Context(), "viewer-control", store.ViewerCommandCreate{
-		Type: "update_app", DesiredVersion: "2.0.0-dev.1", ArtifactSHA256: digest, Generation: 7,
-	})
-	if err != nil {
-		t.Fatalf("create desired update command: %v", err)
+	ttl, ttlOK := desired["ttlSeconds"].(float64)
+	if desired["commandId"] == nil || desired["payloadHash"] == "" || desired["createdAt"] == "" || !ttlOK || ttl <= 0 {
+		t.Fatalf("desired release omitted durable command identity = %#v", desired)
 	}
-	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
-	desired, ok = body["desiredRelease"].(map[string]any)
-	if status != http.StatusOK || !ok || desired["generation"] != float64(7) {
-		t.Fatalf("desired release generation = %d %#v", status, body["desiredRelease"])
+	commandID := int64(desired["commandId"].(float64))
+	delivered := performRequest(t, server.handler, http.MethodGet, "/api/viewers/viewer-control/commands/next")
+	if delivered.Code != http.StatusOK {
+		t.Fatalf("deliver ensured command status = %d body=%s", delivered.Code, delivered.Body.String())
 	}
-	if _, err := server.db.ApplyViewerCommandResult(t.Context(), "viewer-control", updateCommand.ID, store.ViewerCommandResult{
-		State: store.ViewerCommandRejected, OperationKey: "update-7",
+	var updateCommand store.ViewerCommand
+	if err := json.Unmarshal(delivered.Body.Bytes(), &updateCommand); err != nil {
+		t.Fatalf("decode delivered update command: %v", err)
+	}
+	if updateCommand.ID != commandID || updateCommand.PayloadHash != desired["payloadHash"] || updateCommand.Generation != 1 {
+		t.Fatalf("delivered command %#v does not match desired %#v", updateCommand, desired)
+	}
+	if _, err := server.db.ApplyViewerCommandResult(t.Context(), "viewer-control", commandID, store.ViewerCommandResult{
+		State: store.ViewerCommandRejected, OperationKey: "update-1",
 	}); err != nil {
 		t.Fatalf("reject desired update command: %v", err)
 	}
 	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
 	desired, ok = body["desiredRelease"].(map[string]any)
-	if status != http.StatusOK || !ok || desired["generation"] != float64(7) {
-		t.Fatalf("rejected desired release generation changed = %d %#v", status, body["desiredRelease"])
+	if status != http.StatusOK || !ok || desired["generation"] != float64(1) || int64(desired["commandId"].(float64)) != commandID {
+		t.Fatalf("rejected desired release rearmed = %d %#v", status, body["desiredRelease"])
+	}
+	commands, err := server.db.ListViewerCommands(t.Context(), "viewer-control")
+	if err != nil || len(commands) != 1 {
+		t.Fatalf("same-target commands = %#v err=%v", commands, err)
+	}
+
+	newDigest := publishViewerFixture(t, releaseDir, []byte("installer replacement"))
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
+	desired, ok = body["desiredRelease"].(map[string]any)
+	if status != http.StatusOK || !ok || desired["sha256"] != newDigest || desired["generation"] != float64(2) || int64(desired["commandId"].(float64)) == commandID {
+		t.Fatalf("new digest desired release = %d %#v", status, body["desiredRelease"])
 	}
 	assertEncodedDoesNotContain(t, body, releaseDir)
+}
+
+func TestViewerHeartbeatDoesNotEnqueueInstalledReleaseUnlessReportedDigestDiffers(t *testing.T) {
+	server := newTestRouteServer(t)
+	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
+	digest := publishViewerFixture(t, releaseDir, []byte("installer"))
+	heartbeat := `{
+		"id":"viewer-current","displayName":"Current wall","appVersion":"2.0.0-dev.1",
+		"route":"/live?viewer=1","mode":"live","agent":{"state":"online","version":"2.0.0-dev.1"},
+		"viewer":{"state":"running","version":"2.0.0-dev.1"},"renderer":{"state":"ready"},"streams":[]
+	}`
+	status, body := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
+	commands, err := server.db.ListViewerCommands(t.Context(), "viewer-current")
+	if status != http.StatusOK || body["desiredRelease"] != nil || err != nil || len(commands) != 0 {
+		t.Fatalf("installed release heartbeat = %d body=%#v commands=%#v err=%v", status, body, commands, err)
+	}
+
+	heartbeat = strings.Replace(heartbeat, `"version":"2.0.0-dev.1"`, `"version":"2.0.0-dev.1","artifactSha256":"`+strings.Repeat("0", 64)+`"`, 1)
+	status, body = requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
+	desired, ok := body["desiredRelease"].(map[string]any)
+	if status != http.StatusOK || !ok || desired["sha256"] != digest || desired["generation"] != float64(1) {
+		t.Fatalf("same-version new digest heartbeat = %d desired=%#v", status, body["desiredRelease"])
+	}
 }
 
 func TestViewerAdminListDoesNotDeliverAndSSEDeliversCommand(t *testing.T) {

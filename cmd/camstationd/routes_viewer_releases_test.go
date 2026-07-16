@@ -74,7 +74,7 @@ func TestViewerReleaseRoutesReturnServiceUnavailableWithoutValidRelease(t *testi
 	}
 
 	publishViewerFixture(t, releaseDir, []byte("installer"))
-	manifestPath := filepath.Join(releaseDir, "release.json")
+	manifestPath := filepath.Join(releaseDir, mustReadViewerActivePointer(t, releaseDir), "release.json")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read release manifest: %v", err)
@@ -88,6 +88,21 @@ func TestViewerReleaseRoutesReturnServiceUnavailableWithoutValidRelease(t *testi
 	}
 	if strings.Contains(response.Body.String(), releaseDir) {
 		t.Fatalf("invalid release leaked release directory in %q", response.Body.String())
+	}
+}
+
+func TestViewerReleaseRoutesRejectLegacyMutableRelease(t *testing.T) {
+	server := newTestRouteServer(t)
+	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
+	artifact := []byte("legacy installer")
+	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
+		t.Fatalf("create legacy release: %v", err)
+	}
+	publishLegacyViewerFixture(t, releaseDir, "CamStationViewerSetup.exe", artifact)
+
+	response := performRequest(t, server.handler, http.MethodGet, "/api/viewers/app/version")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("legacy mutable release status = %d, want %d; body=%s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 	}
 }
 
@@ -136,6 +151,26 @@ func publishViewerFixture(t *testing.T, dir string, artifact []byte) string {
 
 func publishViewerFixtureNamed(t *testing.T, dir string, filename string, artifact []byte) string {
 	t.Helper()
+	digest := sha256.Sum256(artifact)
+	digestHex := hex.EncodeToString(digest[:])
+	releaseDir := filepath.Join(filepath.Dir(dir), "releases", "2.0.0-dev.1-"+digestHex)
+	publishLegacyViewerFixture(t, releaseDir, filename, artifact)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create current release dir: %v", err)
+	}
+	temporary := filepath.Join(dir, ".active.new")
+	_ = os.Remove(temporary)
+	if err := os.Symlink(filepath.Join("..", "releases", filepath.Base(releaseDir)), temporary); err != nil {
+		t.Fatalf("create current release pointer: %v", err)
+	}
+	if err := os.Rename(temporary, filepath.Join(dir, "active")); err != nil {
+		t.Fatalf("switch current release pointer: %v", err)
+	}
+	return digestHex
+}
+
+func publishLegacyViewerFixture(t *testing.T, dir string, filename string, artifact []byte) string {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create viewer release dir: %v", err)
 	}
@@ -167,6 +202,15 @@ func publishViewerFixtureNamed(t *testing.T, dir string, filename string, artifa
 		t.Fatalf("write viewer release artifact: %v", err)
 	}
 	return digestHex
+}
+
+func mustReadViewerActivePointer(t *testing.T, dir string) string {
+	t.Helper()
+	target, err := os.Readlink(filepath.Join(dir, "active"))
+	if err != nil {
+		t.Fatalf("read active viewer pointer: %v", err)
+	}
+	return target
 }
 
 func performRequest(t *testing.T, handler http.Handler, method, target string) *httptest.ResponseRecorder {

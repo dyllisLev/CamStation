@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"camstation/internal/store"
@@ -32,8 +33,15 @@ type viewerHeartbeatResponse struct {
 
 type viewerDesiredReleaseResponse struct {
 	viewerrelease.Release
-	DownloadURL string `json:"downloadUrl"`
-	Generation  int64  `json:"generation"`
+	DownloadURL string                   `json:"downloadUrl"`
+	CommandID   int64                    `json:"commandId"`
+	PayloadHash string                   `json:"payloadHash"`
+	Generation  int64                    `json:"generation"`
+	TTLSeconds  int                      `json:"ttlSeconds"`
+	State       store.ViewerCommandState `json:"commandState"`
+	CreatedAt   time.Time                `json:"createdAt"`
+	UpdatedAt   time.Time                `json:"updatedAt"`
+	ExpiresAt   time.Time                `json:"expiresAt"`
 }
 
 func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
@@ -48,6 +56,11 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 			writeViewerError(w, err)
 			return
 		}
+		desiredRelease, err := d.desiredViewerRelease(r, req, viewer)
+		if err != nil {
+			writeViewerError(w, err)
+			return
+		}
 		_ = d.db.AppendEvent(r.Context(), store.Event{
 			Source:  "viewer",
 			Level:   "info",
@@ -56,7 +69,7 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 		})
 		writeJSON(w, http.StatusOK, viewerHeartbeatResponse{
 			Viewer:         viewer,
-			DesiredRelease: d.desiredViewerRelease(r, viewer.ID),
+			DesiredRelease: desiredRelease,
 		})
 	})
 
@@ -189,20 +202,49 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 	})
 }
 
-func (d routeDeps) desiredViewerRelease(r *http.Request, viewerID string) *viewerDesiredReleaseResponse {
-	release, err := viewerrelease.Load(d.viewerReleasesDir)
+func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerHeartbeat, viewer store.Viewer) (*viewerDesiredReleaseResponse, error) {
+	release, err := d.viewerReleases.Current(r.Context())
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	generation, err := d.db.ViewerDesiredReleaseGeneration(r.Context(), viewerID, release.Version, release.SHA256)
+	if viewerReportsRelease(viewer, heartbeat.Agent.ArtifactSHA256, release) {
+		return nil, nil
+	}
+	command, err := d.db.EnsureViewerUpdateCommand(r.Context(), viewer.ID, release.Version, release.SHA256)
 	if err != nil {
-		generation = 0
+		return nil, err
 	}
 	return &viewerDesiredReleaseResponse{
 		Release:     release,
 		DownloadURL: release.DownloadURL(),
-		Generation:  generation,
+		CommandID:   command.ID,
+		PayloadHash: command.PayloadHash,
+		Generation:  command.Generation,
+		TTLSeconds:  command.TTLSeconds,
+		State:       command.State,
+		CreatedAt:   command.CreatedAt,
+		UpdatedAt:   command.UpdatedAt,
+		ExpiresAt:   command.CreatedAt.Add(time.Duration(command.TTLSeconds) * time.Second),
+	}, nil
+}
+
+func viewerReportsRelease(viewer store.Viewer, artifactSHA256 string, release viewerrelease.Release) bool {
+	reportedVersion := false
+	for _, version := range []string{viewer.AppVersion, viewer.Agent.Version} {
+		version = strings.TrimSpace(version)
+		if version == "" {
+			continue
+		}
+		reportedVersion = true
+		if version != release.Version {
+			return false
+		}
 	}
+	if !reportedVersion {
+		return true
+	}
+	artifactSHA256 = strings.TrimSpace(artifactSHA256)
+	return artifactSHA256 == "" || artifactSHA256 == release.SHA256
 }
 
 func (d routeDeps) handleViewerControl(w http.ResponseWriter, r *http.Request) {

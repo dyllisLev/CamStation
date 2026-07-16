@@ -19,9 +19,9 @@ func (d routeDeps) registerViewerReleaseRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/viewers/app/download", d.handleViewerReleaseDownload)
 }
 
-func (d routeDeps) handleViewerReleaseVersion(w http.ResponseWriter, _ *http.Request) {
+func (d routeDeps) handleViewerReleaseVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	release, err := viewerrelease.Load(d.viewerReleasesDir)
+	release, err := d.viewerReleases.Current(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
@@ -29,13 +29,8 @@ func (d routeDeps) handleViewerReleaseVersion(w http.ResponseWriter, _ *http.Req
 	writeJSON(w, http.StatusOK, viewerReleaseResponse{Release: release, DownloadURL: release.DownloadURL()})
 }
 
-func (d routeDeps) handleViewerReleaseDownload(w http.ResponseWriter, _ *http.Request) {
-	release, err := viewerrelease.Load(d.viewerReleasesDir)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	file, err := release.OpenVerified()
+func (d routeDeps) handleViewerReleaseDownload(w http.ResponseWriter, r *http.Request) {
+	release, file, err := d.viewerReleases.Open(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return

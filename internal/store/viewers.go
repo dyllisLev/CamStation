@@ -23,8 +23,9 @@ type ViewerStreamHealth struct {
 }
 
 type ViewerAgentHealth struct {
-	State   string `json:"state"`
-	Version string `json:"version,omitempty"`
+	State          string `json:"state"`
+	Version        string `json:"version,omitempty"`
+	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
 }
 
 type ViewerControlHealth struct {
@@ -219,6 +220,7 @@ func sanitizeHeartbeat(req ViewerHeartbeat) ViewerHeartbeat {
 	req.Mode = RedactText(strings.TrimSpace(req.Mode))
 	req.Agent.State = RedactText(strings.TrimSpace(req.Agent.State))
 	req.Agent.Version = RedactText(strings.TrimSpace(req.Agent.Version))
+	req.Agent.ArtifactSHA256 = RedactText(strings.TrimSpace(req.Agent.ArtifactSHA256))
 	req.Control.State = RedactText(strings.TrimSpace(req.Control.State))
 	req.Viewer.State = RedactText(strings.TrimSpace(req.Viewer.State))
 	req.Viewer.Version = RedactText(strings.TrimSpace(req.Viewer.Version))

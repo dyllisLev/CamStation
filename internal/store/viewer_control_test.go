@@ -3,10 +3,137 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestEnsureViewerUpdateCommandConcurrentHeartbeatsCreateOneGeneration(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-update-concurrent", DisplayName: "Concurrent update", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	const callers = 24
+	start := make(chan struct{})
+	results := make(chan ViewerCommand, callers)
+	errorsCh := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			command, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.0.0", strings.Repeat("a", 64))
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- command
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errorsCh)
+
+	for err := range errorsCh {
+		t.Errorf("ensure concurrent update: %v", err)
+	}
+	var commandID int64
+	for command := range results {
+		if commandID == 0 {
+			commandID = command.ID
+		}
+		if command.ID != commandID || command.Generation != 1 || command.PayloadHash == "" || command.TTLSeconds <= 0 {
+			t.Fatalf("ensured command = %#v, want one positive durable generation", command)
+		}
+	}
+	commands, err := db.ListViewerCommands(t.Context(), viewer.ID)
+	if err != nil {
+		t.Fatalf("list commands: %v", err)
+	}
+	if len(commands) != 1 || commands[0].ID != commandID {
+		t.Fatalf("commands = %#v, want exactly one ensured target", commands)
+	}
+}
+
+func TestEnsureViewerUpdateCommandDoesNotRearmTerminalTarget(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-update-terminal", DisplayName: "Terminal update", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	first, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.0.0", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatalf("ensure first update: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, first.ID, ViewerCommandResult{
+		State: ViewerCommandRejected, OperationKey: "update-1",
+	}); err != nil {
+		t.Fatalf("reject first update: %v", err)
+	}
+
+	same, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.0.0", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatalf("ensure rejected target: %v", err)
+	}
+	if same.ID != first.ID || same.Generation != first.Generation || same.State != ViewerCommandRejected {
+		t.Fatalf("same target rearmed: first=%#v same=%#v", first, same)
+	}
+
+	next, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.0.0", strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatalf("ensure new digest: %v", err)
+	}
+	if next.ID == first.ID || next.Generation != first.Generation+1 || next.State != ViewerCommandPending {
+		t.Fatalf("new digest command = %#v, first=%#v", next, first)
+	}
+	commands, err := db.ListViewerCommands(t.Context(), viewer.ID)
+	if err != nil || len(commands) != 2 {
+		t.Fatalf("commands after new digest = %#v err=%v", commands, err)
+	}
+}
+
+func TestEnsureViewerUpdateCommandUpgradesLegacyZeroGenerationPayload(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-update-legacy", DisplayName: "Legacy update", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	digest := strings.Repeat("c", 64)
+	legacy, err := db.CreateViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{
+		Type: "update_app", Message: "scheduled", Route: "/live?viewer=1",
+		DesiredVersion: "2.0.0", ArtifactSHA256: digest, TTLSeconds: 900,
+	})
+	if err != nil {
+		t.Fatalf("create legacy update: %v", err)
+	}
+	ensured, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.0.0", digest)
+	if err != nil {
+		t.Fatalf("ensure legacy update: %v", err)
+	}
+	_, expectedHash, err := prepareViewerCommand(ViewerCommandCreate{
+		Type: "update_app", Message: legacy.Message, Route: legacy.Route,
+		DesiredVersion: legacy.DesiredVersion, ArtifactSHA256: legacy.ArtifactSHA256,
+		TTLSeconds: legacy.TTLSeconds, Generation: ensured.Generation,
+	})
+	if err != nil {
+		t.Fatalf("prepare expected payload: %v", err)
+	}
+	if ensured.ID != legacy.ID || ensured.Generation != 1 || ensured.PayloadHash != expectedHash ||
+		ensured.Message != legacy.Message || ensured.Route != legacy.Route || ensured.TTLSeconds != legacy.TTLSeconds {
+		t.Fatalf("upgraded legacy command = %#v, legacy=%#v expectedHash=%s", ensured, legacy, expectedHash)
+	}
+}
 
 func TestViewerCommandResultIsIdempotent(t *testing.T) {
 	db := openMigratedStore(t)

@@ -89,34 +89,10 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 	if _, err := d.GetViewer(ctx, viewerID, 90*time.Second); err != nil {
 		return ViewerCommand{}, err
 	}
-	req.Type = RedactText(strings.TrimSpace(req.Type))
-	req.Message = RedactText(strings.TrimSpace(req.Message))
-	req.Route = RedactText(strings.TrimSpace(req.Route))
-	req.Mode = RedactText(strings.TrimSpace(req.Mode))
-	req.StreamName = RedactText(strings.TrimSpace(req.StreamName))
-	req.DesiredVersion = RedactText(strings.TrimSpace(req.DesiredVersion))
-	req.ArtifactSHA256 = RedactText(strings.TrimSpace(req.ArtifactSHA256))
-	if req.Type == "" {
-		return ViewerCommand{}, fmt.Errorf("command type is required: %w", ErrValidation)
-	}
-	if req.TTLSeconds <= 0 {
-		req.TTLSeconds = 300
-	}
-	payload, err := json.Marshal(struct {
-		Type           string `json:"type"`
-		Message        string `json:"message,omitempty"`
-		Route          string `json:"route,omitempty"`
-		Mode           string `json:"mode,omitempty"`
-		StreamName     string `json:"streamName,omitempty"`
-		DesiredVersion string `json:"desiredVersion,omitempty"`
-		ArtifactSHA256 string `json:"artifactSha256,omitempty"`
-		Generation     int64  `json:"generation"`
-	}{req.Type, req.Message, req.Route, req.Mode, req.StreamName, req.DesiredVersion, req.ArtifactSHA256, req.Generation})
+	req, payloadHash, err := prepareViewerCommand(req)
 	if err != nil {
-		return ViewerCommand{}, fmt.Errorf("encode viewer command payload: %w", err)
+		return ViewerCommand{}, err
 	}
-	digest := sha256.Sum256(payload)
-	payloadHash := hex.EncodeToString(digest[:])
 	now := time.Now().UTC()
 	res, err := d.db.ExecContext(ctx,
 		`INSERT INTO viewer_commands(viewer_id, type, message, route, mode, stream_name, desired_version,
@@ -134,6 +110,130 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 		return ViewerCommand{}, fmt.Errorf("created viewer command id: %w", err)
 	}
 	return d.GetViewerCommand(ctx, viewerID, id)
+}
+
+func (d *DB) EnsureViewerUpdateCommand(ctx context.Context, viewerID, version, artifactSHA256 string) (ViewerCommand, error) {
+	viewerID = strings.TrimSpace(viewerID)
+	version = RedactText(strings.TrimSpace(version))
+	artifactSHA256 = strings.TrimSpace(artifactSHA256)
+	if version == "" || len(artifactSHA256) != sha256.Size*2 || strings.ToLower(artifactSHA256) != artifactSHA256 {
+		return ViewerCommand{}, fmt.Errorf("invalid viewer update target: %w", ErrValidation)
+	}
+	if _, err := hex.DecodeString(artifactSHA256); err != nil {
+		return ViewerCommand{}, fmt.Errorf("invalid viewer update digest: %w", ErrValidation)
+	}
+	if _, err := d.GetViewer(ctx, viewerID, 90*time.Second); err != nil {
+		return ViewerCommand{}, err
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ViewerCommand{}, fmt.Errorf("begin viewer update ensure: %w", err)
+	}
+	defer tx.Rollback()
+	existing, err := scanViewerCommand(tx.QueryRowContext(ctx,
+		viewerCommandSelect+` WHERE viewer_id = ? AND type = 'update_app'
+			AND desired_version = ? AND artifact_sha256 = ? ORDER BY id LIMIT 1`,
+		viewerID, version, artifactSHA256,
+	))
+	if err == nil && existing.Generation > 0 {
+		if err := tx.Commit(); err != nil {
+			return ViewerCommand{}, fmt.Errorf("commit existing viewer update: %w", err)
+		}
+		return existing, nil
+	}
+	if err != nil && !errors.Is(err, ErrViewerCommandNotFound) {
+		return ViewerCommand{}, fmt.Errorf("load existing viewer update: %w", err)
+	}
+
+	var generation int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(generation), 0) + 1 FROM viewer_commands
+		 WHERE viewer_id = ? AND type = 'update_app'`, viewerID,
+	).Scan(&generation); err != nil {
+		return ViewerCommand{}, fmt.Errorf("allocate viewer update generation: %w", err)
+	}
+	update := ViewerCommandCreate{
+		Type: "update_app", DesiredVersion: version, ArtifactSHA256: artifactSHA256, Generation: generation,
+	}
+	if existing.ID > 0 {
+		update.Message = existing.Message
+		update.Route = existing.Route
+		update.Mode = existing.Mode
+		update.StreamName = existing.StreamName
+		update.TTLSeconds = existing.TTLSeconds
+	}
+	req, payloadHash, err := prepareViewerCommand(update)
+	if err != nil {
+		return ViewerCommand{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if existing.ID > 0 {
+		existing, err = scanViewerCommand(tx.QueryRowContext(ctx,
+			`UPDATE viewer_commands SET generation = ?, payload_hash = ?, updated_at = ?
+			 WHERE viewer_id = ? AND id = ? RETURNING `+viewerCommandColumns,
+			generation, payloadHash, now, viewerID, existing.ID,
+		))
+		if err != nil {
+			return ViewerCommand{}, fmt.Errorf("upgrade viewer update generation: %w", err)
+		}
+	} else {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO viewer_commands(viewer_id, type, message, route, mode, stream_name, desired_version,
+				artifact_sha256, payload_hash, ttl_seconds, generation, state, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			viewerID, req.Type, req.Message, req.Route, req.Mode, req.StreamName, req.DesiredVersion,
+			req.ArtifactSHA256, payloadHash, req.TTLSeconds, req.Generation, ViewerCommandPending, now, now,
+		)
+		if err != nil {
+			return ViewerCommand{}, fmt.Errorf("create ensured viewer update: %w", err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return ViewerCommand{}, fmt.Errorf("ensured viewer update id: %w", err)
+		}
+		existing, err = scanViewerCommand(tx.QueryRowContext(ctx,
+			viewerCommandSelect+` WHERE viewer_id = ? AND id = ?`, viewerID, id,
+		))
+		if err != nil {
+			return ViewerCommand{}, fmt.Errorf("load ensured viewer update: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ViewerCommand{}, fmt.Errorf("commit viewer update ensure: %w", err)
+	}
+	return existing, nil
+}
+
+func prepareViewerCommand(req ViewerCommandCreate) (ViewerCommandCreate, string, error) {
+	req.Type = RedactText(strings.TrimSpace(req.Type))
+	req.Message = RedactText(strings.TrimSpace(req.Message))
+	req.Route = RedactText(strings.TrimSpace(req.Route))
+	req.Mode = RedactText(strings.TrimSpace(req.Mode))
+	req.StreamName = RedactText(strings.TrimSpace(req.StreamName))
+	req.DesiredVersion = RedactText(strings.TrimSpace(req.DesiredVersion))
+	req.ArtifactSHA256 = RedactText(strings.TrimSpace(req.ArtifactSHA256))
+	if req.Type == "" {
+		return ViewerCommandCreate{}, "", fmt.Errorf("command type is required: %w", ErrValidation)
+	}
+	if req.TTLSeconds <= 0 {
+		req.TTLSeconds = 300
+	}
+	payload, err := json.Marshal(struct {
+		Type           string `json:"type"`
+		Message        string `json:"message,omitempty"`
+		Route          string `json:"route,omitempty"`
+		Mode           string `json:"mode,omitempty"`
+		StreamName     string `json:"streamName,omitempty"`
+		DesiredVersion string `json:"desiredVersion,omitempty"`
+		ArtifactSHA256 string `json:"artifactSha256,omitempty"`
+		Generation     int64  `json:"generation"`
+	}{req.Type, req.Message, req.Route, req.Mode, req.StreamName, req.DesiredVersion, req.ArtifactSHA256, req.Generation})
+	if err != nil {
+		return ViewerCommandCreate{}, "", fmt.Errorf("encode viewer command payload: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	return req, hex.EncodeToString(digest[:]), nil
 }
 
 func (d *DB) DequeueViewerCommands(ctx context.Context, viewerID string) ([]ViewerCommand, error) {
