@@ -2,10 +2,13 @@ package vieweragent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -135,6 +138,43 @@ func TestIncompleteRestartReconcilesTowardSameGeneration(t *testing.T) {
 	}
 }
 
+func TestExpiredRunningRestartIsDurablyExpiredWithoutExecution(t *testing.T) {
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	ledger := CommandLedger{Records: map[string]CommandRecord{"24": {
+		ID: 24, Type: "restart_viewer", State: CommandRunning, PayloadHash: "expired",
+		OperationKey: "viewer-generation-9", Generation: 9, CreatedAt: now.Add(-2 * time.Minute), TTLSeconds: 60,
+	}}}
+	if err := SaveCommandLedger(paths.Commands, ledger); err != nil {
+		t.Fatal(err)
+	}
+	var reported []CommandState
+	agent := Agent{
+		Paths: paths,
+		Now:   func() time.Time { return now },
+		Executor: executorFunc(func(context.Context, Command, string) error {
+			t.Fatal("expired restart executed")
+			return nil
+		}),
+		Reporter: reporterFunc(func(_ context.Context, _ Command, state CommandState, _, _ string) error {
+			reported = append(reported, state)
+			return nil
+		}),
+	}
+	results, err := agent.Reconcile(t.Context())
+	if err != nil || len(results) != 1 || results[0].State != CommandExpired {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+	persisted, err := LoadCommandLedger(paths.Commands)
+	if err != nil || persisted.Records["24"].State != CommandExpired {
+		t.Fatalf("persisted=%+v err=%v", persisted.Records["24"], err)
+	}
+	if len(reported) != 1 || reported[0] != CommandExpired {
+		t.Fatalf("reported=%v", reported)
+	}
+}
+
 func TestReceivedRestartResumesItsPersistedGeneration(t *testing.T) {
 	dir := t.TempDir()
 	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
@@ -219,9 +259,21 @@ func TestAgentHeartbeatContinuesWithoutViewerIPC(t *testing.T) {
 	agent.HTTPClient = server.Client()
 	agent.HeartbeatInterval = 10 * time.Millisecond
 	agent.ControlReadDeadline = time.Second
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
-	defer cancel()
-	_ = agent.Run(ctx)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- agent.Run(ctx) }()
+	deadline := time.After(2 * time.Second)
+	for heartbeats.Load() < 3 {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			t.Fatalf("heartbeats stopped without Viewer IPC: %d", heartbeats.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	_ = <-done
 	if heartbeats.Load() < 3 {
 		t.Fatalf("heartbeats stopped without Viewer IPC: %d", heartbeats.Load())
 	}
@@ -239,6 +291,183 @@ func TestPipeFailureMarksViewerFailedWithoutChangingControlState(t *testing.T) {
 	}
 	state, err := LoadMachineState(paths.State)
 	if err != nil || state.ViewerState != "failed" || state.ControlState != "online" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
+func TestCorruptLedgerFailsStartupBeforeAnyOnlineHeartbeat(t *testing.T) {
+	var heartbeats atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/viewers/heartbeat" {
+			heartbeats.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	if err := os.WriteFile(paths.Commands, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Broken", InstallDir: dir, ClientID: "broken-ledger"}
+	agent := NewAgent(config, paths)
+	agent.HTTPClient = server.Client()
+	readyCalls := 0
+	agent.Ready = func() { readyCalls++ }
+	err := agent.Run(t.Context())
+	if !errors.Is(err, ErrCommandEngine) || heartbeats.Load() != 0 || readyCalls != 0 {
+		t.Fatalf("err=%v heartbeats=%d ready=%d", err, heartbeats.Load(), readyCalls)
+	}
+}
+
+func TestAgentSignalsReadyAfterCommandEngineHealthCheck(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/control") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Ready", InstallDir: dir, ClientID: "ready-agent"}
+	agent := NewAgent(config, paths)
+	agent.HTTPClient = server.Client()
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan struct{})
+	agent.Ready = func() {
+		close(ready)
+		cancel()
+	}
+	done := make(chan error, 1)
+	go func() { done <- agent.Run(ctx) }()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("Agent never signaled readiness")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentReturnsLocalControlStateFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/control") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(": keepalive\n\n"))
+			w.(http.Flusher).Flush()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Broken state", InstallDir: dir, ClientID: "broken-state"}
+	agent := NewAgent(config, paths)
+	agent.HTTPClient = server.Client()
+	agent.Ready = func() {
+		if err := os.WriteFile(paths.State, []byte("not-json"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := agent.Run(t.Context()); err == nil {
+		t.Fatal("local control state failure was reported as a clean Agent exit")
+	}
+}
+
+func TestLedgerReadAndWriteFailuresDegradeCommandEngine(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*Agent, MachinePaths) error
+	}{
+		{name: "corrupt read", setup: func(_ *Agent, paths MachinePaths) error {
+			return os.WriteFile(paths.Commands, []byte("not-json"), 0o600)
+		}},
+		{name: "injected write", setup: func(agent *Agent, _ MachinePaths) error {
+			agent.LoadLedger = func(string) (CommandLedger, error) {
+				return CommandLedger{SchemaVersion: SchemaVersion, Records: map[string]CommandRecord{}}, nil
+			}
+			agent.SaveLedger = func(string, CommandLedger) error { return errors.New("disk full") }
+			return nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+			if err := SaveMachineState(paths.State, MachineState{ControlState: "online", CommandEngineHealthy: true}); err != nil {
+				t.Fatal(err)
+			}
+			agent := Agent{Paths: paths}
+			if err := test.setup(&agent, paths); err != nil {
+				t.Fatal(err)
+			}
+			_, err := agent.HandleCommand(t.Context(), Command{ID: 90, Type: "ping", PayloadHash: "hash", TTLSeconds: 300})
+			if !errors.Is(err, ErrCommandEngine) {
+				t.Fatalf("err=%v", err)
+			}
+			state, err := LoadMachineState(paths.State)
+			if err != nil || state.CommandEngineHealthy || state.ControlState != "control_degraded" {
+				t.Fatalf("state=%+v err=%v", state, err)
+			}
+		})
+	}
+}
+
+func TestTransportSuccessCannotMaskBrokenCommandEngineInHeartbeat(t *testing.T) {
+	heartbeat := make(chan HeartbeatPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload HeartbeatPayload
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		heartbeat <- payload
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	if err := SaveMachineState(paths.State, MachineState{ControlState: "control_degraded", CommandEngineHealthy: false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Commands, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{SchemaVersion: SchemaVersion, ServerURL: server.URL, DisplayName: "Broken", InstallDir: dir, ClientID: "broken-control"}
+	agent := NewAgent(config, paths)
+	agent.HTTPClient = server.Client()
+	if err := agent.applyControlResult(ControlResult{Transport: ControlTransportSSE, Proven: true}); err == nil {
+		t.Fatal("broken command engine passed health check")
+	}
+	agent.sendHeartbeat(t.Context(), ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: config.ClientID})
+	if got := <-heartbeat; got.Control.State != "control_degraded" {
+		t.Fatalf("heartbeat control state=%q", got.Control.State)
+	}
+}
+
+func TestCommandFrameStaysDegradedUntilDurableProcessingSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	paths := MachinePaths{State: filepath.Join(dir, "state.json"), Commands: filepath.Join(dir, "commands.json"), Update: filepath.Join(dir, "update.json")}
+	if err := SaveMachineState(paths.State, MachineState{ControlState: "online", CommandEngineHealthy: true}); err != nil {
+		t.Fatal(err)
+	}
+	agent := Agent{
+		Paths: paths,
+		LoadLedger: func(string) (CommandLedger, error) {
+			return CommandLedger{SchemaVersion: SchemaVersion, Records: map[string]CommandRecord{}}, nil
+		},
+		SaveLedger: func(string, CommandLedger) error { return errors.New("disk full") },
+	}
+	command := Command{ID: 91, Type: "ping", PayloadHash: "hash", TTLSeconds: 300}
+	err := agent.handleControlResult(t.Context(), ControlResult{Transport: ControlTransportSSE, Proven: true, Command: &command})
+	if !errors.Is(err, ErrCommandEngine) {
+		t.Fatalf("err=%v", err)
+	}
+	state, err := LoadMachineState(paths.State)
+	if err != nil || state.ControlState != "control_degraded" || state.CommandEngineHealthy {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
 }

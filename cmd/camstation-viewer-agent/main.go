@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,10 +18,11 @@ import (
 var version = "dev"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	if err != nil && !errors.Is(err, vieweragent.ErrAgentRestartRequested) {
 		fmt.Fprintln(os.Stderr, "CamStation Viewer Agent:", err)
-		os.Exit(1)
 	}
+	os.Exit(agentExitCode(err))
 }
 
 func run(args []string) error {
@@ -40,6 +44,8 @@ func run(args []string) error {
 	case "run":
 		flags := flag.NewFlagSet("run", flag.ContinueOnError)
 		configPath := flags.String("config", "", "machine config path")
+		controlStdin := flags.Bool("control-stdin", false, "accept stable host control on stdin")
+		readyStdout := flags.Bool("ready-stdout", false, "signal readiness to the stable host")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -52,10 +58,46 @@ func run(args []string) error {
 		}
 		agent := vieweragent.NewAgent(config, vieweragent.PathsFromConfig(*configPath))
 		agent.AgentVersion = version
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		if *readyStdout {
+			agent.Ready = func() { agentReadySignal(os.Stdout) }
+		}
+		signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		ctx, cancel := context.WithCancel(signalCtx)
+		defer cancel()
+		if *controlStdin {
+			go func() {
+				_ = watchHostControl(os.Stdin, cancel)
+				cancel()
+			}()
+		}
 		return agent.Run(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
+
+func watchHostControl(reader io.Reader, cancel context.CancelFunc) error {
+	scanner := bufio.NewScanner(reader)
+	if scanner.Scan() {
+		if scanner.Text() != "stop" {
+			return errors.New("unsupported host control command")
+		}
+		cancel()
+		return nil
+	}
+	cancel()
+	return scanner.Err()
+}
+
+func agentExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, vieweragent.ErrAgentRestartRequested) {
+		return vieweragent.PlannedRestartExitCode
+	}
+	return 1
+}
+
+func agentReadySignal(writer io.Writer) { _, _ = io.WriteString(writer, "ready\n") }

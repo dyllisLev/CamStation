@@ -1,8 +1,10 @@
 package vieweragent
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,27 @@ import (
 type CurrentRelease struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	AgentPath     string `json:"agentPath"`
+}
+
+const PlannedRestartExitCode = 75
+
+type ChildExitKind string
+
+const (
+	ChildCrashed        ChildExitKind = "crashed"
+	ChildPlannedRestart ChildExitKind = "planned_restart"
+	ChildStopped        ChildExitKind = "stopped"
+)
+
+type ChildExit struct {
+	Kind ChildExitKind
+	Err  error
+}
+
+type HostChild interface {
+	Wait() error
+	RequestStop() error
+	Kill() error
 }
 
 func LoadCurrentRelease(installDir string) (CurrentRelease, error) {
@@ -44,34 +67,133 @@ func ValidateCurrentRelease(installDir string, current CurrentRelease) (CurrentR
 	return current, nil
 }
 
-func RunChildSupervisor(ctx context.Context, run func(context.Context) error, sleep func(context.Context, time.Duration) error) error {
+func RunChildSupervisor(ctx context.Context, run func(context.Context) ChildExit, sleep func(context.Context, time.Duration) error) error {
 	if run == nil || sleep == nil {
 		return errors.New("child supervisor requires run and sleep functions")
 	}
 	delays := [...]time.Duration{5 * time.Second, 30 * time.Second, 120 * time.Second}
 	var lastErr error
-	for attempt := 0; attempt <= len(delays); attempt++ {
+	crashRestarts := 0
+	plannedReloaded := false
+	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		lastErr = run(ctx)
+		exit := run(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		if attempt == len(delays) {
+		if exit.Kind == ChildPlannedRestart && !plannedReloaded {
+			plannedReloaded = true
+			continue
+		}
+		if exit.Kind == ChildPlannedRestart {
+			exit = ChildExit{Kind: ChildCrashed, Err: errors.New("repeated planned restart")}
+		}
+		switch exit.Kind {
+		case ChildStopped:
+			return nil
+		case ChildCrashed:
+			lastErr = exit.Err
+		}
+		if crashRestarts == len(delays) {
 			break
 		}
-		if err := sleep(ctx, delays[attempt]); err != nil {
+		if err := sleep(ctx, delays[crashRestarts]); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
+		crashRestarts++
 	}
 	if lastErr == nil {
 		return errors.New("versioned Agent exited")
 	}
 	return lastErr
+}
+
+func RunManagedChild(ctx context.Context, child HostChild, gracefulDeadline time.Duration) ChildExit {
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+	select {
+	case err := <-done:
+		return classifyChildExit(err)
+	case <-ctx.Done():
+		_ = child.RequestStop()
+	}
+	timer := time.NewTimer(gracefulDeadline)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return ChildExit{Kind: ChildStopped}
+	case <-timer.C:
+		_ = child.Kill()
+		killTimer := time.NewTimer(gracefulDeadline)
+		defer killTimer.Stop()
+		select {
+		case <-done:
+		case <-killTimer.C:
+		}
+		return ChildExit{Kind: ChildStopped}
+	}
+}
+
+func classifyChildExit(err error) ChildExit {
+	var exitCoder interface{ ExitCode() int }
+	if errors.As(err, &exitCoder) && exitCoder.ExitCode() == PlannedRestartExitCode {
+		return ChildExit{Kind: ChildPlannedRestart}
+	}
+	if err == nil {
+		err = errors.New("versioned Agent exited")
+	}
+	return ChildExit{Kind: ChildCrashed, Err: err}
+}
+
+func LoadReadyRelease(installDir string) (CurrentRelease, error) {
+	current, err := LoadCurrentRelease(installDir)
+	if err != nil {
+		return CurrentRelease{}, err
+	}
+	if err := EnsureCurrentAgentExists(current); err != nil {
+		return CurrentRelease{}, err
+	}
+	return current, nil
+}
+
+func EstablishHostReadiness(load func() (CurrentRelease, error), start func(CurrentRelease) (HostChild, error), ready func()) (HostChild, error) {
+	current, err := load()
+	if err != nil {
+		return nil, err
+	}
+	child, err := start(current)
+	if err != nil {
+		return nil, err
+	}
+	ready()
+	return child, nil
+}
+
+func WaitForAgentReady(reader io.ReadCloser, timeout time.Duration) error {
+	defer reader.Close()
+	done := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(reader).ReadString('\n')
+		if err == nil && line != "ready\n" {
+			err = errors.New("invalid Agent readiness signal")
+		}
+		done <- err
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		_ = reader.Close()
+		<-done
+		return errors.New("Agent readiness timed out")
+	}
 }
 
 func SleepContext(ctx context.Context, delay time.Duration) error { return waitContext(ctx, delay) }

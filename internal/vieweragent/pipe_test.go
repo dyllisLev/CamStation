@@ -40,3 +40,13 @@ func TestPipeIdentityUsesOSProcessAndConsoleSession(t *testing.T) {
 		t.Fatal("non-console pipe session was accepted")
 	}
 }
+
+func TestPipeMessageRejectsTrailingSecondJSONValue(t *testing.T) {
+	valid := `{"version":1,"requestId":"one","type":"viewer_heartbeat"}`
+	if _, err := ReadPipeMessage(strings.NewReader(valid + "   \n")); err != nil {
+		t.Fatalf("trailing whitespace rejected: %v", err)
+	}
+	if _, err := ReadPipeMessage(strings.NewReader(valid + ` {"version":1}` + "\n")); err == nil {
+		t.Fatal("trailing JSON value was accepted")
+	}
+}

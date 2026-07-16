@@ -59,6 +59,9 @@ func readPipeMessage(reader *bufio.Reader) (PipeMessage, error) {
 	if err := decoder.Decode(&message); err != nil {
 		return PipeMessage{}, err
 	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return PipeMessage{}, errors.New("pipe message contains trailing JSON")
+	}
 	if message.Version != PipeProtocolVersion || strings.TrimSpace(message.RequestID) == "" || strings.TrimSpace(message.Type) == "" {
 		return PipeMessage{}, errors.New("invalid pipe protocol message")
 	}

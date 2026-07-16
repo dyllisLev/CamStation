@@ -17,6 +17,7 @@ const defaultHeartbeatInterval = 10 * time.Second
 var (
 	ErrCommandRejected       = errors.New("viewer command rejected")
 	ErrAgentRestartRequested = errors.New("Agent restart requested")
+	ErrCommandEngine         = errors.New("command engine unavailable")
 )
 
 type Executor interface {
@@ -38,6 +39,9 @@ type Agent struct {
 	ControlReadDeadline      time.Duration
 	AgentVersion             string
 	Now                      func() time.Time
+	LoadLedger               func(string) (CommandLedger, error)
+	SaveLedger               func(string, CommandLedger) error
+	Ready                    func()
 
 	stateMu sync.Mutex
 }
@@ -53,7 +57,12 @@ func NewAgent(config Config, paths MachinePaths) Agent {
 	}
 }
 
-func (agent *Agent) HandleCommand(ctx context.Context, command Command) (CommandRecord, error) {
+func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result CommandRecord, resultErr error) {
+	defer func() {
+		if errors.Is(resultErr, ErrCommandEngine) {
+			_ = agent.markCommandEngineFailure()
+		}
+	}()
 	if err := validateCommand(command); err != nil {
 		return CommandRecord{}, err
 	}
@@ -64,7 +73,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (Command
 		command.TTLSeconds = 300
 	}
 	now := agent.now().UTC()
-	ledger, err := LoadCommandLedger(agent.Paths.Commands)
+	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		return CommandRecord{}, err
 	}
@@ -76,6 +85,13 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (Command
 			agent.report(ctx, command, current.State, current.OperationKey, current.Error)
 			return current, nil
 		}
+		if commandRecordExpired(current, now) {
+			expired, expireErr := agent.expireRecord(ctx, command.Key(), current, ledger)
+			if expireErr != nil {
+				return expired, expireErr
+			}
+			return expired, fmt.Errorf("command expired: %w", ErrCommandRejected)
+		}
 		if current.State == CommandRunning {
 			reconciled, reconcileErr := agent.reconcileRecord(command.Key(), current, ledger)
 			if reconcileErr == nil {
@@ -85,17 +101,22 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (Command
 		}
 	}
 
+	createdAt := command.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
 	record := CommandRecord{
 		ID: command.ID, Type: command.Type, PayloadHash: command.PayloadHash,
 		DesiredVersion: command.DesiredVersion, ArtifactSHA256: strings.ToLower(command.ArtifactSHA256),
-		Generation: command.Generation, State: CommandReceived, ReceivedAt: now,
+		Generation: command.Generation, State: CommandReceived, CreatedAt: createdAt,
+		TTLSeconds: command.TTLSeconds, ReceivedAt: now,
 	}
 	ledger.Records[command.Key()] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return CommandRecord{}, err
 	}
 
-	if !command.CreatedAt.IsZero() && !now.Before(command.CreatedAt.Add(time.Duration(command.TTLSeconds)*time.Second)) {
+	if commandRecordExpired(record, now) {
 		return agent.finishCommand(ctx, command, ledger, record, CommandExpired, "command expired")
 	}
 	if command.Type == "update_app" {
@@ -143,7 +164,7 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (Command
 	record.State = CommandRunning
 	record.RunningAt = &now
 	ledger.Records[command.Key()] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return CommandRecord{}, err
 	}
 	agent.report(ctx, command, CommandRunning, record.OperationKey, "")
@@ -171,13 +192,29 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (Command
 	return agent.finishCommand(ctx, command, ledger, record, CommandSucceeded, "")
 }
 
-func (agent *Agent) Reconcile(ctx context.Context) ([]CommandRecord, error) {
-	ledger, err := LoadCommandLedger(agent.Paths.Commands)
+func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, resultErr error) {
+	defer func() {
+		if errors.Is(resultErr, ErrCommandEngine) {
+			_ = agent.markCommandEngineFailure()
+		}
+	}()
+	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		return nil, err
 	}
-	results := make([]CommandRecord, 0)
+	results = make([]CommandRecord, 0)
 	for key, record := range ledger.Records {
+		if record.State.terminal() {
+			continue
+		}
+		if commandRecordExpired(record, agent.now().UTC()) {
+			expired, expireErr := agent.expireRecord(ctx, key, record, ledger)
+			if expireErr != nil {
+				return results, expireErr
+			}
+			results = append(results, expired)
+			continue
+		}
 		if record.State != CommandRunning {
 			continue
 		}
@@ -222,10 +259,27 @@ func (agent *Agent) resumeViewerRestart(ctx context.Context, key string, record 
 	}
 	record.CompletedAt = &now
 	ledger.Records[key] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return record, err
 	}
 	return record, nil
+}
+
+func (agent *Agent) expireRecord(ctx context.Context, key string, record CommandRecord, ledger CommandLedger) (CommandRecord, error) {
+	now := agent.now().UTC()
+	record.State = CommandExpired
+	record.Error = "command expired"
+	record.CompletedAt = &now
+	ledger.Records[key] = record
+	if err := agent.saveCommandLedger(ledger); err != nil {
+		return record, err
+	}
+	agent.report(ctx, Command{ID: record.ID, Type: record.Type, PayloadHash: record.PayloadHash, CreatedAt: record.CreatedAt, TTLSeconds: record.TTLSeconds}, CommandExpired, record.OperationKey, record.Error)
+	return record, nil
+}
+
+func commandRecordExpired(record CommandRecord, now time.Time) bool {
+	return record.TTLSeconds > 0 && !record.CreatedAt.IsZero() && !now.Before(record.CreatedAt.Add(time.Duration(record.TTLSeconds)*time.Second))
 }
 
 func (agent *Agent) Run(ctx context.Context) error {
@@ -247,9 +301,8 @@ func (agent *Agent) Run(ctx context.Context) error {
 	if _, err := agent.updateState(func(state *MachineState) error {
 		state.ClientID = agent.Config.ClientID
 		state.AgentBootGeneration++
-		if state.ControlState == "" {
-			state.ControlState = "control_degraded"
-		}
+		state.ControlState = "control_degraded"
+		state.CommandEngineHealthy = false
 		if state.ViewerState == "" {
 			state.ViewerState = "not_logged_in"
 		}
@@ -257,7 +310,15 @@ func (agent *Agent) Run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	_, _ = agent.Reconcile(runCtx)
+	if _, err := agent.Reconcile(runCtx); err != nil {
+		return err
+	}
+	if err := agent.checkCommandEngine(); err != nil {
+		return err
+	}
+	if agent.Ready != nil {
+		agent.Ready()
+	}
 
 	heartbeatDone := make(chan struct{})
 	go func() {
@@ -277,43 +338,21 @@ func (agent *Agent) Run(ctx context.Context) error {
 		<-pipeDone
 	}
 
-	reconnect := ReconnectState{}
-	for {
-		result, err := client.Next(runCtx)
-		if err != nil {
-			if runCtx.Err() != nil {
-				shutdown()
-				return nil
-			}
-			_, _ = agent.updateState(func(state *MachineState) error {
-				state.ControlState = "control_degraded"
-				return nil
-			})
-			if err := waitContext(runCtx, reconnect.NextDelay()); err != nil {
-				shutdown()
-				return nil
-			}
-			continue
-		}
-		reconnect.Reset()
-		now := agent.now().UTC()
-		_, _ = agent.updateState(func(state *MachineState) error {
-			if result.Transport == ControlTransportSSE {
-				state.ControlState = "online"
-			} else {
-				state.ControlState = "control_degraded"
-			}
-			state.LastControlSuccessAt = &now
+	controlErr := client.RunControl(runCtx, &ReconnectState{}, func(result ControlResult) error {
+		err := agent.handleControlResult(runCtx, result)
+		if errors.Is(err, ErrCommandEngine) {
 			return nil
-		})
-		if result.Command != nil {
-			_, handleErr := agent.HandleCommand(runCtx, *result.Command)
-			if errors.Is(handleErr, ErrAgentRestartRequested) {
-				shutdown()
-				return ErrAgentRestartRequested
-			}
 		}
+		return err
+	})
+	shutdown()
+	if errors.Is(controlErr, ErrAgentRestartRequested) {
+		return ErrAgentRestartRequested
 	}
+	if ctx.Err() != nil || errors.Is(controlErr, context.Canceled) {
+		return nil
+	}
+	return controlErr
 }
 
 func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient) {
@@ -377,14 +416,14 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 }
 
 func (agent *Agent) rejectCommand(ctx context.Context, command Command, message string) (CommandRecord, error) {
-	ledger, err := LoadCommandLedger(agent.Paths.Commands)
+	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		return CommandRecord{}, err
 	}
 	now := agent.now().UTC()
 	record := CommandRecord{ID: command.ID, Type: command.Type, PayloadHash: command.PayloadHash, State: CommandRejected, Error: message, ReceivedAt: now, CompletedAt: &now}
 	ledger.Records[command.Key()] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return CommandRecord{}, err
 	}
 	agent.report(ctx, command, CommandRejected, "", message)
@@ -397,7 +436,7 @@ func (agent *Agent) finishCommand(ctx context.Context, command Command, ledger C
 	record.Error = message
 	record.CompletedAt = &now
 	ledger.Records[command.Key()] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return CommandRecord{}, err
 	}
 	agent.report(ctx, command, state, record.OperationKey, message)
@@ -429,7 +468,7 @@ func (agent *Agent) reconcileRecord(key string, record CommandRecord, ledger Com
 	record.State = CommandSucceeded
 	record.CompletedAt = &now
 	ledger.Records[key] = record
-	if err := SaveCommandLedger(agent.Paths.Commands, ledger); err != nil {
+	if err := agent.saveCommandLedger(ledger); err != nil {
 		return record, err
 	}
 	return record, nil
@@ -452,6 +491,105 @@ func (agent *Agent) updateState(change func(*MachineState) error) (bool, error) 
 		return false, err
 	}
 	return true, SaveMachineState(agent.Paths.State, state)
+}
+
+func (agent *Agent) loadCommandLedger() (CommandLedger, error) {
+	load := agent.LoadLedger
+	if load == nil {
+		load = LoadCommandLedger
+	}
+	ledger, err := load(agent.Paths.Commands)
+	if err != nil {
+		return CommandLedger{}, fmt.Errorf("%w: ledger read failed", ErrCommandEngine)
+	}
+	return ledger, nil
+}
+
+func (agent *Agent) saveCommandLedger(ledger CommandLedger) error {
+	save := agent.SaveLedger
+	if save == nil {
+		save = SaveCommandLedger
+	}
+	if err := save(agent.Paths.Commands, ledger); err != nil {
+		return fmt.Errorf("%w: ledger write failed", ErrCommandEngine)
+	}
+	return nil
+}
+
+func (agent *Agent) markCommandEngineFailure() error {
+	_, err := agent.updateState(func(state *MachineState) error {
+		state.CommandEngineHealthy = false
+		state.ControlState = "control_degraded"
+		return nil
+	})
+	return err
+}
+
+func (agent *Agent) checkCommandEngine() error {
+	ledger, err := agent.loadCommandLedger()
+	if err != nil {
+		_ = agent.markCommandEngineFailure()
+		return err
+	}
+	if err := agent.saveCommandLedger(ledger); err != nil {
+		_ = agent.markCommandEngineFailure()
+		return err
+	}
+	_, err = agent.updateState(func(state *MachineState) error {
+		state.CommandEngineHealthy = true
+		return nil
+	})
+	return err
+}
+
+func (agent *Agent) applyControlResult(result ControlResult) error {
+	if !result.Proven {
+		_, err := agent.updateState(func(state *MachineState) error {
+			state.ControlState = "control_degraded"
+			return nil
+		})
+		return err
+	}
+	state, err := agent.loadState()
+	if err != nil {
+		return err
+	}
+	if !state.CommandEngineHealthy {
+		if err := agent.checkCommandEngine(); err != nil {
+			return err
+		}
+	}
+	now := agent.now().UTC()
+	_, err = agent.updateState(func(state *MachineState) error {
+		if !state.CommandEngineHealthy || result.Transport != ControlTransportSSE {
+			state.ControlState = "control_degraded"
+		} else {
+			state.ControlState = "online"
+		}
+		state.LastControlSuccessAt = &now
+		return nil
+	})
+	return err
+}
+
+func (agent *Agent) handleControlResult(ctx context.Context, result ControlResult) error {
+	if result.Command == nil {
+		return agent.applyControlResult(result)
+	}
+	if err := agent.markCommandEngineFailure(); err != nil {
+		return err
+	}
+	_, handleErr := agent.HandleCommand(ctx, *result.Command)
+	if errors.Is(handleErr, ErrAgentRestartRequested) {
+		return ErrAgentRestartRequested
+	}
+	if errors.Is(handleErr, ErrCommandEngine) {
+		return handleErr
+	}
+	if err := agent.checkCommandEngine(); err != nil {
+		return err
+	}
+	return agent.applyControlResult(result)
 }
 
 func (agent *Agent) report(ctx context.Context, command Command, state CommandState, operationKey, commandError string) {

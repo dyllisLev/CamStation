@@ -42,6 +42,7 @@ type MachineState struct {
 	ExpectedViewerPID        int         `json:"expectedViewerPid,omitempty"`
 	ExpectedViewerSession    uint32      `json:"expectedViewerSession,omitempty"`
 	ControlState             string      `json:"controlState,omitempty"`
+	CommandEngineHealthy     bool        `json:"commandEngineHealthy"`
 	LastControlSuccessAt     *time.Time  `json:"lastControlSuccessAt,omitempty"`
 	LastHeartbeatAt          *time.Time  `json:"lastHeartbeatAt,omitempty"`
 	ViewerState              string      `json:"viewerState,omitempty"`
@@ -133,6 +134,8 @@ type CommandRecord struct {
 	Generation     int64        `json:"generation"`
 	State          CommandState `json:"state"`
 	Error          string       `json:"error,omitempty"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	TTLSeconds     int          `json:"ttlSeconds"`
 	ReceivedAt     time.Time    `json:"receivedAt"`
 	RunningAt      *time.Time   `json:"runningAt,omitempty"`
 	CompletedAt    *time.Time   `json:"completedAt,omitempty"`

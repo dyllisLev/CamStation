@@ -3,18 +3,21 @@ package vieweragent
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestChildSupervisorUsesThreeBoundedRestarts(t *testing.T) {
+func TestChildSupervisorUsesThreeBoundedCrashRestarts(t *testing.T) {
 	var runs int
 	var delays []time.Duration
-	err := RunChildSupervisor(t.Context(), func(context.Context) error {
+	err := RunChildSupervisor(t.Context(), func(context.Context) ChildExit {
 		runs++
-		return errors.New("crashed")
+		return ChildExit{Kind: ChildCrashed, Err: errors.New("crashed")}
 	}, func(_ context.Context, delay time.Duration) error {
 		delays = append(delays, delay)
 		return nil
@@ -28,6 +31,100 @@ func TestChildSupervisorUsesThreeBoundedRestarts(t *testing.T) {
 	}
 }
 
+func TestPlannedAgentRestartReloadsImmediatelyWithoutCrashBudget(t *testing.T) {
+	var runs int
+	var delays []time.Duration
+	err := RunChildSupervisor(t.Context(), func(context.Context) ChildExit {
+		runs++
+		if runs == 1 {
+			return ChildExit{Kind: ChildPlannedRestart}
+		}
+		return ChildExit{Kind: ChildStopped}
+	}, func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	})
+	if err != nil || runs != 2 || len(delays) != 0 {
+		t.Fatalf("err=%v runs=%d delays=%v", err, runs, delays)
+	}
+}
+
+func TestRepeatedPlannedRestartCannotTightLoopForever(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runs := 0
+	err := RunChildSupervisor(ctx, func(context.Context) ChildExit {
+		runs++
+		if runs > 10 {
+			cancel()
+		}
+		return ChildExit{Kind: ChildPlannedRestart}
+	}, func(context.Context, time.Duration) error { return nil })
+	if err == nil || runs != 5 {
+		t.Fatalf("err=%v runs=%d", err, runs)
+	}
+}
+
+type fakeHostChild struct {
+	stopOnce sync.Once
+	wait     chan error
+	stops    int
+	kills    int
+}
+
+func (child *fakeHostChild) Wait() error { return <-child.wait }
+func (child *fakeHostChild) RequestStop() error {
+	child.stops++
+	child.stopOnce.Do(func() { child.wait <- nil })
+	return nil
+}
+func (child *fakeHostChild) Kill() error {
+	child.kills++
+	child.stopOnce.Do(func() { child.wait <- errors.New("killed") })
+	return nil
+}
+
+func TestHostForwardsGracefulStopBeforeKillDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	child := &fakeHostChild{wait: make(chan error, 1)}
+	cancel()
+	exit := RunManagedChild(ctx, child, 50*time.Millisecond)
+	if exit.Kind != ChildStopped || child.stops != 1 || child.kills != 0 {
+		t.Fatalf("exit=%+v stops=%d kills=%d", exit, child.stops, child.kills)
+	}
+}
+
+type stubbornHostChild struct {
+	wait  chan error
+	stops int
+	kills int
+}
+
+func (child *stubbornHostChild) Wait() error { return <-child.wait }
+func (child *stubbornHostChild) RequestStop() error {
+	child.stops++
+	return nil
+}
+func (child *stubbornHostChild) Kill() error {
+	child.kills++
+	go func() {
+		time.Sleep(3 * time.Millisecond)
+		child.wait <- errors.New("killed")
+	}()
+	return nil
+}
+
+func TestHostWaitsForKilledChildBeforeReturning(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	child := &stubbornHostChild{wait: make(chan error, 1)}
+	cancel()
+	started := time.Now()
+	exit := RunManagedChild(ctx, child, 5*time.Millisecond)
+	if exit.Kind != ChildStopped || child.stops != 1 || child.kills != 1 || time.Since(started) < 8*time.Millisecond {
+		t.Fatalf("exit=%+v stops=%d kills=%d elapsed=%v", exit, child.stops, child.kills, time.Since(started))
+	}
+}
+
 func TestCurrentReleaseCannotEscapeInstallDirectory(t *testing.T) {
 	installDir := t.TempDir()
 	outside := filepath.Join(filepath.Dir(installDir), "outside", "agent.exe")
@@ -37,5 +134,55 @@ func TestCurrentReleaseCannotEscapeInstallDirectory(t *testing.T) {
 	inside := filepath.Join(installDir, "releases", "1", "agent.exe")
 	if _, err := ValidateCurrentRelease(installDir, CurrentRelease{AgentPath: inside}); err == nil {
 		t.Fatal("schema-less current release pointer was accepted")
+	}
+}
+
+func TestHostReadinessRequiresValidRegularAgentAndSuccessfulStart(t *testing.T) {
+	installDir := t.TempDir()
+	current := CurrentRelease{SchemaVersion: SchemaVersion, AgentPath: filepath.Join("releases", "1", "agent.exe")}
+	if err := atomicWriteJSON(filepath.Join(installDir, "current.json"), current); err != nil {
+		t.Fatal(err)
+	}
+	readyCalls := 0
+	startCalls := 0
+	_, err := EstablishHostReadiness(func() (CurrentRelease, error) {
+		return LoadReadyRelease(installDir)
+	}, func(CurrentRelease) (HostChild, error) {
+		startCalls++
+		return &fakeHostChild{wait: make(chan error, 1)}, nil
+	}, func() { readyCalls++ })
+	if err == nil || startCalls != 0 || readyCalls != 0 {
+		t.Fatalf("missing Agent reached readiness: err=%v starts=%d ready=%d", err, startCalls, readyCalls)
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(installDir, current.AgentPath)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, current.AgentPath), []byte("agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	child, err := EstablishHostReadiness(func() (CurrentRelease, error) {
+		return LoadReadyRelease(installDir)
+	}, func(CurrentRelease) (HostChild, error) {
+		startCalls++
+		return &fakeHostChild{wait: make(chan error, 1)}, nil
+	}, func() { readyCalls++ })
+	if err != nil || child == nil || startCalls != 1 || readyCalls != 1 {
+		t.Fatalf("valid Agent readiness failed: err=%v starts=%d ready=%d", err, startCalls, readyCalls)
+	}
+}
+
+func TestAgentReadinessRequiresExplicitReadyLine(t *testing.T) {
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(writer, "ready\n")
+		_ = writer.Close()
+	}()
+	if err := WaitForAgentReady(reader, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	blocked, blockedWriter := io.Pipe()
+	defer blockedWriter.Close()
+	if err := WaitForAgentReady(blocked, 5*time.Millisecond); err == nil {
+		t.Fatal("missing Agent ready line was accepted")
 	}
 }

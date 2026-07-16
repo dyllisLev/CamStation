@@ -24,13 +24,24 @@ const (
 	maxControlMessageBytes          = 64 * 1024
 )
 
-type ReconnectState struct{ failures int }
+var (
+	ErrControlInactivity = errors.New("control stream inactive")
+	errSSEFrameComplete  = errors.New("SSE frame complete")
+)
+
+type ReconnectState struct {
+	failures int
+	delays   []time.Duration
+}
 
 func (state *ReconnectState) NextDelay() time.Duration {
-	delays := [...]time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+	delays := state.delays
+	if len(delays) == 0 {
+		delays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 5 * time.Minute}
+	}
 	if state.failures >= len(delays) {
 		state.failures++
-		return 5 * time.Minute
+		return delays[len(delays)-1]
 	}
 	delay := delays[state.failures]
 	state.failures++
@@ -38,6 +49,12 @@ func (state *ReconnectState) NextDelay() time.Duration {
 }
 
 func (state *ReconnectState) Reset() { state.failures = 0 }
+
+func (state *ReconnectState) ObserveSSESession(frames int) {
+	if frames >= 2 {
+		state.Reset()
+	}
+}
 
 type Command struct {
 	ID             int64     `json:"id"`
@@ -60,6 +77,7 @@ func (command Command) Key() string { return commandKey(command.ID) }
 type ControlResult struct {
 	Transport string
 	Command   *Command
+	Proven    bool
 }
 
 type ControlClient struct {
@@ -70,8 +88,12 @@ type ControlClient struct {
 }
 
 func (client ControlClient) Next(ctx context.Context) (ControlResult, error) {
-	result, err := client.receiveSSE(ctx)
-	if err == nil {
+	var result ControlResult
+	_, err := client.StreamSSE(ctx, func(frame ControlResult) error {
+		result = frame
+		return errSSEFrameComplete
+	})
+	if errors.Is(err, errSSEFrameComplete) {
 		return result, nil
 	}
 	if ctx.Err() != nil {
@@ -80,46 +102,122 @@ func (client ControlClient) Next(ctx context.Context) (ControlResult, error) {
 	return client.longPoll(ctx)
 }
 
-func (client ControlClient) receiveSSE(ctx context.Context) (ControlResult, error) {
-	deadline := client.deadline()
-	readCtx, cancel := context.WithTimeout(ctx, deadline)
+func (client ControlClient) StreamSSE(ctx context.Context, onFrame func(ControlResult) error) (int, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	request, err := http.NewRequestWithContext(readCtx, http.MethodGet, client.endpoint("/api/viewers/"+url.PathEscape(client.ClientID)+"/control"), nil)
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodGet, client.endpoint("/api/viewers/"+url.PathEscape(client.ClientID)+"/control"), nil)
 	if err != nil {
-		return ControlResult{}, err
+		return 0, err
 	}
 	request.Header.Set("Accept", "text/event-stream")
 	response, err := client.httpClient().Do(request)
 	if err != nil {
-		return ControlResult{}, err
+		return 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
-		return ControlResult{}, fmt.Errorf("SSE status %s", response.Status)
+		return 0, fmt.Errorf("SSE status %s", response.Status)
 	}
+	frames := make(chan sseFrame, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanSSE(streamCtx, response.Body, frames)
+	}()
+	defer func() {
+		cancel()
+		_ = response.Body.Close()
+		<-done
+	}()
 
-	scanner := bufio.NewScanner(io.LimitReader(response.Body, maxControlMessageBytes+1))
+	timer := time.NewTimer(client.deadline())
+	defer timer.Stop()
+	seen := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return seen, ctx.Err()
+		case <-timer.C:
+			return seen, ErrControlInactivity
+		case frame, ok := <-frames:
+			if !ok {
+				return seen, errors.New("SSE ended")
+			}
+			if frame.err != nil {
+				return seen, frame.err
+			}
+			seen++
+			resetTimer(timer, client.deadline())
+			if err := onFrame(frame.result); err != nil {
+				return seen, err
+			}
+		}
+	}
+}
+
+type sseFrame struct {
+	result ControlResult
+	err    error
+}
+
+func scanSSE(ctx context.Context, reader io.Reader, frames chan<- sseFrame) {
+	defer close(frames)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 1024), maxControlMessageBytes)
+	keepalive := false
+	data := make([]string, 0, 1)
+	send := func(frame sseFrame) bool {
+		select {
+		case frames <- frame:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, ":") {
-			return ControlResult{Transport: ControlTransportSSE}, nil
+		if line != "" {
+			if strings.HasPrefix(line, ":") {
+				keepalive = true
+			} else if strings.HasPrefix(line, "data:") {
+				data = append(data, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			}
+			continue
 		}
-		if strings.HasPrefix(line, "data:") {
+		if keepalive && len(data) == 0 {
+			if !send(sseFrame{result: ControlResult{Transport: ControlTransportSSE, Proven: true}}) {
+				return
+			}
+		} else if len(data) > 0 {
 			var command Command
-			if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &command); err != nil {
-				return ControlResult{}, fmt.Errorf("decode SSE command: %w", err)
+			if err := json.Unmarshal([]byte(strings.Join(data, "\n")), &command); err != nil {
+				send(sseFrame{err: fmt.Errorf("decode SSE command: %w", err)})
+				return
 			}
 			if err := validateCommand(command); err != nil {
-				return ControlResult{}, err
+				send(sseFrame{err: err})
+				return
 			}
-			return ControlResult{Transport: ControlTransportSSE, Command: &command}, nil
+			if !send(sseFrame{result: ControlResult{Transport: ControlTransportSSE, Command: &command, Proven: true}}) {
+				return
+			}
+		}
+		keepalive = false
+		data = data[:0]
+	}
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		send(sseFrame{err: err})
+	}
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return ControlResult{}, err
-	}
-	return ControlResult{}, errors.New("SSE ended without command or keepalive")
+	timer.Reset(duration)
 }
 
 func (client ControlClient) longPoll(ctx context.Context) (ControlResult, error) {
@@ -136,7 +234,7 @@ func (client ControlClient) longPoll(ctx context.Context) (ControlResult, error)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNoContent {
-		return ControlResult{Transport: ControlTransportLongPoll}, nil
+		return ControlResult{Transport: ControlTransportLongPoll, Proven: true}, nil
 	}
 	if response.StatusCode != http.StatusOK {
 		return ControlResult{}, fmt.Errorf("long poll status %s", response.Status)
@@ -149,7 +247,65 @@ func (client ControlClient) longPoll(ctx context.Context) (ControlResult, error)
 	if err := validateCommand(command); err != nil {
 		return ControlResult{}, err
 	}
-	return ControlResult{Transport: ControlTransportLongPoll, Command: &command}, nil
+	return ControlResult{Transport: ControlTransportLongPoll, Command: &command, Proven: true}, nil
+}
+
+func (client ControlClient) RunControl(ctx context.Context, probes *ReconnectState, onResult func(ControlResult) error) error {
+	if probes == nil {
+		probes = &ReconnectState{}
+	}
+	for {
+		var callbackErr error
+		frames, _ := client.StreamSSE(ctx, func(result ControlResult) error {
+			callbackErr = onResult(result)
+			return callbackErr
+		})
+		if callbackErr != nil {
+			return callbackErr
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		probes.ObserveSSESession(frames)
+		delay := probes.NextDelay()
+		if err := onResult(ControlResult{Transport: ControlTransportLongPoll}); err != nil {
+			return err
+		}
+		probeAt := time.Now().Add(delay)
+		for time.Until(probeAt) > 0 {
+			pollCtx, cancel := context.WithDeadline(ctx, probeAt)
+			result, pollErr := client.longPoll(pollCtx)
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if pollErr == nil {
+				if err := onResult(result); err != nil {
+					return err
+				}
+				if result.Command == nil {
+					remaining := time.Until(probeAt)
+					if remaining > time.Second {
+						remaining = time.Second
+					}
+					if remaining > 0 && waitContext(ctx, remaining) != nil {
+						return ctx.Err()
+					}
+				}
+				continue
+			}
+			remaining := time.Until(probeAt)
+			if remaining <= 0 {
+				break
+			}
+			if remaining > time.Second {
+				remaining = time.Second
+			}
+			if waitContext(ctx, remaining) != nil {
+				return ctx.Err()
+			}
+		}
+	}
 }
 
 func (client ControlClient) Report(ctx context.Context, command Command, state CommandState, operationKey, commandError string) error {

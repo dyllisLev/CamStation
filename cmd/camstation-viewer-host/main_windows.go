@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,7 +18,11 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-const serviceName = "CamStationViewerAgent"
+const (
+	serviceName              = "CamStationViewerAgent"
+	agentGracefulStopTimeout = 10 * time.Second
+	hostShutdownTimeout      = 2*agentGracefulStopTimeout + 2*time.Second
+)
 
 type hostOptions struct {
 	installDir string
@@ -43,7 +48,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runHost(ctx, options); err != nil && ctx.Err() == nil {
+	initial, err := prepareHost(options, func() {})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "CamStation Viewer Host: Agent is not ready")
+		os.Exit(1)
+	}
+	if err := runHost(ctx, options, initial); err != nil && ctx.Err() == nil {
 		fmt.Fprintln(os.Stderr, "CamStation Viewer Host: Agent stopped after bounded recovery")
 		os.Exit(1)
 	}
@@ -69,35 +79,91 @@ func parseOptions(args []string) (hostOptions, error) {
 	return hostOptions{installDir: filepath.Clean(*installDir), configPath: filepath.Clean(*configPath)}, nil
 }
 
-func runHost(ctx context.Context, options hostOptions) error {
-	return vieweragent.RunChildSupervisor(ctx, func(childCtx context.Context) error {
-		current, err := vieweragent.LoadCurrentRelease(options.installDir)
-		if err != nil {
-			return err
+func runHost(ctx context.Context, options hostOptions, initial vieweragent.HostChild) error {
+	next := initial
+	return vieweragent.RunChildSupervisor(ctx, func(childCtx context.Context) vieweragent.ChildExit {
+		child := next
+		next = nil
+		if child == nil {
+			current, err := vieweragent.LoadReadyRelease(options.installDir)
+			if err != nil {
+				return vieweragent.ChildExit{Kind: vieweragent.ChildCrashed, Err: err}
+			}
+			child, err = startAgentChild(current, options.configPath)
+			if err != nil {
+				return vieweragent.ChildExit{Kind: vieweragent.ChildCrashed, Err: err}
+			}
 		}
-		if err := vieweragent.EnsureCurrentAgentExists(current); err != nil {
-			return err
-		}
-		command := exec.CommandContext(childCtx, current.AgentPath, "run", "--config", options.configPath)
-		command.Dir = filepath.Dir(current.AgentPath)
-		return command.Run()
+		return vieweragent.RunManagedChild(childCtx, child, agentGracefulStopTimeout)
 	}, vieweragent.SleepContext)
 }
+
+func prepareHost(options hostOptions, ready func()) (vieweragent.HostChild, error) {
+	return vieweragent.EstablishHostReadiness(func() (vieweragent.CurrentRelease, error) {
+		return vieweragent.LoadReadyRelease(options.installDir)
+	}, func(current vieweragent.CurrentRelease) (vieweragent.HostChild, error) {
+		return startAgentChild(current, options.configPath)
+	}, ready)
+}
+
+type agentChild struct {
+	command *exec.Cmd
+	stdin   io.WriteCloser
+}
+
+func startAgentChild(current vieweragent.CurrentRelease, configPath string) (vieweragent.HostChild, error) {
+	command := exec.Command(current.AgentPath, "run", "--config", configPath, "--control-stdin", "--ready-stdout")
+	command.Dir = filepath.Dir(current.AgentPath)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		return nil, err
+	}
+	if err := vieweragent.WaitForAgentReady(stdout, 15*time.Second); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, err
+	}
+	return &agentChild{command: command, stdin: stdin}, nil
+}
+
+func (child *agentChild) Wait() error { return child.command.Wait() }
+
+func (child *agentChild) RequestStop() error {
+	_, err := io.WriteString(child.stdin, "stop\n")
+	_ = child.stdin.Close()
+	return err
+}
+
+func (child *agentChild) Kill() error { return child.command.Process.Kill() }
 
 type serviceHandler struct{ options hostOptions }
 
 func (handler serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending}
+	initial, err := prepareHost(handler.options, func() {})
+	if err != nil {
+		status <- svc.Status{State: svc.StopPending}
+		return false, 0
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runHost(ctx, handler.options) }()
+	go func() { done <- runHost(ctx, handler.options, initial) }()
 	current := svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	status <- current
 	for {
 		select {
 		case <-done:
 			status <- svc.Status{State: svc.StopPending}
-			return false, 1
+			return false, 0
 		case request, ok := <-requests:
 			if !ok {
 				cancel()
@@ -111,7 +177,7 @@ func (handler serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequ
 				cancel()
 				select {
 				case <-done:
-				case <-time.After(10 * time.Second):
+				case <-time.After(hostShutdownTimeout):
 				}
 				return false, 0
 			}
