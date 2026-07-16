@@ -110,17 +110,19 @@ restore_pointer() {
   local directory=$1
   local existed=$2
   local target=$3
+  local durability_failed=false
   if [[ "$existed" == true ]]; then
     prepared_link=$(mktemp "$directory/.active.rollback.XXXXXX") || return 1
     rm -- "$prepared_link" || return 1
     ln -s -- "$target" "$prepared_link" || return 1
-    sync "$directory" || return 1
+    sync "$directory" || durability_failed=true
     mv -Tf -- "$prepared_link" "$directory/active" || return 1
     prepared_link=''
   else
     rm -f -- "$directory/active" || return 1
   fi
-  sync "$directory"
+  sync "$directory" || durability_failed=true
+  [[ "$durability_failed" == false ]]
 }
 
 installer=''
@@ -208,18 +210,29 @@ old_previous_pointer=''
 
 cleanup() {
   local status=$?
+  local rollback_failed=false
   trap - EXIT
   set +e
   if ((status != 0)); then
     if [[ "$previous_switched" == true ]]; then
-      restore_pointer "$previous_dir" "$old_previous_pointer_exists" "$old_previous_pointer"
+      if ! restore_pointer "$previous_dir" "$old_previous_pointer_exists" "$old_previous_pointer"; then
+        echo "publish-viewer-release: previous pointer rollback durability failed" >&2
+        rollback_failed=true
+      fi
     fi
     if [[ "$current_switched" == true ]]; then
-      restore_pointer "$current_dir" "$old_current_pointer_exists" "$old_current_pointer"
+      if ! restore_pointer "$current_dir" "$old_current_pointer_exists" "$old_current_pointer"; then
+        echo "publish-viewer-release: current pointer rollback durability failed" >&2
+        rollback_failed=true
+      fi
     fi
   fi
   [[ -z "$prepared_link" || ! -e "$prepared_link" && ! -L "$prepared_link" ]] || rm -f -- "$prepared_link"
   [[ -z "$stage" || ! -e "$stage" ]] || { chmod -R u+w -- "$stage"; rm -rf -- "$stage"; }
+  if [[ "$rollback_failed" == true ]]; then
+    echo "publish-viewer-release: publication failed with status $status and pointer rollback could not be durably confirmed" >&2
+    status=75
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -262,7 +275,7 @@ if [[ "$old_current_pointer_exists" != true || "$old_current_pointer" != "$new_c
   current_switched=true
 fi
 
-if [[ -n "$old_current_pointer" && ( "$old_previous_pointer_exists" != true || "$old_previous_pointer" != "$old_current_pointer" ) ]]; then
+if [[ "$current_switched" == true && -n "$old_current_pointer" && ( "$old_previous_pointer_exists" != true || "$old_previous_pointer" != "$old_current_pointer" ) ]]; then
   if ! switch_pointer "$previous_dir" "$old_current_pointer"; then
     [[ "$pointer_switched" == true ]] && previous_switched=true
     die "failed to switch previous release"

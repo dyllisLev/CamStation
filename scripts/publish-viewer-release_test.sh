@@ -110,7 +110,7 @@ if [[ $# == 1 && $1 == "$FAIL_SYNC_DIR" ]]; then
   [[ ! -f "$SYNC_COUNT_FILE" ]] || read -r count <"$SYNC_COUNT_FILE"
   count=$((count + 1))
   printf '%s\n' "$count" >"$SYNC_COUNT_FILE"
-  if ((count == 2)); then
+  if [[ ${SYNC_FAIL_MODE:-once} == persistent && $count -ge 2 ]] || [[ ${SYNC_FAIL_MODE:-once} == once && $count -eq 2 ]]; then
     exit 74
   fi
 fi
@@ -125,6 +125,24 @@ expect_failure env PATH="$fake_bin:$PATH" REAL_SYNC="$real_sync" FAIL_SYNC_DIR="
 "$publisher" --installer "$installer_v2" --version '2.0.0-dev.2' --release-dir "$release_dir" >/dev/null
 [[ $(pointer_version "$release_dir" current) == '2.0.0-dev.2' ]] || fail "current pointer did not select v2"
 [[ $(pointer_version "$release_dir" previous) == '2.0.0-dev.1' ]] || fail "previous pointer did not retain v1"
+
+current_before_repeat=$(readlink "$release_dir/current/active")
+previous_before_repeat=$(readlink "$release_dir/previous/active")
+"$publisher" --installer "$installer_v2" --version '2.0.0-dev.2' --release-dir "$release_dir" >/dev/null
+[[ $(readlink "$release_dir/current/active") == "$current_before_repeat" ]] || fail "same release publish changed current"
+[[ $(readlink "$release_dir/previous/active") == "$previous_before_repeat" ]] || fail "same release publish replaced the last previous release"
+
+rollback_dir="$tmp_dir/input-rollback"
+write_installer "$rollback_dir" 'viewer-installer-rollback-failure'
+set +e
+env PATH="$fake_bin:$PATH" REAL_SYNC="$real_sync" FAIL_SYNC_DIR="$release_dir/current" SYNC_COUNT_FILE="$tmp_dir/persistent-sync-count" SYNC_FAIL_MODE=persistent \
+  "$publisher" --installer "$rollback_dir/CamStationViewerSetup.exe" --version '2.0.0-dev.rollback' --release-dir "$release_dir" >"$tmp_dir/persistent-sync.out" 2>"$tmp_dir/persistent-sync.err"
+persistent_status=$?
+set -e
+[[ $persistent_status == 75 ]] || fail "persistent rollback sync failure exit = $persistent_status, want 75"
+grep -Fq 'current pointer rollback durability failed' "$tmp_dir/persistent-sync.err" || fail "persistent rollback failure was not reported"
+[[ $(readlink "$release_dir/current/active") == "$current_before_repeat" ]] || fail "persistent sync failure did not atomically restore current"
+[[ $(readlink "$release_dir/previous/active") == "$previous_before_repeat" ]] || fail "persistent sync failure changed previous"
 
 installer_v3_dir="$tmp_dir/input-v3"
 installer_v4_dir="$tmp_dir/input-v4"
