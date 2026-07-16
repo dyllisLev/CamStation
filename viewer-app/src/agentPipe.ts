@@ -81,20 +81,25 @@ export class AgentConnection {
   #identity: LaunchIdentity;
   #pending = new Map<string, PendingRequest>();
   #commandHandlers = new Set<(command: ViewerCommand) => void | Promise<void>>();
+  #shutdownHandlers = new Set<() => void>();
+  #disconnectHandlers = new Set<(error: Error) => void>();
   #heartbeat: NodeJS.Timeout;
+  #requestTimeoutMs: number;
   #closed = false;
+  #disconnectError: Error | null = null;
 
-  private constructor(socket: net.Socket, identity: LaunchIdentity, serverURL: string, launchNonce: string) {
+  private constructor(socket: net.Socket, identity: LaunchIdentity, serverURL: string, launchNonce: string, requestTimeoutMs: number) {
     this.#socket = socket;
     this.#identity = identity;
     this.serverURL = serverURL;
     this.launchNonce = launchNonce;
     this.generation = identity.generation;
+    this.#requestTimeoutMs = requestTimeoutMs;
     this.#heartbeat = setInterval(() => void this.request("viewer_heartbeat").catch(() => undefined), LOCAL_HEARTBEAT_MS);
     this.#heartbeat.unref();
   }
 
-  static async connect(identity: LaunchIdentity, pipeName = VIEWER_PIPE_NAME): Promise<AgentConnection> {
+  static async connect(identity: LaunchIdentity, pipeName = VIEWER_PIPE_NAME, requestTimeoutMs = 5_000): Promise<AgentConnection> {
     const socket = await connectSocket(pipeName);
     const decoder = new PipeDecoder();
     const pending = new Map<string, PendingRequest>();
@@ -117,23 +122,27 @@ export class AgentConnection {
       }
     });
     const requestId = randomUUID();
-    const responsePromise = new Promise<PipeMessage>((resolve, reject) => pending.set(requestId, { resolve, reject }));
-    socket.write(encodePipeMessage({
-      version: PIPE_PROTOCOL_VERSION,
-      requestId,
-      type: "viewer_register",
-      pid: process.pid,
-      sessionId: identity.sessionId,
-      generation: identity.generation,
-      nonce: identity.nonce,
-    }));
-    const response = await withTimeout(responsePromise, 5_000, "Agent registration timed out");
+    let response: PipeMessage;
+    try {
+      response = await sendPipeRequest(socket, pending, {
+        version: PIPE_PROTOCOL_VERSION,
+        requestId,
+        type: "viewer_register",
+        pid: process.pid,
+        sessionId: identity.sessionId,
+        generation: identity.generation,
+        nonce: identity.nonce,
+      }, requestTimeoutMs, "Agent registration timed out");
+    } catch (error) {
+      socket.destroy();
+      throw error;
+    }
     if (response.type !== "viewer_registered" || response.generation !== identity.generation || response.nonce !== identity.nonce) {
       socket.destroy();
       throw new Error("Agent rejected Viewer registration");
     }
     const serverURL = serverURLFromPayload(response.payload);
-    const connection = new AgentConnection(socket, identity, serverURL, response.nonce);
+    const connection = new AgentConnection(socket, identity, serverURL, response.nonce, requestTimeoutMs);
     connection.#pending = pending;
     socket.removeAllListeners("data");
     socket.on("data", (chunk: Buffer) => connection.#receive(decoder, chunk));
@@ -157,19 +166,34 @@ export class AgentConnection {
     return () => this.#commandHandlers.delete(handler);
   }
 
+  onShutdown(handler: () => void): () => void {
+    this.#shutdownHandlers.add(handler);
+    return () => this.#shutdownHandlers.delete(handler);
+  }
+
+  onDisconnect(handler: (error: Error) => void): () => void {
+    if (this.#disconnectError) {
+      handler(this.#disconnectError);
+      return () => undefined;
+    }
+    this.#disconnectHandlers.add(handler);
+    return () => this.#disconnectHandlers.delete(handler);
+  }
+
+  pendingRequestCount(): number {
+    return this.#pending.size;
+  }
+
   close(): void {
     if (this.#closed) return;
-    this.#closed = true;
-    clearInterval(this.#heartbeat);
+    this.#shutdown(new Error("Agent pipe closed"), false);
     this.#socket.end();
-    this.#fail(new Error("Agent pipe closed"));
   }
 
   private async request(type: string, payload?: unknown): Promise<PipeMessage> {
     if (this.#closed) throw new Error("Agent pipe is closed");
     const requestId = randomUUID();
-    const response = new Promise<PipeMessage>((resolve, reject) => this.#pending.set(requestId, { resolve, reject }));
-    this.#socket.write(encodePipeMessage({
+    return sendPipeRequest(this.#socket, this.#pending, {
       version: PIPE_PROTOCOL_VERSION,
       requestId,
       type,
@@ -178,8 +202,7 @@ export class AgentConnection {
       generation: this.#identity.generation,
       nonce: this.#identity.nonce,
       payload,
-    }));
-    return withTimeout(response, 5_000, "Agent pipe response timed out");
+    }, this.#requestTimeoutMs, "Agent pipe response timed out");
   }
 
   #receive(decoder: PipeDecoder, chunk: Buffer): void {
@@ -190,9 +213,15 @@ export class AgentConnection {
           this.#pending.delete(message.requestId);
           request.resolve(message);
         }
-        if (message.type === "command" && isViewerCommand(message.payload)) {
-          void executeViewerCommand(message.payload, [...this.#commandHandlers])
+        const command = message.payload;
+        if (message.type === "command" && isViewerCommand(command)) {
+          void executeViewerCommand(command, [...this.#commandHandlers])
             .then((payload) => this.request("command_result", payload))
+            .then(() => {
+              if (command.type === "shutdown") {
+                for (const handler of this.#shutdownHandlers) handler();
+              }
+            })
             .catch(() => undefined);
         }
       }
@@ -202,12 +231,19 @@ export class AgentConnection {
   }
 
   #fail(error: Error): void {
-    if (!this.#closed) {
-      this.#closed = true;
-      clearInterval(this.#heartbeat);
-    }
+    this.#shutdown(error, true);
+  }
+
+  #shutdown(error: Error, unexpected: boolean): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    clearInterval(this.#heartbeat);
     for (const request of this.#pending.values()) request.reject(error);
     this.#pending.clear();
+    if (unexpected) {
+      this.#disconnectError = error;
+      for (const handler of this.#disconnectHandlers) handler(error);
+    }
   }
 }
 
@@ -273,18 +309,36 @@ function connectSocket(pipeName: string): Promise<net.Socket> {
   });
 }
 
-function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+function sendPipeRequest(
+  socket: net.Socket,
+  pending: Map<string, PendingRequest>,
+  message: PipeMessage,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<PipeMessage> {
+  const encoded = encodePipeMessage(message);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), milliseconds);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const finish = (value?: PipeMessage, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pending.delete(message.requestId);
+      if (error) reject(error);
+      else resolve(value as PipeMessage);
+    };
+    timer = setTimeout(() => finish(undefined, new Error(timeoutMessage)), timeoutMs);
+    pending.set(message.requestId, {
+      resolve: (value) => finish(value),
+      reject: (error) => finish(undefined, error),
+    });
+    try {
+      socket.write(encoded, (error?: Error | null) => {
+        if (error) finish(undefined, error);
+      });
+    } catch (error) {
+      finish(undefined, error instanceof Error ? error : new Error("Agent pipe write failed"));
+    }
   });
 }

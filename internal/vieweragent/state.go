@@ -87,7 +87,7 @@ func (state *MachineState) AllowViewerRestart(now time.Time, forced bool, comman
 		if commandID == "" {
 			return false, state.ExpectedViewerGeneration
 		}
-		if state.ForcedViewerRestartAt != nil && state.ForcedViewerRestartAt.After(cutoff) {
+		if state.ForcedViewerRestartID == commandID {
 			return false, state.ExpectedViewerGeneration
 		}
 		state.ForcedViewerRestartID = commandID

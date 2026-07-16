@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "rm -rf build build-preload && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && mv build-preload/preload.js build/preload.cjs && rm -rf build-preload",
-    "package:win": "npm run build && electron-packager . CamStationViewer --platform=win32 --arch=x64 --out=dist --overwrite --prune=true"
+    "package:win": "npm run build && node scripts/package-win.mjs"
   },
   "devDependencies": {
     "@electron/packager": "20.0.2",

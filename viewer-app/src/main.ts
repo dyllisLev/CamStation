@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentConnection, parseLaunchIdentity } from "./agentPipe.js";
 import { browserWindowOptions, isNavigationAllowed, rendererStateForEvent, viewerURL } from "./navigation.js";
+import { disconnectExitCode } from "./viewerLifecycle.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +17,7 @@ async function run(): Promise<void> {
   const agent = await AgentConnection.connect(identity);
   const liveURL = viewerURL(agent.serverURL);
   const window = new BrowserWindow(browserWindowOptions(path.join(directory, "preload.cjs"), app.isPackaged));
+  let explicitShutdown = false;
 
   hardenSession(window, liveURL);
   ipcMain.on("viewer:renderer", (event, payload: unknown) => {
@@ -36,14 +38,24 @@ async function run(): Promise<void> {
       window.webContents.send("viewer:command", command);
       break;
     case "shutdown":
-      app.quit();
       break;
     }
+  });
+  const unsubscribeShutdown = agent.onShutdown(() => {
+    explicitShutdown = true;
+    app.quit();
+  });
+  const unsubscribeDisconnect = agent.onDisconnect(() => {
+    const exitCode = disconnectExitCode(explicitShutdown);
+    if (exitCode !== null) app.exit(exitCode);
   });
   window.once("ready-to-show", () => window.show());
   window.on("closed", () => app.quit());
   app.once("before-quit", () => {
+    explicitShutdown = true;
     unsubscribe();
+    unsubscribeShutdown();
+    unsubscribeDisconnect();
     agent.close();
   });
   await window.loadURL(liveURL);

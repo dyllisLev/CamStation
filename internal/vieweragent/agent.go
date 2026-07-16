@@ -15,6 +15,7 @@ import (
 
 const defaultHeartbeatInterval = 10 * time.Second
 const defaultViewerCommandDeadline = 45 * time.Second
+const defaultViewerRestartDeadline = 45 * time.Second
 
 var (
 	ErrCommandRejected       = errors.New("viewer command rejected")
@@ -40,6 +41,7 @@ type Agent struct {
 	HeartbeatRequestDeadline time.Duration
 	ControlReadDeadline      time.Duration
 	ViewerCommandDeadline    time.Duration
+	ViewerRestartDeadline    time.Duration
 	AgentVersion             string
 	Now                      func() time.Time
 	LoadLedger               func(string) (CommandLedger, error)
@@ -69,6 +71,7 @@ func NewAgent(config Config, paths MachinePaths) Agent {
 		HeartbeatRequestDeadline: DefaultHeartbeatRequestDeadline,
 		ControlReadDeadline:      DefaultControlReadDeadline,
 		ViewerCommandDeadline:    defaultViewerCommandDeadline,
+		ViewerRestartDeadline:    defaultViewerRestartDeadline,
 		Now:                      time.Now,
 	}
 }
@@ -160,12 +163,14 @@ func (agent *Agent) HandleCommand(ctx context.Context, command Command) (result 
 			if !ok {
 				return ErrCommandRejected
 			}
+			state.ViewerState = "restart_authorized"
 			return nil
 		})
 		if stateErr != nil || !allowed {
 			return agent.finishCommand(ctx, command, ledger, record, CommandRejected, "restart budget exhausted")
 		}
 		record.Generation = generation
+		command.Generation = generation
 		record.OperationKey = fmt.Sprintf("viewer-generation-%d", generation)
 	case "restart_agent":
 		state, loadErr := agent.loadState()
@@ -654,12 +659,16 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 			return PipeMessage{}, err
 		}
 		_, err = agent.updateState(func(state *MachineState) error {
-			if state.ViewerState == "restarting" && state.ExpectedViewerGeneration > state.ViewerGeneration {
-				return errors.New("Viewer bootstrap already granted")
+			initial := state.ViewerGeneration == 0 && state.ExpectedViewerGeneration == 0 &&
+				state.ViewerNonce == "" && state.ExpectedViewerPID == 0 &&
+				(state.ViewerState == "" || state.ViewerState == "not_logged_in")
+			authorized := state.ViewerState == "restart_authorized" && state.ExpectedViewerGeneration > state.ViewerGeneration
+			if !initial && !authorized {
+				return errors.New("Viewer bootstrap generation is not authorized")
 			}
 			generation := state.ExpectedViewerGeneration
-			if generation <= state.ViewerGeneration {
-				generation = state.ViewerGeneration + 1
+			if initial {
+				generation = 1
 			}
 			state.ExpectedViewerGeneration = generation
 			state.ViewerNonce = nonce
@@ -704,12 +713,15 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 			stream = &decoded
 		}
 		_, err := agent.updateState(func(state *MachineState) error {
+			currentDuringRestart := state.ViewerState == "restart_authorized" && message.Generation == state.ViewerGeneration
+			expectedGeneration := (state.ViewerState == "starting" || state.ViewerState == "running") &&
+				message.Generation == state.ExpectedViewerGeneration
 			if message.PID != state.ExpectedViewerPID || message.SessionID != state.ExpectedViewerSession ||
-				message.Generation != state.ExpectedViewerGeneration || message.Nonce == "" || message.Nonce != state.ViewerNonce {
+				(!currentDuringRestart && !expectedGeneration) || message.Nonce == "" || message.Nonce != state.ViewerNonce {
 				return errors.New("stale Viewer pipe identity")
 			}
 			state.ViewerGeneration = message.Generation
-			if message.Type != "command_result" {
+			if message.Type != "command_result" && !currentDuringRestart {
 				state.ViewerState = "running"
 			}
 			state.ViewerLastHeartbeatAt = &now
@@ -717,7 +729,7 @@ func (agent *Agent) handlePipeMessage(message PipeMessage) (PipeMessage, error) 
 				var payload struct {
 					State string `json:"state"`
 				}
-				if err := json.Unmarshal(message.Payload, &payload); err != nil || strings.TrimSpace(payload.State) == "" {
+				if err := json.Unmarshal(message.Payload, &payload); err != nil || !validRendererState(payload.State) {
 					return errors.New("renderer state is required")
 				}
 				state.RendererState = payload.State
@@ -749,6 +761,8 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 	switch command.Type {
 	case "ping":
 		return nil
+	case "restart_viewer":
+		return agent.executeViewerRestart(ctx, command, operationKey)
 	case "restart_agent":
 		return ErrAgentRestartRequested
 	case "reload_live", "resubscribe_stream":
@@ -759,7 +773,7 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 }
 
 func (agent *Agent) executeViewerCommand(ctx context.Context, command Command, operationKey string) error {
-	if operationKey == "" || (command.Type != "reload_live" && command.Type != "resubscribe_stream") ||
+	if operationKey == "" || (command.Type != "reload_live" && command.Type != "resubscribe_stream" && command.Type != "shutdown") ||
 		(command.Type == "resubscribe_stream" && !validViewerStreamName(command.StreamName)) {
 		return ErrCommandRejected
 	}
@@ -786,6 +800,65 @@ func (agent *Agent) executeViewerCommand(ctx context.Context, command Command, o
 	case <-time.After(agent.viewerCommandDeadline()):
 		return errors.New("Viewer command timed out")
 	}
+}
+
+func (agent *Agent) executeViewerRestart(ctx context.Context, command Command, operationKey string) error {
+	if command.Generation <= 0 || operationKey == "" {
+		return ErrCommandRejected
+	}
+	restartCtx, cancel := context.WithTimeout(ctx, agent.viewerRestartDeadline())
+	defer cancel()
+	state, err := agent.loadState()
+	if err != nil {
+		return err
+	}
+	if state.ViewerGeneration >= command.Generation && state.ViewerState == "running" && state.RendererState == "ready" {
+		return nil
+	}
+	if state.ViewerState == "restart_authorized" && state.ExpectedViewerPID != 0 {
+		if err := agent.executeViewerCommand(restartCtx, Command{Type: "shutdown", Generation: command.Generation}, operationKey); err != nil {
+			agent.failViewerRestart(command.Generation)
+			return err
+		}
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err = agent.loadState()
+		if err != nil {
+			return err
+		}
+		if state.ViewerGeneration == command.Generation && state.ViewerState == "running" && state.RendererState == "ready" {
+			return nil
+		}
+		select {
+		case <-restartCtx.Done():
+			agent.failViewerRestart(command.Generation)
+			return errors.New("Viewer restart timed out")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (agent *Agent) failViewerRestart(generation int64) {
+	_, _ = agent.updateState(func(state *MachineState) error {
+		if state.ViewerGeneration < generation && state.ExpectedViewerGeneration == generation {
+			state.ExpectedViewerGeneration = state.ViewerGeneration
+			state.ViewerNonce = ""
+			state.ExpectedViewerPID = 0
+			state.ExpectedViewerSession = 0
+			state.ViewerState = "recovery_failed"
+			state.RendererState = "failed"
+		}
+		return nil
+	})
+}
+
+func (agent *Agent) viewerRestartDeadline() time.Duration {
+	if agent.ViewerRestartDeadline > 0 {
+		return agent.ViewerRestartDeadline
+	}
+	return defaultViewerRestartDeadline
 }
 
 func (agent *Agent) pendingViewerCommand() json.RawMessage {
@@ -818,6 +891,21 @@ func (agent *Agent) completeViewerCommand(payload json.RawMessage) error {
 	defer agent.viewerCommandMu.Unlock()
 	if agent.viewerCommand == nil || agent.viewerCommand.operationKey != result.OperationKey {
 		return errors.New("stale Viewer command result")
+	}
+	if result.Succeeded && agent.viewerCommand.command.Type == "shutdown" {
+		generation := agent.viewerCommand.command.Generation
+		if _, err := agent.updateState(func(state *MachineState) error {
+			if state.ExpectedViewerGeneration != generation || state.ViewerGeneration >= generation {
+				return errors.New("Viewer restart generation changed")
+			}
+			state.ViewerNonce = ""
+			state.ExpectedViewerPID = 0
+			state.ExpectedViewerSession = 0
+			state.RendererState = "not_ready"
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	if result.Succeeded {
 		agent.viewerCommand.result <- nil
@@ -908,6 +996,15 @@ func validViewerStreamName(value string) bool {
 func validViewerStreamPhase(value string) bool {
 	switch value {
 	case "connecting", "retrying", "fallback", "recovering", "playing", "stalled", "cooldown", "unsupported":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRendererState(value string) bool {
+	switch value {
+	case "ready", "not_ready", "unresponsive", "failed":
 		return true
 	default:
 		return false

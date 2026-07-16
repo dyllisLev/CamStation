@@ -65,7 +65,7 @@ func TestViewerRestartBudgetIsBoundedAndPersistent(t *testing.T) {
 	if allowed, _ := state.AllowViewerRestart(now.Add(12*time.Minute), true, "command-9"); allowed {
 		t.Fatal("forced restart command was applied twice")
 	}
-	if allowed, _ := state.AllowViewerRestart(now.Add(12*time.Minute), true, "command-10"); allowed {
-		t.Fatal("a second forced restart bypassed the exhausted episode")
+	if allowed, next := state.AllowViewerRestart(now.Add(12*time.Minute), true, "command-10"); !allowed || next <= generation {
+		t.Fatalf("a distinct forced restart was rejected: allowed=%v generation=%d", allowed, next)
 	}
 }

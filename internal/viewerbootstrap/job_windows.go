@@ -32,14 +32,18 @@ func (windowsAdapter) CurrentViewer(ctx context.Context, installDir string) (str
 	if current.ViewerPath == "" {
 		return "", errors.New("current Viewer path is missing")
 	}
-	info, err := os.Stat(current.ViewerPath)
+	viewerPath, err := ResolveViewerPath(installDir, current.ViewerPath)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(viewerPath)
 	if err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
 		return "", errors.New("current Viewer is not a regular file")
 	}
-	return current.ViewerPath, nil
+	return viewerPath, nil
 }
 
 func (windowsAdapter) RequestGrant(ctx context.Context) (LaunchGrant, error) {
@@ -118,6 +122,42 @@ func (windowsAdapter) StartSuspended(ctx context.Context, spec LaunchSpec) (Mana
 		return nil, err
 	}
 	return process, nil
+}
+
+func (windowsAdapter) WaitReady(ctx context.Context, generation int64) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := vieweragent.LoadMachineState(vieweragent.PathsFromConfig(vieweragent.DefaultConfigPath()).State)
+		if err != nil {
+			return err
+		}
+		if state.ViewerGeneration == generation && state.ViewerState == "running" && state.RendererState == "ready" {
+			return nil
+		}
+		if state.ViewerGeneration > generation || state.ViewerState == "recovery_failed" {
+			return errors.New("Agent rejected Viewer readiness generation")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (windowsAdapter) RelaunchAuthorized(ctx context.Context, generation int64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	state, err := vieweragent.LoadMachineState(vieweragent.PathsFromConfig(vieweragent.DefaultConfigPath()).State)
+	if err != nil {
+		return false, err
+	}
+	return state.ViewerGeneration == generation &&
+		state.ExpectedViewerGeneration > generation &&
+		state.ViewerState == "restart_authorized" &&
+		state.ViewerNonce == "" && state.ExpectedViewerPID == 0, nil
 }
 
 type windowsProcess struct {

@@ -90,3 +90,40 @@ PASS
 ```
 
 Generated `viewer-app/build`, `viewer-app/dist`, and `viewer-app/node_modules` are ignored and are not part of the commit.
+
+## Focused Task 6 review fixes
+
+The Task 6-only review found and fixed the following lifecycle and packaging gaps without changing service or camera runtime state:
+
+- Unexpected Agent pipe closure now remains observable even when it races lifecycle subscription, exits Electron nonzero exactly once, and does not misclassify explicit shutdown. Registration/request timeouts, write/encoding failures, and pipe closure remove all pending requests.
+- `restart_viewer` now performs the real Agent-controlled transition: authorize a command-specific next generation, request and acknowledge graceful Viewer shutdown, clear the old identity synchronously, permit exactly one bootstrap grant, and complete only after that exact generation reports both Viewer `running` and renderer `ready`. Failure is bounded and persists `recovery_failed` without an automatic retry loop.
+- Bootstrap generations must increase strictly. A running Viewer cannot be replaced without explicit restart authorization, an old identity cannot claim the next generation, and a grant cannot be replaced or reused.
+- The 45-second startup/recovery budget covers current-release lookup, grant/registration, suspended launch, renderer readiness, and Job cleanup observation; cleanup no longer adds another timeout after the total deadline.
+- Renderer state is a fixed enum (`ready`, `not_ready`, `unresponsive`, `failed`), resolved Viewer paths cannot escape the install root through symlinks or Windows reparse points, and distinct forced command IDs remain independently actionable while duplicate IDs remain idempotent.
+- Windows packaging now has an executable policy and post-package assertion. The ASAR contains only `build/*` and `package.json`; source, tests, scripts, `node_modules`, TypeScript configuration, and lock files are excluded.
+
+Focused RED/GREEN evidence included an unexpected-close-before-subscription regression, pending-request leak checks, old-generation identity rejection, a never-ready process whose Job wait would previously exceed the total deadline, resolved symlink escape rejection, and package allow/exclude policy checks.
+
+Fresh focused-review verification:
+
+```text
+$ go test ./... -count=1
+PASS (including vieweragent and viewerbootstrap)
+
+$ go test -race ./internal/viewerbootstrap ./internal/vieweragent -count=1
+PASS
+
+$ go vet ./...
+PASS
+
+$ go build -o /tmp/camstationd-task6-review-final ./cmd/camstationd
+$ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-bootstrap-task6-review-final.exe ./cmd/camstation-viewer-bootstrap
+PASS; bootstrap is a PE32+ Windows x86-64 executable
+
+$ cd viewer-app && npm test && npm run build && npm run package:win
+tests 13, pass 13, fail 0; build and packaging PASS
+ASAR: /build/* and /package.json only
+
+$ git diff --check
+PASS
+```
