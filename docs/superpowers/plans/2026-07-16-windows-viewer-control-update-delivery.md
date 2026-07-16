@@ -342,13 +342,15 @@ git commit -m "feat(live): add finite WebRTC playback recovery"
 - Create: `internal/vieweragent/agent.go`
 - Create: `internal/vieweragent/*_test.go`
 - Create: `cmd/camstation-viewer-agent/main.go`
-- Create: `cmd/camstation-viewer-agent/service_windows.go`
-- Create: `cmd/camstation-viewer-agent/service_other.go`
+- Create: `cmd/camstation-viewer-host/main_windows.go`
+- Create: `cmd/camstation-viewer-host/main_other.go`
 - Modify: `go.mod`
 - Modify: `go.sum`
 
 **Interfaces:**
-- Agent command: `run --config <path>` and SCM mode when launched without a console command.
+- Agent command: `run --config <path>` as the versioned worker process.
+- Stable SCM host: `camstation-viewer-host.exe` reads `current.json`, launches
+  that release's Agent, forwards stop/shutdown, and never loads Electron.
 - Install support: `configure --server-url <url> --display-name <name> --install-dir <dir>`.
 - Machine files: `%ProgramData%\CamStation\Viewer\config.json`, `state.json`, `commands.json`, `update.json`.
 - Named pipe: `\\.\pipe\CamStationViewerAgent`, newline-delimited versioned JSON capped at 64 KiB.
@@ -375,18 +377,22 @@ Expected: PASS.
 
 - [ ] **Step 5: Add Windows service and named-pipe adapters**
 
-Use `golang.org/x/sys/windows/svc` and `github.com/Microsoft/go-winio v0.6.2`. The service reports SCM state, responds to stop/shutdown, sends server heartbeat without Viewer IPC, and does not restart Viewer for server/network loss.
+Use `golang.org/x/sys/windows/svc` in the stable host and
+`github.com/Microsoft/go-winio v0.6.2` in the Agent. The host reports SCM state,
+forwards stop/shutdown to exactly one versioned Agent, and uses a bounded child
+restart budget. The Agent sends server heartbeat without Viewer IPC and does not
+restart Viewer for server/network loss.
 
 - [ ] **Step 6: Cross-compile and inspect the Agent**
 
-Run: `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-agent.exe ./cmd/camstation-viewer-agent && file /tmp/camstation-viewer-agent.exe`
+Run: `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-agent.exe ./cmd/camstation-viewer-agent && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/camstation-viewer-host.exe ./cmd/camstation-viewer-host && file /tmp/camstation-viewer-agent.exe /tmp/camstation-viewer-host.exe`
 
 Expected: PE32+ executable for MS Windows x86-64.
 
 - [ ] **Step 7: Commit Task 5**
 
 ```bash
-git add internal/vieweragent cmd/camstation-viewer-agent go.mod go.sum
+git add internal/vieweragent cmd/camstation-viewer-agent cmd/camstation-viewer-host go.mod go.sum
 git commit -m "feat(viewer-agent): add Windows control service"
 ```
 
@@ -508,11 +514,16 @@ Register `CamStationViewerAgent` as automatic service, SCM recovery delays 5/30/
 
 - [ ] **Step 6: Build one server-specific installer**
 
-`viewer-app/scripts/build-installer.mjs` writes a bounded `defaults.json`, builds the three Windows Go binaries and Electron package, zips the release payload, copies it into the embed directory, builds `CamStationViewerSetup.exe`, then removes the transient embedded payload. The installer self-elevates with `runas` and uses the active console user SID/display name defaults.
+`viewer-app/scripts/build-installer.mjs` writes a bounded `defaults.json`, builds
+the stable service host plus the versioned Agent, Viewer bootstrap, and Electron
+package, zips the release payload, copies it into the embed directory, builds
+`CamStationViewerSetup.exe`, then removes the transient embedded payload. The
+installer self-elevates with `runas` and uses the active console user SID and
+computer name as defaults.
 
 - [ ] **Step 7: Cross-build and inspect the installer**
 
-Run: `cd viewer-app && npm run build:installer -- --server-url http://127.0.0.1:18080 --version 2.0.0-dev.1`
+Run: `SERVER_URL="${CAMSTATION_VIEWER_SERVER_URL:-http://$(hostname -I | awk '{print $1}'):18080}"; cd viewer-app && npm run build:installer -- --server-url "$SERVER_URL" --version 2.0.0-dev.1`
 
 Expected: `viewer-app/dist/CamStationViewerSetup.exe` is PE32+, contains the release payload, and no payload file remains tracked.
 
@@ -556,7 +567,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Build and publish the development installer**
 
-Run: `cd viewer-app && npm run build:installer -- --server-url http://127.0.0.1:18080 --version 2.0.0-dev.1 && cd .. && scripts/publish-viewer-release.sh --installer viewer-app/dist/CamStationViewerSetup.exe --version 2.0.0-dev.1 --release-dir data/viewer-releases --development-unsigned`
+Run: `SERVER_URL="${CAMSTATION_VIEWER_SERVER_URL:-http://$(hostname -I | awk '{print $1}'):18080}"; cd viewer-app && npm run build:installer -- --server-url "$SERVER_URL" --version 2.0.0-dev.1 && cd .. && scripts/publish-viewer-release.sh --installer viewer-app/dist/CamStationViewerSetup.exe --version 2.0.0-dev.1 --release-dir data/viewer-releases --development-unsigned`
 
 Expected: `data/viewer-releases/current/release.json` and installer exist and match.
 
