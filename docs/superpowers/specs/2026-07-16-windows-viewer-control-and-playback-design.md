@@ -59,7 +59,7 @@ Server responsibilities:
 - maintain a per-client desired version and durable `update_app` command;
 - maintain an update ledger keyed by target version, artifact digest, and
   command generation;
-- serve signed release metadata and the exact configured release artifact;
+- serve immutable release metadata and the exact configured release artifact;
 - show update, recovery, retry-budget, and last-known-good details;
 - derive `offline` when the Agent heartbeat becomes stale.
 
@@ -114,23 +114,33 @@ registers a logon task for that principal. RDP or other user sessions do not
 start additional Viewers. When the configured user is not logged in, the Agent
 remains controllable and reports the Viewer as `not_logged_in`.
 
-The Agent and Viewer communicate over a local named pipe owned by the service.
-Its DACL permits only LocalSystem, the Agent service SID, and the configured
-monitoring-user SID; remote pipe clients are rejected. The Agent issues a new
-per-launch nonce when it starts the Viewer task, and accepts telemetry only from
-the process and console session that register with that nonce. This is a
-stability guard against stale or duplicate Viewer processes, not a general
-same-user security boundary.
+The Viewer startup task launches a small stable per-user bootstrap, not Electron
+directly. Before creating a BrowserWindow or child process, that bootstrap
+connects to the Agent's local named pipe from the configured console session and
+requests the current launch generation and one-time nonce. The task uses the
+`IgnoreNew` multiple-instance policy, and the Agent accepts only one bootstrap
+for the expected generation.
+
+The pipe is owned by the service. Its DACL permits only LocalSystem, the Agent
+service SID, and the configured monitoring-user SID; remote pipe clients are
+rejected. The Agent accepts telemetry only from the process and console session
+registered for the current generation and nonce. This is a stability guard
+against stale or duplicate Viewer processes, not a general same-user security
+boundary.
 
 The protocol is versioned, length-bounded JSON with request IDs. It carries
 Viewer heartbeat, renderer status, stream telemetry, and narrow commands only.
-The Agent assigns the accepted Viewer process tree to a Windows Job Object so a
-graceful-stop deadline followed by forced termination cannot leave orphan
-Electron children.
+After Agent acceptance, the bootstrap creates a kill-on-close Windows Job
+Object, starts Electron suspended, assigns it to the Job, then resumes it. The
+bootstrap retains the Job handle; graceful shutdown targets the bootstrap, and
+forced bootstrap termination closes the handle before any Electron child can
+escape cleanup.
 
-The Viewer sends a local heartbeat at least every five seconds. A stale local
-heartbeat does not automatically prove a process crash: the Agent distinguishes
-process exit, renderer unresponsiveness, IPC loss, and server/network loss.
+The Viewer sends a local heartbeat at least every five seconds. Three missed
+heartbeats, or 15 seconds without a valid message, makes IPC stale. A stale
+local heartbeat does not automatically prove a process crash: the Agent
+distinguishes process exit, renderer unresponsiveness, IPC loss, and
+server/network loss.
 
 ### Updater Helper
 
@@ -155,13 +165,23 @@ Updater responsibilities:
 - leave a bounded, redacted result for the restarted Agent to report.
 
 The journal records the transaction ID, command generation, old and new release
-digests, previous current-release pointer, phase, and rollback state. On every
-service start, the stable bootstrap checks this journal and runs the updater
-reconciler before launching an Agent release. The installer also registers a
-boot recovery task as a secondary path when an incomplete journal exists.
-Machine state is backed up before activation; state migrations must either be
-backward-readable by the last-known-good Agent or restore that
-transaction-bound backup during rollback.
+digests, previous current-release pointer, phase, and rollback state. Exactly
+one writer owns update recovery through one protected machine-wide global mutex;
+the journal transaction ID identifies that owner's lease. Journal phases
+advance with atomic compare-and-set replacement. A process that cannot acquire
+ownership within its bounded deadline exits without changing the pointer or
+journal.
+
+The live updater owns stop, activation, validation timeout, and rollback phases.
+On service start, the stable bootstrap checks the journal. If a live updater
+owns a `validating` transaction, the bootstrap launches only the journal-
+selected Agent release. If no owner exists for any incomplete phase, including
+`validating` after power loss, the bootstrap starts one reconciler after it
+acquires the mutex and defers Agent launch to that reconciler's selected phase.
+The installer also registers a boot recovery task as a secondary path; that task
+exits when another owner holds the transaction. Machine state is backed up
+before activation; state migrations must either be backward-readable by the
+last-known-good Agent or restore that transaction-bound backup during rollback.
 
 ### Windows Installer
 
@@ -191,12 +211,12 @@ Viewer process without granting the renderer service privileges.
 
 The installer collects the CamStation server address, Viewer display name, and
 monitoring-user SID during the single elevated installation. It defaults the
-SID to the console user that launched elevation, allows an administrator to
-select another local user, and exposes the same values as unattended installer
-properties. No post-install first-run input is required. The Agent creates a
-stable random `clientId` once and preserves it across display-name changes,
-server reconnects, updates, repairs, and Viewer reinstalls. Identity reset is a
-separate explicit administrative operation.
+SID to the active console-session user, not the account supplying elevation,
+allows an administrator to select another local user, and exposes the same
+values as unattended installer properties. No post-install first-run input is
+required. The Agent creates a stable random `clientId` once and preserves it
+across display-name changes, server reconnects, updates, repairs, and Viewer
+reinstalls. Identity reset is a separate explicit administrative operation.
 
 The first release continues to assume a trusted LAN and does not treat
 `clientId` as an authentication secret. Server-side command creation remains
@@ -244,13 +264,15 @@ command remains durable across server and client restarts. The server may send
 one explicit forced restart even when the automatic restart budget is
 exhausted; that command is still idempotent and audited.
 
-The server sends an SSE keepalive at most every ten seconds. The Agent uses a
-25-second read deadline; receiving no event or keepalive by that deadline closes
-SSE and sets `control_degraded`. Long polling starts immediately and counts as
-healthy only when a request is actively pending or completed successfully
-within the same 25-second window. SSE reconnect continues in the background
-using the bounded control backoff. A half-open SSE socket never counts as a
-healthy command channel merely because the separate heartbeat request works.
+The server sends an SSE event or keepalive at least once every ten seconds. The
+Agent uses a 25-second read deadline; receiving neither by that deadline closes
+SSE and sets `control_degraded`. Long polling starts immediately with its own
+25-second request deadline, but a pending request is not proof of control
+health. The Agent remains degraded until a poll completes with an application-
+level server response or SSE receives a valid event or keepalive. SSE reconnect
+continues in the background using the bounded control backoff. Half-open SSE or
+long-poll sockets never count as a healthy command channel merely because the
+separate heartbeat request works.
 
 ## Heartbeat and Status Model
 
@@ -270,7 +292,8 @@ shows these axes separately:
 
 - Agent: `online`, `control_degraded`, `updating`, `recovering`,
   `recovery_failed`, `offline`;
-- Viewer: `running`, `unresponsive`, `crashed`, `restarting`, `failed`;
+- Viewer: `not_logged_in`, `running`, `unresponsive`, `crashed`, `restarting`,
+  `failed`;
 - stream: `connecting`, `playing`, `stalled`, `fallback`, `recovering`,
   `offline`.
 
@@ -288,7 +311,8 @@ compatibility fields. Command generation belongs to each server update command
 and its attempt ledger, not to the immutable release.
 The server records a desired version per client or selected fleet and signals
 the Agent with `update_app`. The heartbeat response also carries the desired
-version so a missed SSE message converges after reconnect.
+version, artifact digest, and command generation so a missed SSE message
+converges after reconnect.
 
 Update flow:
 
@@ -297,8 +321,12 @@ Update flow:
 3. Agent verifies size, SHA-256, the Windows Authenticode chain and code-signing
    usage, and the signer thumbprint installed with the Agent. The internal-LAN
    server metadata is not a separate cryptographic trust root.
-4. Agent reports `downloaded` and `verified` before launching the updater.
-5. Updater stops the Viewer and Agent, installs the staged release, and restarts
+4. Agent reports `downloaded` and `verified`. If the configured monitoring user
+   is not in the active console session or its Viewer is not ready, the update
+   enters `waiting_for_viewer_session`; the current release keeps running and no
+   installation attempt is consumed.
+5. After the Viewer has been ready for 30 seconds, Agent launches the updater.
+   Updater stops the Viewer and Agent, installs the staged release, and restarts
    both registered components.
 6. The new Agent reconnects with the same `clientId`, transaction ID, command
    generation, and target digest, then starts post-update validation.
@@ -316,6 +344,12 @@ Update flow:
 The client never presents an update button or confirmation dialog. A failed
 download does not stop the active Viewer. A failed signature or hash is a hard
 rejection and is never bypassed automatically.
+
+`waiting_for_viewer_session` is a durable, visible wait state, not a retry
+loop. Login or a healthy Viewer-session transition wakes the pending operation;
+ordinary timers do not repeatedly launch the installer. The first release does
+not activate a Viewer-bearing release while no configured console Viewer can
+participate in post-update validation.
 
 Each target version, artifact digest, and command generation has an independent
 attempt ledger. Download failures retry at most three times with 1, 5, and 30
@@ -403,7 +437,12 @@ Escalation rules:
 - stable playback for five minutes resets that stream recovery episode;
 - unhealthy server stream: request at most one server-side stream restart per
   ten minutes;
-- stale Viewer IPC or renderer-wide failure: restart the Viewer;
+- stale Viewer IPC or renderer-wide failure: allow five seconds for graceful
+  bootstrap shutdown, then close the Job and relaunch once;
+- Viewer relaunch: require bootstrap IPC registration within ten seconds and a
+  ready renderer within 20 seconds of process start; the complete recovery must
+  finish within 45 seconds of failure detection or consume one restart attempt
+  and report failure;
 - multi-stream escalation: restart the Viewer only after isolated episodes are
   exhausted for at least two streams and at least half of visible streams, with
   fresh server evidence that each affected stream is healthy;
@@ -470,6 +509,8 @@ Control:
 - stale heartbeat or control loss is visible on the server within 30 seconds;
 - a silent or half-open SSE connection transitions to long-poll fallback and
   `control_degraded` within 25 seconds;
+- blackholed long polling remains `control_degraded` until an application-level
+  response proves command delivery;
 - online commands are acknowledged within five seconds;
 - Agent heartbeat continues through renderer crash and unresponsiveness;
 - video playback can never make a control-disconnected client appear healthy;
@@ -485,11 +526,15 @@ Playback:
 - a stall is detected within ten seconds and isolated recovery completes within
   30 seconds when the server stream is healthy;
 - renderer crash, hang, GPU failure, and process termination recover within the
-  bounded budgets;
+  15-second IPC-stale, five-second shutdown, ten-second bootstrap, 20-second
+  renderer-ready, and 45-second end-to-end deadlines;
 - after warm-up, the 24-hour soak leaves no orphan process and keeps total
   client RSS growth within the larger of 25 percent of baseline or 300 MB.
 - a fault-free 24-hour interval has no unexplained Agent or Viewer restart and
   no server-healthy stream remains stalled longer than 30 seconds;
+- each camera achieves at least 99.9 percent media-progress availability, has no
+  terminal recovery episode, and performs no more than three transport
+  reconnects during the fault-free 24-hour interval;
 - current infinite MSE candidate cycling is replaced by the finite episode and
   cooldown defined above.
 
@@ -497,6 +542,9 @@ Update:
 
 - version N updates silently to N+1 and reports every phase;
 - interrupted download leaves N running;
+- when the monitoring user is logged out, N+1 downloads and verifies but stays
+  `waiting_for_viewer_session` without consuming an install attempt; login then
+  permits one successful activation;
 - wrong size, hash, signature, or publisher is rejected;
 - installation failure or missing new-version heartbeat rolls back to N;
 - the failed target remains quarantined and is not retried until a new digest or
@@ -506,6 +554,8 @@ Update:
 - simulated power loss at download, staging, pre-stop, post-stop, activation,
   Agent restart, validation, and rollback boundaries always recovers either the
   new committed release or the last-known-good release;
+- concurrent service bootstrap, boot recovery task, and updater starts produce
+  one transaction owner and one valid journal/pointer outcome;
 - versioned machine state remains readable after both update and rollback.
 
 Recovery-loop prevention:

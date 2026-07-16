@@ -1,5 +1,17 @@
 # viewer-client-redesign - Work Plan
 
+## Status
+
+**Superseded — do not execute this plan.** It predates the approved Windows
+Agent service, one-run service installer, unattended server-directed update,
+transactional rollback, and WebRTC-to-MSE recovery design. Its task breakdown
+is retained only as historical context.
+
+The approved replacement design is
+`docs/superpowers/specs/2026-07-16-windows-viewer-control-and-playback-design.md`.
+A new implementation plan must be written and reviewed from that design before
+work begins.
+
 ## TL;DR (For humans)
 **What you'll get:** A Windows CamStation viewer EXE that asks for the server address and viewer name on first run, opens the CamStation 2.0 live screen by default, and stays controllable from the server even if the web live renderer freezes or crashes.
 
@@ -11,7 +23,9 @@
 **Risk:** High - desktop packaging, live video recovery, process supervision, and server-client command contracts all have to work together under long-running CCTV conditions.
 **Decisions to sanity-check:** Q1=A hardened Electron, but not a plain webview shell. Q2=server address plus viewer name entered by the client, editable in settings, with an internal stable client id. Q3=A stable basics first; auto-update and native player fallback are out of first release.
 
-Your next move: run `$omo:start-work` or ask for high-accuracy plan review first. Full execution detail follows below.
+Do not run this plan or its start-work instruction. Use the replacement design
+and its future implementation plan instead. Historical execution detail follows
+below.
 
 ---
 
