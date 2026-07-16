@@ -289,7 +289,8 @@ func (d *DB) ApplyViewerCommandResult(ctx context.Context, viewerID string, id i
 	if err != nil {
 		return ViewerCommand{}, err
 	}
-	if current.State == req.State && current.Error == req.Error && current.OperationKey == req.OperationKey {
+	if current.State == req.State && current.Error == req.Error &&
+		(req.OperationKey == "" || current.OperationKey == req.OperationKey) {
 		return current, nil
 	}
 	if current.OperationKey != "" && req.OperationKey != "" && current.OperationKey != req.OperationKey {

@@ -58,11 +58,15 @@ export function commandBadgeState(state?: string): string {
 }
 
 type ViewerHealthAxes = {
+  readonly status?: string;
   readonly agent?: { readonly state: string };
   readonly control?: { readonly state: string };
 };
 
 export function viewerAgentState(viewer: ViewerHealthAxes): string | undefined {
+  if (viewer.status === "offline" || viewer.status === "stale") {
+    return viewer.status;
+  }
   return viewer.agent?.state;
 }
 

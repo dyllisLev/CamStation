@@ -43,6 +43,74 @@ func TestViewerCommandResultIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestViewerCommandResultOmittedOperationKeyIsIdempotent(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-optional-key", DisplayName: "Optional Key Viewer", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	command, err := db.CreateViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{Type: "restart_viewer"})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandAcknowledged, OperationKey: "op-1",
+	}); err != nil {
+		t.Fatalf("acknowledge command: %v", err)
+	}
+	running, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandRunning,
+	})
+	if err != nil {
+		t.Fatalf("mark running without operation key: %v", err)
+	}
+	retry, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandRunning,
+	})
+	if err != nil {
+		t.Fatalf("retry running without operation key: %v", err)
+	}
+	if retry.OperationKey != "op-1" || !retry.UpdatedAt.Equal(running.UpdatedAt) {
+		t.Fatalf("retry changed command: %#v, first updatedAt=%s", retry, running.UpdatedAt)
+	}
+}
+
+func TestViewerCommandResultRejectsDifferentOperationKey(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-key-mismatch", DisplayName: "Key Mismatch Viewer", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	command, err := db.CreateViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{Type: "restart_viewer"})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandAcknowledged, OperationKey: "op-1",
+	}); err != nil {
+		t.Fatalf("acknowledge command: %v", err)
+	}
+	running, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandRunning,
+	})
+	if err != nil {
+		t.Fatalf("mark running without operation key: %v", err)
+	}
+	if _, err := db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, ViewerCommandResult{
+		State: ViewerCommandRunning, OperationKey: "op-2",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("different operation key error = %v, want validation", err)
+	}
+	stored, err := db.GetViewerCommand(t.Context(), viewer.ID, command.ID)
+	if err != nil || stored.State != ViewerCommandRunning || stored.OperationKey != "op-1" || !stored.UpdatedAt.Equal(running.UpdatedAt) {
+		t.Fatalf("different operation key changed command: %#v err=%v", stored, err)
+	}
+}
+
 func TestViewerCommandConcurrentDuplicateResultUpdatesOnce(t *testing.T) {
 	db := openMigratedStore(t)
 	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
