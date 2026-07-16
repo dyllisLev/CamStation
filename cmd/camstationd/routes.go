@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"camstation/internal/backup"
@@ -40,19 +41,20 @@ type cameraControlService interface {
 }
 
 type routeDeps struct {
-	db               *store.DB
-	prober           camera.Prober
-	streamer         streamController
-	policyApplier    policyApplier
-	recorderManager  *recorder.Manager
-	cleaner          *cleanup.Cleaner
-	backupRunner     *backup.Runner
-	recordingsDir    string
-	tempDir          string
-	maxStorageBytes  int64
-	recordingEnabled bool
-	cameraController cameraControlService
-	presetLocks      *cameraPresetLockSet
+	db                *store.DB
+	prober            camera.Prober
+	streamer          streamController
+	policyApplier     policyApplier
+	recorderManager   *recorder.Manager
+	cleaner           *cleanup.Cleaner
+	backupRunner      *backup.Runner
+	recordingsDir     string
+	tempDir           string
+	viewerReleasesDir string
+	maxStorageBytes   int64
+	recordingEnabled  bool
+	cameraController  cameraControlService
+	presetLocks       *cameraPresetLockSet
 }
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunnerOpt ...*backup.Runner) (http.Handler, error) {
@@ -66,8 +68,8 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 	return routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, recordingsDir, tempDir, maxStorageBytes, recordingEnabled, backupRunner, stream.NewApplyCoordinator(db, streamer, recorderManager))
 }
 
-func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunner *backup.Runner, applier policyApplier) (http.Handler, error) {
-	return routeDeps{
+func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunner *backup.Runner, applier policyApplier, viewerReleasesDirOpt ...string) (http.Handler, error) {
+	deps := routeDeps{
 		db:               db,
 		prober:           prober,
 		streamer:         streamer,
@@ -79,7 +81,11 @@ func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *strea
 		tempDir:          tempDir,
 		maxStorageBytes:  maxStorageBytes,
 		recordingEnabled: recordingEnabled,
-	}.handler()
+	}
+	if len(viewerReleasesDirOpt) > 0 {
+		deps.viewerReleasesDir = viewerReleasesDirOpt[0]
+	}
+	return deps.handler()
 }
 
 func (d routeDeps) handler() (http.Handler, error) {
@@ -89,6 +95,9 @@ func (d routeDeps) handler() (http.Handler, error) {
 	if d.presetLocks == nil {
 		d.presetLocks = &cameraPresetLockSet{}
 	}
+	if d.viewerReleasesDir == "" {
+		d.viewerReleasesDir = filepath.Join(filepath.Dir(d.recordingsDir), "viewer-releases")
+	}
 	mux := http.NewServeMux()
 	previews := newPreviewRegistry()
 
@@ -96,6 +105,7 @@ func (d routeDeps) handler() (http.Handler, error) {
 	d.registerCameraRoutes(mux, previews)
 	d.registerStreamRoutes(mux)
 	d.registerViewerRoutes(mux)
+	d.registerViewerReleaseRoutes(mux)
 	d.registerSystemRoutes(mux)
 	d.registerSettingsJobRoutes(mux)
 	d.registerAlertRoutes(mux)

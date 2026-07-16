@@ -25,16 +25,17 @@ var webFS embed.FS
 
 func main() {
 	var (
-		addr             = flag.String("addr", getenv("CAMSTATION_ADDR", ":18080"), "HTTP listen address")
-		dbPath           = flag.String("db", getenv("CAMSTATION_DB", "./data/camstation.db"), "SQLite database path")
-		cameraURL        = flag.String("camera-url", getenv("CAMSTATION_CAMERA_URL", ""), "single camera URL for smoke testing")
-		probeOnly        = flag.Bool("probe-only", false, "run one camera probe and exit")
-		probeOnStart     = flag.Bool("probe-on-start", false, "probe CAMSTATION_CAMERA_URL during startup")
-		recordingEnabled = flag.Bool("recording-enabled", getenvBool("CAMSTATION_RECORDING_ENABLED", false), "start recorder workers for registered cameras")
-		recordingsDir    = flag.String("recordings-dir", getenv("CAMSTATION_RECORDINGS_DIR", "./data/recordings"), "final recording directory")
-		tempDir          = flag.String("temp-dir", getenv("CAMSTATION_TEMP_DIR", "./data/temp"), "temporary recording directory")
-		segmentMinutes   = flag.Int("segment-minutes", getenvInt("CAMSTATION_SEGMENT_MINUTES", 30), "recording segment length in minutes")
-		maxStorageGB     = flag.Float64("max-storage-gb", getenvFloat("CAMSTATION_MAX_STORAGE_GB", 0), "maximum recording storage in GB; 0 disables automatic cleanup")
+		addr              = flag.String("addr", getenv("CAMSTATION_ADDR", ":18080"), "HTTP listen address")
+		dbPath            = flag.String("db", getenv("CAMSTATION_DB", "./data/camstation.db"), "SQLite database path")
+		cameraURL         = flag.String("camera-url", getenv("CAMSTATION_CAMERA_URL", ""), "single camera URL for smoke testing")
+		probeOnly         = flag.Bool("probe-only", false, "run one camera probe and exit")
+		probeOnStart      = flag.Bool("probe-on-start", false, "probe CAMSTATION_CAMERA_URL during startup")
+		recordingEnabled  = flag.Bool("recording-enabled", getenvBool("CAMSTATION_RECORDING_ENABLED", false), "start recorder workers for registered cameras")
+		recordingsDir     = flag.String("recordings-dir", getenv("CAMSTATION_RECORDINGS_DIR", "./data/recordings"), "final recording directory")
+		tempDir           = flag.String("temp-dir", getenv("CAMSTATION_TEMP_DIR", "./data/temp"), "temporary recording directory")
+		viewerReleasesDir = flag.String("viewer-releases-dir", getenv("CAMSTATION_VIEWER_RELEASES_DIR", "./data/viewer-releases"), "Windows Viewer release directory")
+		segmentMinutes    = flag.Int("segment-minutes", getenvInt("CAMSTATION_SEGMENT_MINUTES", 30), "recording segment length in minutes")
+		maxStorageGB      = flag.Float64("max-storage-gb", getenvFloat("CAMSTATION_MAX_STORAGE_GB", 0), "maximum recording storage in GB; 0 disables automatic cleanup")
 	)
 	flag.Parse()
 
@@ -160,7 +161,7 @@ func main() {
 
 	startBackupScheduler(ctx, db, backupRunner, *recordingsDir)
 
-	mux, err := routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled, backupRunner, policyCoordinator)
+	mux, err := routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled, backupRunner, policyCoordinator, *viewerReleasesDir)
 	if err != nil {
 		log.Fatalf("build routes: %v", err)
 	}
