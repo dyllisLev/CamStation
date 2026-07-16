@@ -204,6 +204,92 @@ func TestLoadRejectsCurrentSymlinkOutsideRoot(t *testing.T) {
 	}
 }
 
+func TestLoadPrefersCurrentActiveReleaseInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "current"), []byte("legacy installer"), "")
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "releases", "2.0.0-dev.2-release"), []byte("active installer"), "")
+	manifestPath := filepath.Join(root, "releases", "2.0.0-dev.2-release", "release.json")
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read active manifest: %v", err)
+	}
+	var manifest releaseManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatalf("decode active manifest: %v", err)
+	}
+	manifest.Version = "2.0.0-dev.2"
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode active manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+		t.Fatalf("write active manifest: %v", err)
+	}
+	if err := os.Symlink("../releases/2.0.0-dev.2-release", filepath.Join(root, "current", "active")); err != nil {
+		t.Fatalf("create active pointer: %v", err)
+	}
+
+	release, err := viewerrelease.Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if release.Version != "2.0.0-dev.2" {
+		t.Fatalf("version = %q, want active release", release.Version)
+	}
+}
+
+func TestLoadedActiveReleaseRemainsPinnedAcrossPointerSwitch(t *testing.T) {
+	root := t.TempDir()
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "releases", "v1"), []byte("installer v1"), "")
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "releases", "v2"), []byte("installer v2"), "")
+	current := filepath.Join(root, "current")
+	if err := os.MkdirAll(current, 0o755); err != nil {
+		t.Fatalf("create current: %v", err)
+	}
+	if err := os.Symlink("../releases/v1", filepath.Join(current, "active")); err != nil {
+		t.Fatalf("create v1 pointer: %v", err)
+	}
+
+	release, err := viewerrelease.Load(root)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tempPointer := filepath.Join(current, ".active.new")
+	if err := os.Symlink("../releases/v2", tempPointer); err != nil {
+		t.Fatalf("create v2 pointer: %v", err)
+	}
+	if err := os.Rename(tempPointer, filepath.Join(current, "active")); err != nil {
+		t.Fatalf("switch pointer: %v", err)
+	}
+
+	file, err := release.OpenVerified()
+	if err != nil {
+		t.Fatalf("OpenVerified() after switch error = %v", err)
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read pinned release: %v", err)
+	}
+	if string(contents) != "installer v1" {
+		t.Fatalf("contents = %q, want pinned v1", contents)
+	}
+}
+
+func TestLoadRejectsEscapingCurrentActivePointerInsteadOfFallingBack(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "current"), []byte("legacy installer"), "")
+	writeReleaseFixtureAtDir(t, outside, []byte("outside installer"), "")
+	if err := os.Symlink(outside, filepath.Join(root, "current", "active")); err != nil {
+		t.Skipf("create escaping active pointer: %v", err)
+	}
+
+	if _, err := viewerrelease.Load(root); !errors.Is(err, viewerrelease.ErrInvalid) {
+		t.Fatalf("Load() error = %v, want ErrInvalid", err)
+	}
+}
+
 type releaseManifest struct {
 	Version             string    `json:"version"`
 	Filename            string    `json:"filename"`

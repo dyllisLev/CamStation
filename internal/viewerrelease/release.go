@@ -26,6 +26,7 @@ type Release struct {
 	PublishedAt         time.Time `json:"publishedAt"`
 	DevelopmentUnsigned bool      `json:"developmentUnsigned"`
 	rootDir             string
+	releaseDir          string
 }
 
 func Load(rootDir string) (Release, error) {
@@ -34,7 +35,11 @@ func Load(rootDir string) (Release, error) {
 		return Release{}, ErrUnavailable
 	}
 	defer root.Close()
-	current, err := root.OpenRoot("current")
+	releaseDir, err := selectedReleaseDir(root)
+	if err != nil {
+		return Release{}, err
+	}
+	current, err := root.OpenRoot(releaseDir)
 	if err != nil {
 		return Release{}, currentRootError(err)
 	}
@@ -55,6 +60,7 @@ func Load(rootDir string) (Release, error) {
 		return Release{}, ErrInvalid
 	}
 	release.rootDir = rootDir
+	release.releaseDir = releaseDir
 
 	file, err := release.OpenVerified()
 	if err != nil {
@@ -77,7 +83,11 @@ func (r Release) OpenVerified() (*os.File, error) {
 		return nil, ErrUnavailable
 	}
 	defer root.Close()
-	current, err := root.OpenRoot("current")
+	releaseDir := r.releaseDir
+	if releaseDir == "" {
+		releaseDir = "current"
+	}
+	current, err := root.OpenRoot(releaseDir)
 	if err != nil {
 		return nil, currentRootError(err)
 	}
@@ -112,6 +122,29 @@ func (r Release) OpenVerified() (*os.File, error) {
 	}
 	valid = true
 	return file, nil
+}
+
+func selectedReleaseDir(root *os.Root) (string, error) {
+	info, err := root.Lstat("current/active")
+	if errors.Is(err, os.ErrNotExist) {
+		return "current", nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", ErrInvalid
+	}
+	target, err := root.Readlink("current/active")
+	if err != nil || filepath.IsAbs(target) {
+		return "", ErrInvalid
+	}
+	releaseDir := filepath.Clean(filepath.Join("current", target))
+	if filepath.Dir(releaseDir) != "releases" {
+		return "", ErrInvalid
+	}
+	info, err = root.Lstat(releaseDir)
+	if err != nil || !info.Mode().IsDir() {
+		return "", ErrInvalid
+	}
+	return releaseDir, nil
 }
 
 func (r Release) validManifest() bool {

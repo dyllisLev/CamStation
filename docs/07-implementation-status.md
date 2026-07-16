@@ -156,7 +156,8 @@ This document records the current implementation state so the next session can c
   - Electron opens only the CamStation 2.0 `/live?viewer=1` route and uses finite WebRTC-primary/MSE-fallback playback recovery
   - the installer registers the automatic Agent service, SCM recovery actions, configured-user logon task, and boot recovery task in one unattended installation flow
   - update activation, durable retry budgets, exact artifact verification, ownership, rollback, quarantine, and restart recovery are transactional
-  - `scripts/publish-viewer-release.sh` stages and fsyncs a fixed installer/manifest pair, atomically rotates `current`, and retains the prior release as `previous`
+  - `scripts/publish-viewer-release.sh` serializes publishers with `flock`, fsyncs immutable `releases/<version>-<sha>` directories, and atomically replaces stable `current/active` and `previous/active` pointers
+  - legacy `current` files remain readable during one-time migration, and the release loader pins the selected immutable directory through an `os.Root` boundary so concurrent pointer changes cannot escape the release root or invalidate an in-flight download
 
 ## Stream And Recording Policy
 
@@ -274,7 +275,7 @@ Browser/Playwright verification performed:
   - a bounded 소방서1 relay termination produced a replacement and stable byte growth in 11.18 seconds without restarting camstationd or go2rtc
   - local output probes received H.264 640x360 from 소방서1 in 9.7 seconds after fault recovery and from 소방서5 in 2.0 seconds
   - post-restart logs contained no stale-connection or invalid-input signature; the legacy `cctv` server and camera settings were untouched
-- Windows Viewer publication and application on 2026-07-16 19:33-19:43 KST:
+- Windows Viewer publication and application on 2026-07-16 19:33-20:11 KST:
   - publisher contract tests, full Go tests, all 46 web tests, web lint/build, all 15 Viewer app tests, Viewer app build, and daemon build passed
   - published development release `2.0.0-dev.1` is a PE32+ x86-64 installer built for `http://10.0.0.29:18080`
   - source, published, and downloaded installers were each `383880704` bytes with SHA-256 `17fef68a70041b1f6d99f6c8f524fad46e5047da0c8b6a1f5f06959de619bf84`
@@ -282,6 +283,8 @@ Browser/Playwright verification performed:
   - `/settings` served the generated hashed asset containing the Windows installer card and fixed download route
   - the controlled restart used `CAMSTATION_RECORDING_ENABLED=false`; recorder workers, managed go2rtc, and managed ffmpeg all remained empty before and after restart
   - browser screenshot automation was unavailable because the local Chrome process was denied socket creation; API, generated-asset, and download verification completed without opening `/live`
+  - focused publication review replaced directory rotation with a continuously available atomic pointer layout, added publisher serialization and checked rollback after post-switch durability failure, and migrated the same installer without moving the legacy files
+  - after the pointer-aware daemon restart, the source, active immutable release, and newly downloaded installer still had the exact recorded size and SHA-256; managed go2rtc and managed ffmpeg remained empty
 
 ## Important Corrections Learned
 
