@@ -61,8 +61,11 @@ func (layout Layout) ReleaseDir(id string) string { return filepath.Join(layout.
 func (layout Layout) CurrentPath() string         { return filepath.Join(layout.InstallDir, "current.json") }
 func (layout Layout) JournalPath() string         { return filepath.Join(layout.StateDir, "transaction.json") }
 func (layout Layout) LockPath() string            { return filepath.Join(layout.StateDir, "update.lock") }
-func (layout Layout) StagingRoot() string         { return filepath.Join(layout.StateDir, "staging") }
-func (layout Layout) BackupRoot() string          { return filepath.Join(layout.StateDir, "backups") }
+func (layout Layout) CommitMarkerPath() string {
+	return filepath.Join(layout.StateDir, "update-commit.json")
+}
+func (layout Layout) StagingRoot() string { return filepath.Join(layout.StateDir, "staging") }
+func (layout Layout) BackupRoot() string  { return filepath.Join(layout.StateDir, "backups") }
 func (layout Layout) TransactionBackup(id string) string {
 	return filepath.Join(layout.BackupRoot(), id)
 }

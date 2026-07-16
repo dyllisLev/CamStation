@@ -39,6 +39,8 @@ type installerOptions struct {
 	mode              installerMode
 	silent            bool
 	transactionID     string
+	commandID         int64
+	payloadHash       string
 	generation        int64
 	expectedSHA       string
 	parentPID         int
@@ -74,7 +76,7 @@ func run(args []string) (result error) {
 	}
 	progress := installerProgress(options.silent, os.Stdout)
 	progress("Preparing installation")
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	switch options.mode {
 	case modeUninstall:
@@ -127,6 +129,8 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 	uninstall := flags.Bool("uninstall", false, "uninstall")
 	recoverUpdate := flags.Bool("recover", false, "recover interrupted update")
 	transactionID := flags.String("transaction-id", "", "update transaction")
+	commandID := flags.Int64("command-id", 0, "durable update command")
+	payloadHash := flags.String("payload-hash", "", "durable update payload hash")
 	generation := flags.Int64("generation", 0, "command generation")
 	expectedSHA := flags.String("expected-sha", "", "verified installer SHA-256")
 	parentPID := flags.Int("parent-pid", 0, "Agent process to drain")
@@ -155,6 +159,8 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 		return installerOptions{}, errors.New("installer modes are mutually exclusive")
 	}
 	options.transactionID = *transactionID
+	options.commandID = *commandID
+	options.payloadHash = strings.ToLower(*payloadHash)
 	options.generation = *generation
 	options.expectedSHA = strings.ToLower(*expectedSHA)
 	options.parentPID = *parentPID
@@ -164,16 +170,17 @@ func parseInstallerArgs(args []string) (installerOptions, error) {
 	}
 	switch options.mode {
 	case modeUpdate:
-		if !safeIdentifier(options.transactionID, 128) || options.generation <= 0 || !validSHA(options.expectedSHA) || options.parentPID < 0 {
+		if !safeIdentifier(options.transactionID, 128) || options.commandID <= 0 || !validSHA(options.payloadHash) ||
+			options.generation <= 0 || !validSHA(options.expectedSHA) || options.parentPID < 0 {
 			return installerOptions{}, errors.New("complete verified update arguments are required")
 		}
 	case modeRollback:
-		if !safeIdentifier(*rollback, 128) || options.transactionID != "" || options.generation != 0 || options.expectedSHA != "" || options.parentPID != 0 {
+		if !safeIdentifier(*rollback, 128) || options.transactionID != "" || options.commandID != 0 || options.payloadHash != "" || options.generation != 0 || options.expectedSHA != "" || options.parentPID != 0 {
 			return installerOptions{}, errors.New("invalid rollback arguments")
 		}
 		options.transactionID = *rollback
 	case modeInstall, modeUninstall, modeRecover:
-		if options.transactionID != "" || options.generation != 0 || options.expectedSHA != "" || options.parentPID != 0 {
+		if options.transactionID != "" || options.commandID != 0 || options.payloadHash != "" || options.generation != 0 || options.expectedSHA != "" || options.parentPID != 0 {
 			return installerOptions{}, errors.New("unexpected installer transaction arguments")
 		}
 	}
@@ -347,7 +354,10 @@ func installUpdate(ctx context.Context, layout viewerinstall.Layout, options ins
 		return errors.New("installed Viewer layout does not match updater")
 	}
 	release := viewerinstall.Release{Version: manifest.Version, Digest: options.expectedSHA, ReleaseID: viewerinstall.ReleaseID(manifest.Version, options.expectedSHA)}
-	request := viewerinstall.Request{TransactionID: options.transactionID, Generation: options.generation, SourceDir: filepath.Join(payloadDir, "release"), Release: release}
+	request := viewerinstall.Request{
+		TransactionID: options.transactionID, CommandID: options.commandID, PayloadHash: options.payloadHash,
+		Generation: options.generation, SourceDir: filepath.Join(payloadDir, "release"), Release: release,
+	}
 	manager := viewerinstall.Manager{Layout: layout, Registration: viewerinstall.SystemRegistration{Layout: layout}}
 	manager.AfterPreparing = func(transaction viewerinstall.Journal) error {
 		return promoteUpdateHandoff(layout, options, manifest.Version, transaction)
@@ -357,6 +367,7 @@ func installUpdate(ctx context.Context, layout viewerinstall.Layout, options ins
 
 func promoteUpdateHandoff(layout viewerinstall.Layout, options installerOptions, version string, transaction viewerinstall.Journal) error {
 	if transaction.Phase != viewerinstall.PhasePreparing || transaction.TransactionID != options.transactionID ||
+		transaction.CommandID != options.commandID || transaction.PayloadHash != options.payloadHash ||
 		transaction.Generation != options.generation || transaction.Release.Version != version || !strings.EqualFold(transaction.Release.Digest, options.expectedSHA) {
 		return errors.New("durable transaction does not match update handoff")
 	}
@@ -388,6 +399,7 @@ func observeExactCommitted(ctx context.Context, layout viewerinstall.Layout, opt
 		}
 		empty := transaction.TransactionID == "" && transaction.Phase == ""
 		exact := transaction.TransactionID == options.transactionID && transaction.Generation == options.generation &&
+			transaction.CommandID == options.commandID && transaction.PayloadHash == options.payloadHash &&
 			transaction.Release.Version == version && strings.EqualFold(transaction.Release.Digest, options.expectedSHA)
 		if exact && transaction.Phase == viewerinstall.PhaseCommitted {
 			return true, nil
@@ -450,6 +462,7 @@ func fileSHA(path string) (string, error) {
 
 func validateUpdateHandoff(journal vieweragent.UpdateJournal, options installerOptions, version string) error {
 	if (journal.State != "launching_installer" && journal.State != "installer_launched") || journal.TransactionID != options.transactionID || journal.Generation != options.generation ||
+		journal.CommandID != options.commandID || journal.PayloadHash != options.payloadHash ||
 		journal.ArtifactSHA256 != options.expectedSHA || journal.TargetVersion != version {
 		return errors.New("update ledger does not match Agent handoff")
 	}

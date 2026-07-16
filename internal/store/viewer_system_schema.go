@@ -63,6 +63,20 @@ func (d *DB) ensureViewerSystemSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_viewer_commands_queue
 			ON viewer_commands(viewer_id, state, id)`,
+		`CREATE TABLE IF NOT EXISTS viewer_update_validations (
+			viewer_id TEXT PRIMARY KEY,
+			command_id INTEGER NOT NULL,
+			payload_hash TEXT NOT NULL,
+			transaction_id TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			target_version TEXT NOT NULL,
+			artifact_sha256 TEXT NOT NULL,
+			healthy_since TEXT,
+			last_observed_at TEXT NOT NULL,
+			commit_token TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(viewer_id) REFERENCES viewers(id) ON DELETE CASCADE,
+			FOREIGN KEY(command_id) REFERENCES viewer_commands(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS diagnostic_artifacts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			job_id INTEGER NOT NULL,

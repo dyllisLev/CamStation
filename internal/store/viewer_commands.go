@@ -349,6 +349,21 @@ func (d *DB) ViewerDesiredReleaseGeneration(ctx context.Context, viewerID, versi
 	return generation, nil
 }
 
+func (d *DB) FindViewerUpdateCommand(ctx context.Context, viewerID, version, artifactSHA256 string) (ViewerCommand, bool, error) {
+	command, err := scanViewerCommand(d.db.QueryRowContext(ctx,
+		viewerCommandSelect+` WHERE viewer_id = ? AND type = 'update_app'
+			AND desired_version = ? AND artifact_sha256 = ? ORDER BY id DESC LIMIT 1`,
+		strings.TrimSpace(viewerID), strings.TrimSpace(version), strings.ToLower(strings.TrimSpace(artifactSHA256)),
+	))
+	if errors.Is(err, ErrViewerCommandNotFound) {
+		return ViewerCommand{}, false, nil
+	}
+	if err != nil {
+		return ViewerCommand{}, false, fmt.Errorf("find viewer update command: %w", err)
+	}
+	return command, true, nil
+}
+
 func (d *DB) UpdateViewerCommand(ctx context.Context, viewerID string, id int64, req ViewerCommandUpdate) (ViewerCommand, error) {
 	return d.ApplyViewerCommandResult(ctx, viewerID, id, req)
 }

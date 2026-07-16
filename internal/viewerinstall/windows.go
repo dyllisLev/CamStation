@@ -304,11 +304,8 @@ func validateRegistered(ctx context.Context, _ Layout) error {
 	deadline := time.NewTicker(time.Second)
 	defer deadline.Stop()
 	for {
-		script := `if((Get-Service -Name '` + ServiceName + `' -ErrorAction Stop).Status -ne 'Running'){exit 2}`
-		if _, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script); err == nil {
-			if _, taskErr := runWindows(ctx, "schtasks.exe", "/Query", "/TN", ViewerTaskName); taskErr == nil {
-				return nil
-			}
+		if _, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", validateRegisteredScript()); err == nil {
+			return nil
 		}
 		select {
 		case <-ctx.Done():

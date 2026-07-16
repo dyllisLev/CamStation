@@ -7,7 +7,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestTransactionRecoveryAlwaysLeavesOneCompleteRelease(t *testing.T) {
@@ -189,6 +191,42 @@ func TestFailedTargetIsQuarantinedByVersionDigestAndGeneration(t *testing.T) {
 	manager.Registration = noOpRegistration{}
 	if err := manager.Apply(t.Context(), rearmed); err != nil {
 		t.Fatalf("new generation did not rearm target: %v", err)
+	}
+}
+
+func TestUpdateActivationRemovesStaleCommitMarker(t *testing.T) {
+	manager, request, _ := transactionFixture(t)
+	if err := SaveCommitMarker(manager.Layout, CommitMarker{
+		TransactionID: "old-update", CommandID: 1, PayloadHash: "old", Version: "1.0.0",
+		Digest: strings.Repeat("a", 64), Generation: 1, Token: strings.Repeat("b", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Apply(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCommitMarker(manager.Layout); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale marker survived activation: %v", err)
+	}
+}
+
+func TestMissingServerCommitMarkerRollsBackAndQuarantinesUpdate(t *testing.T) {
+	manager, request, old := transactionFixture(t)
+	request.CommandID = 41
+	request.PayloadHash = "payload-41"
+	manager.Registration = SystemRegistration{Layout: manager.Layout}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if err := manager.Apply(ctx, request); err == nil {
+		t.Fatal("update without server commit marker succeeded")
+	}
+	current, err := LoadCurrent(manager.Layout)
+	if err != nil || current.ReleaseID != old.ReleaseID {
+		t.Fatalf("rollback current=%#v err=%v", current, err)
+	}
+	journal, err := LoadJournal(manager.Layout)
+	if err != nil || journal.Phase != PhaseRolledBack || !journal.IsQuarantined(request.Release.Version, request.Release.Digest, request.Generation) {
+		t.Fatalf("rollback journal=%#v err=%v", journal, err)
 	}
 }
 

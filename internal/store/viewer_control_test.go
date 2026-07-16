@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,72 @@ import (
 	"testing"
 	"time"
 )
+
+func TestViewerUpdateValidationRequiresContinuousExactHealth(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-commit-gate", DisplayName: "Commit gate", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.4.0", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 16, 4, 0, 0, 0, time.UTC)
+	observation := ViewerUpdateValidationObservation{
+		ViewerID: viewer.ID, CommandID: command.ID, PayloadHash: command.PayloadHash,
+		TransactionID: "update-2.4.0-aaaaaaaa-1", Generation: command.Generation,
+		TargetVersion: command.DesiredVersion, ArtifactSHA256: command.ArtifactSHA256, Healthy: true,
+	}
+
+	token, err := db.ObserveViewerUpdateValidation(t.Context(), observation, now, 30*time.Second, 15*time.Second)
+	if err != nil || token != "" {
+		t.Fatalf("first observation token=%q err=%v", token, err)
+	}
+	token, err = db.ObserveViewerUpdateValidation(t.Context(), observation, now.Add(29*time.Second), 30*time.Second, 15*time.Second)
+	if err != nil || token != "" {
+		t.Fatalf("gapped observation token=%q err=%v", token, err)
+	}
+	// The 29 second gap resets the continuous window. A second exact sample
+	// within the permitted heartbeat gap starts accumulation again.
+	token, err = db.ObserveViewerUpdateValidation(t.Context(), observation, now.Add(40*time.Second), 30*time.Second, 15*time.Second)
+	if err != nil || token != "" {
+		t.Fatalf("continued observation token=%q err=%v", token, err)
+	}
+	token, err = db.ObserveViewerUpdateValidation(t.Context(), observation, now.Add(60*time.Second), 30*time.Second, 15*time.Second)
+	if err != nil || token != "" {
+		t.Fatalf("second gap token=%q err=%v", token, err)
+	}
+	for _, at := range []time.Time{now.Add(70 * time.Second), now.Add(80 * time.Second), now.Add(90 * time.Second)} {
+		token, err = db.ObserveViewerUpdateValidation(t.Context(), observation, at, 30*time.Second, 15*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(token) != 64 {
+		t.Fatalf("commit token length=%d token=%q", len(token), token)
+	}
+	if _, err := hex.DecodeString(token); err != nil {
+		t.Fatalf("commit token is not opaque random hex: %v", err)
+	}
+	persisted, err := db.ObserveViewerUpdateValidation(t.Context(), observation, now.Add(100*time.Second), 30*time.Second, 15*time.Second)
+	if err != nil || persisted != token {
+		t.Fatalf("persisted token=%q want=%q err=%v", persisted, token, err)
+	}
+
+	wrong := observation
+	wrong.TransactionID = "wrong-transaction"
+	wrong.Healthy = false
+	if reset, err := db.ObserveViewerUpdateValidation(t.Context(), wrong, now.Add(110*time.Second), 30*time.Second, 15*time.Second); err != nil || reset != "" {
+		t.Fatalf("mismatched transaction token=%q err=%v", reset, err)
+	}
+	observation.Healthy = true
+	if reset, err := db.ObserveViewerUpdateValidation(t.Context(), observation, now.Add(120*time.Second), 30*time.Second, 15*time.Second); err != nil || reset != "" {
+		t.Fatalf("exact identity after reset token=%q err=%v", reset, err)
+	}
+}
 
 func TestEnsureViewerUpdateCommandConcurrentHeartbeatsCreateOneGeneration(t *testing.T) {
 	db := openMigratedStore(t)

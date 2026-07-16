@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -45,7 +46,27 @@ func (registration SystemRegistration) Validate(ctx context.Context, journal Jou
 	if err != nil || current.ReleaseID != journal.Release.ReleaseID {
 		return errors.New("activated release pointer does not match transaction")
 	}
-	return validateRegistered(ctx, registration.Layout)
+	if journal.Previous == nil || journal.CommandID == 0 || journal.PayloadHash == "" {
+		return validateRegistered(ctx, registration.Layout)
+	}
+	validationCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if err := validateRegistered(validationCtx, registration.Layout); err != nil {
+			return err
+		}
+		marker, err := LoadCommitMarker(registration.Layout)
+		if err == nil && commitMarkerMatches(marker, journal) {
+			return nil
+		}
+		select {
+		case <-validationCtx.Done():
+			return errors.New("server-authorized update validation timed out")
+		case <-ticker.C:
+		}
+	}
 }
 
 func (registration SystemRegistration) Disable(ctx context.Context) error {
@@ -82,6 +103,11 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 func disableAndStopScript() string {
 	return `$viewer=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($viewer){Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop}; ` +
 		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}`
+}
+
+func validateRegisteredScript() string {
+	return `$s=Get-Service -Name '` + ServiceName + `' -ErrorAction Stop; if($s.Status -ne 'Running'){exit 2}; ` +
+		`$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction Stop; if($t.State -ne 'Running'){exit 3}`
 }
 
 func SCMRecoveryActions() []RecoveryAction {

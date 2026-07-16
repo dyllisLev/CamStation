@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 
 const (
 	viewerHeartbeatTTL         = 30 * time.Second
+	viewerUpdateHealthyFor     = 30 * time.Second
+	viewerUpdateHealthMaxGap   = 15 * time.Second
 	viewerControlPollInterval  = time.Second
 	viewerControlKeepaliveTime = 9 * time.Second
 	viewerLongPollMaxWait      = 25 * time.Second
@@ -61,6 +64,11 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 			writeViewerError(w, err)
 			return
 		}
+		commitToken, err := d.viewerUpdateCommitToken(r.Context(), req, desiredRelease, time.Now().UTC())
+		if err != nil {
+			writeViewerError(w, err)
+			return
+		}
 		_ = d.db.AppendEvent(r.Context(), store.Event{
 			Source:  "viewer",
 			Level:   "info",
@@ -70,6 +78,7 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, viewerHeartbeatResponse{
 			Viewer:         viewer,
 			DesiredRelease: desiredRelease,
+			CommitToken:    commitToken,
 		})
 	})
 
@@ -208,12 +217,23 @@ func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerH
 		return nil, nil
 	}
 	if viewerReportsRelease(viewer, heartbeat.Agent.ArtifactSHA256, release) {
-		return nil, nil
+		existing, found, findErr := d.db.FindViewerUpdateCommand(r.Context(), viewer.ID, release.Version, release.SHA256)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if !found || !viewerUpdateCommandInProgress(existing.State) {
+			return nil, nil
+		}
+		return desiredViewerReleaseResponse(release, existing), nil
 	}
 	command, err := d.db.EnsureViewerUpdateCommand(r.Context(), viewer.ID, release.Version, release.SHA256)
 	if err != nil {
 		return nil, err
 	}
+	return desiredViewerReleaseResponse(release, command), nil
+}
+
+func desiredViewerReleaseResponse(release viewerrelease.Release, command store.ViewerCommand) *viewerDesiredReleaseResponse {
 	return &viewerDesiredReleaseResponse{
 		Release:     release,
 		DownloadURL: release.DownloadURL(),
@@ -225,7 +245,79 @@ func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerH
 		CreatedAt:   command.CreatedAt,
 		UpdatedAt:   command.UpdatedAt,
 		ExpiresAt:   command.CreatedAt.Add(time.Duration(command.TTLSeconds) * time.Second),
-	}, nil
+	}
+}
+
+func (d routeDeps) viewerUpdateCommitToken(ctx context.Context, heartbeat store.ViewerHeartbeat, desired *viewerDesiredReleaseResponse, now time.Time) (string, error) {
+	if desired == nil {
+		return "", d.db.ResetViewerUpdateValidation(ctx, heartbeat.ID)
+	}
+	command, err := d.db.GetViewerCommand(ctx, heartbeat.ID, desired.CommandID)
+	if err != nil {
+		return "", err
+	}
+	if command.State != store.ViewerCommandRunning && viewerUpdateCommandInProgress(command.State) &&
+		viewerUpdateHeartbeatIdentityMatches(heartbeat, command) &&
+		heartbeat.Update.TransactionID == expectedViewerUpdateOperationKey(command) {
+		command, err = d.db.ApplyViewerCommandResult(ctx, heartbeat.ID, command.ID, store.ViewerCommandResult{
+			State: store.ViewerCommandRunning, OperationKey: heartbeat.Update.TransactionID,
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	observation, exact := viewerUpdateValidationObservation(heartbeat, command, now)
+	if !exact {
+		return "", d.db.ResetViewerUpdateValidation(ctx, heartbeat.ID)
+	}
+	return d.db.ObserveViewerUpdateValidation(ctx, observation, now, viewerUpdateHealthyFor, viewerUpdateHealthMaxGap)
+}
+
+func viewerUpdateValidationObservation(heartbeat store.ViewerHeartbeat, command store.ViewerCommand, now time.Time) (store.ViewerUpdateValidationObservation, bool) {
+	transactionID := strings.TrimSpace(heartbeat.Update.TransactionID)
+	artifactSHA256 := strings.ToLower(strings.TrimSpace(heartbeat.Update.ArtifactSHA256))
+	exact := command.State == store.ViewerCommandRunning && command.OperationKey != "" &&
+		viewerUpdateHeartbeatIdentityMatches(heartbeat, command) &&
+		transactionID == command.OperationKey && artifactSHA256 == command.ArtifactSHA256
+	observation := store.ViewerUpdateValidationObservation{
+		ViewerID: heartbeat.ID, CommandID: command.ID, PayloadHash: command.PayloadHash,
+		TransactionID: transactionID, Generation: command.Generation, TargetVersion: command.DesiredVersion,
+		ArtifactSHA256: command.ArtifactSHA256,
+	}
+	if !exact {
+		return observation, false
+	}
+	exactAgent := heartbeat.Agent.State == "online" && heartbeat.Agent.Version == command.DesiredVersion &&
+		strings.EqualFold(heartbeat.Agent.ArtifactSHA256, command.ArtifactSHA256)
+	observation.Healthy = exactAgent && heartbeat.Control.State == "online" && freshViewerUpdateSignal(heartbeat.Control.LastSuccessAt, now) &&
+		heartbeat.Viewer.State == "running" && freshViewerUpdateSignal(heartbeat.Viewer.LastHeartbeatAt, now) &&
+		heartbeat.Renderer.State == "ready" && freshViewerUpdateSignal(heartbeat.Renderer.LastHeartbeatAt, now)
+	return observation, true
+}
+
+func freshViewerUpdateSignal(at *time.Time, now time.Time) bool {
+	return at != nil && !at.After(now.Add(5*time.Second)) && now.Sub(*at) <= viewerUpdateHealthMaxGap
+}
+
+func viewerUpdateCommandInProgress(state store.ViewerCommandState) bool {
+	switch state {
+	case store.ViewerCommandPending, store.ViewerCommandDelivered, store.ViewerCommandAcknowledged, store.ViewerCommandRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+func expectedViewerUpdateOperationKey(command store.ViewerCommand) string {
+	return fmt.Sprintf("update-%s-%s-%d", command.DesiredVersion, strings.ToLower(command.ArtifactSHA256), command.Generation)
+}
+
+func viewerUpdateHeartbeatIdentityMatches(heartbeat store.ViewerHeartbeat, command store.ViewerCommand) bool {
+	return command.Type == "update_app" && heartbeat.ID == command.ViewerID &&
+		heartbeat.Update.State == "installer_launched" && heartbeat.Update.CommandID == command.ID &&
+		heartbeat.Update.PayloadHash == command.PayloadHash &&
+		heartbeat.Update.Generation == command.Generation && heartbeat.Update.TargetVersion == command.DesiredVersion &&
+		strings.EqualFold(heartbeat.Update.ArtifactSHA256, command.ArtifactSHA256)
 }
 
 func viewerReportsRelease(viewer store.Viewer, artifactSHA256 string, release viewerrelease.Release) bool {

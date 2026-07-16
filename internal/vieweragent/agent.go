@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"camstation/internal/viewerinstall"
@@ -89,6 +90,20 @@ type controlCommandDispatcher struct {
 	workers     sync.WaitGroup
 	errOnce     sync.Once
 	terminalErr error
+}
+
+type controlCommandGate struct {
+	ready    atomic.Bool
+	dispatch func(ControlResult) error
+}
+
+func (gate *controlCommandGate) open() { gate.ready.Store(true) }
+
+func (gate *controlCommandGate) dispatchWhenReady(result ControlResult) error {
+	if result.Command != nil && !gate.ready.Load() {
+		return nil
+	}
+	return gate.dispatch(result)
 }
 
 func newControlCommandDispatcher(ctx context.Context, cancel context.CancelFunc, agent *Agent) *controlCommandDispatcher {
@@ -590,15 +605,18 @@ func (agent *Agent) Run(ctx context.Context) error {
 		joinPipe()
 		return err
 	}
+	dispatcher := newControlCommandDispatcher(runCtx, cancel, agent)
+	heartbeatCommands := controlCommandGate{dispatch: dispatcher.dispatch}
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
-		agent.runHeartbeats(runCtx, client)
+		agent.runHeartbeats(runCtx, client, heartbeatCommands.dispatchWhenReady)
 	}()
 	joinRuntime := func() {
 		cancel()
 		<-heartbeatDone
 		<-pipeDone
+		_ = dispatcher.wait()
 	}
 
 	reconcileDone := make(chan error, 1)
@@ -631,6 +649,7 @@ func (agent *Agent) Run(ctx context.Context) error {
 		joinRuntime()
 		return err
 	}
+	heartbeatCommands.open()
 	select {
 	case <-pipeDone:
 		joinRuntime()
@@ -655,7 +674,6 @@ func (agent *Agent) Run(ctx context.Context) error {
 		<-pipeDone
 	}
 
-	dispatcher := newControlCommandDispatcher(runCtx, cancel, agent)
 	controlErr := client.RunControl(runCtx, &ReconnectState{}, dispatcher.dispatch)
 	cancel()
 	dispatchErr := dispatcher.wait()
@@ -689,7 +707,7 @@ func convergeViewerAfterAgentStart(state *MachineState) {
 	state.ExpectedViewerSession = 0
 }
 
-func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient) {
+func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient, dispatch ...func(ControlResult) error) {
 	interval := agent.HeartbeatInterval
 	if interval <= 0 {
 		interval = defaultHeartbeatInterval
@@ -697,7 +715,7 @@ func (agent *Agent) runHeartbeats(ctx context.Context, client ControlClient) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		agent.sendHeartbeat(ctx, client)
+		agent.sendHeartbeat(ctx, client, dispatch...)
 		select {
 		case <-ctx.Done():
 			return
@@ -788,14 +806,18 @@ func viewerHealthStale(at *time.Time, now time.Time) bool {
 	return at == nil || at.After(now.Add(5*time.Second)) || now.Sub(*at) >= viewerHealthStaleAfter
 }
 
-func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
+func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient, dispatch ...func(ControlResult) error) {
 	state, err := agent.loadState()
 	if err != nil {
 		return
 	}
 	hostname, _ := os.Hostname()
+	installedVersion, artifactSHA256 := installedReleaseIdentity(agent.Config.InstallDir)
+	if installedVersion == "" {
+		installedVersion = agent.AgentVersion
+	}
 	heartbeat := HeartbeatPayload{
-		ID: agent.Config.ClientID, DisplayName: agent.Config.DisplayName, AppVersion: agent.AgentVersion,
+		ID: agent.Config.ClientID, DisplayName: agent.Config.DisplayName, AppVersion: installedVersion,
 		Hostname: hostname, Route: "/live?viewer=1", Mode: "live",
 	}
 	heartbeat.Agent.State = "online"
@@ -805,7 +827,8 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 	case "recovery_failed":
 		heartbeat.Agent.State = "recovery_failed"
 	}
-	heartbeat.Agent.Version = agent.AgentVersion
+	heartbeat.Agent.Version = installedVersion
+	heartbeat.Agent.ArtifactSHA256 = artifactSHA256
 	heartbeat.Control.State = state.ControlState
 	heartbeat.Control.LastSuccessAt = state.LastControlSuccessAt
 	heartbeat.Viewer.State = state.ViewerState
@@ -813,6 +836,7 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 		heartbeat.Viewer.State = "not_logged_in"
 	}
 	heartbeat.Viewer.LastHeartbeatAt = state.ViewerLastHeartbeatAt
+	heartbeat.Viewer.Version = installedVersion
 	heartbeat.Renderer.State = state.RendererState
 	if heartbeat.Renderer.State == "" {
 		heartbeat.Renderer.State = "not_ready"
@@ -822,19 +846,29 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, client ControlClient) {
 	journal, _ := LoadUpdateJournal(agent.Paths.Update)
 	heartbeat.Update.State = journal.State
 	heartbeat.Update.TargetVersion = journal.TargetVersion
+	heartbeat.Update.ArtifactSHA256 = journal.ArtifactSHA256
 	heartbeat.Update.Generation = journal.Generation
+	heartbeat.Update.CommandID = journal.CommandID
+	heartbeat.Update.PayloadHash = journal.PayloadHash
+	heartbeat.Update.TransactionID = journal.TransactionID
 	deadline := agent.HeartbeatRequestDeadline
 	if deadline <= 0 {
 		deadline = DefaultHeartbeatRequestDeadline
 	}
 	heartbeatCtx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
-	if err := client.SendHeartbeat(heartbeatCtx, heartbeat); err == nil {
+	if response, err := client.ExchangeHeartbeat(heartbeatCtx, heartbeat); err == nil {
 		now := agent.now().UTC()
 		_, _ = agent.updateState(func(state *MachineState) error {
 			state.LastHeartbeatAt = &now
 			return nil
 		})
+		_, _ = ReconcileCommittedUpdate(filepath.Dir(agent.Paths.Update))
+		_ = agent.acceptHeartbeatCommit(response)
+		if response.DesiredRelease != nil && len(dispatch) > 0 && dispatch[0] != nil {
+			command := response.DesiredRelease.Command()
+			_ = dispatch[0](ControlResult{Transport: controlTransportHeartbeat, Command: &command})
+		}
 	}
 }
 
@@ -1041,6 +1075,9 @@ func (agent *Agent) handleControlResult(ctx context.Context, result ControlResul
 	if err := agent.checkCommandEngine(); err != nil {
 		return err
 	}
+	if result.Transport == controlTransportHeartbeat {
+		return nil
+	}
 	return agent.applyControlResult(result)
 }
 
@@ -1222,6 +1259,7 @@ func (agent *Agent) Execute(ctx context.Context, command Command, operationKey s
 		target := UpdateTarget{
 			Version: command.DesiredVersion, SHA256: strings.ToLower(command.ArtifactSHA256),
 			Generation: command.Generation, TransactionID: operationKey,
+			CommandID: command.ID, PayloadHash: command.PayloadHash,
 		}
 		var err error
 		if agent.Updater != nil {

@@ -38,6 +38,8 @@ type UpdateTarget struct {
 	SHA256        string
 	Generation    int64
 	TransactionID string
+	CommandID     int64
+	PayloadHash   string
 }
 
 type UpdateRunner struct {
@@ -103,6 +105,8 @@ func (runner UpdateRunner) prepare(ctx context.Context, target UpdateTarget) (pr
 	journal.ArtifactSHA256 = target.SHA256
 	journal.Generation = target.Generation
 	journal.TransactionID = target.TransactionID
+	journal.CommandID = target.CommandID
+	journal.PayloadHash = target.PayloadHash
 	if err := SaveUpdateJournal(journalPath, journal); err != nil {
 		return preparedUpdate{}, err
 	}
@@ -206,10 +210,15 @@ func (runner UpdateRunner) prepare(ctx context.Context, target UpdateTarget) (pr
 	}
 	args := []string{
 		"--update", "--transaction-id", target.TransactionID,
+	}
+	if target.CommandID > 0 {
+		args = append(args, "--command-id", strconv.FormatInt(target.CommandID, 10), "--payload-hash", target.PayloadHash)
+	}
+	args = append(args,
 		"--generation", strconv.FormatInt(target.Generation, 10),
 		"--expected-sha", target.SHA256,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
-	}
+	)
 	return preparedUpdate{journalPath: journalPath, journal: journal, installerPath: installerPath, args: args, launch: launch}, nil
 }
 
@@ -459,6 +468,9 @@ func validateMetadata(metadata ReleaseMetadata, target UpdateTarget, allowDevelo
 
 func validUpdateTarget(target UpdateTarget) bool {
 	if target.Generation <= 0 || target.TransactionID == "" || len(target.TransactionID) > 128 || target.Version == "" || len(target.Version) > 64 || len(target.SHA256) != 64 || target.SHA256 != strings.ToLower(target.SHA256) {
+		return false
+	}
+	if (target.CommandID == 0) != (target.PayloadHash == "") || target.CommandID < 0 || len(target.PayloadHash) > 128 {
 		return false
 	}
 	if _, err := hex.DecodeString(target.SHA256); err != nil {

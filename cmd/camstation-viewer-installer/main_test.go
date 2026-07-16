@@ -23,7 +23,7 @@ func TestInstallerModesAreExplicitAndBounded(t *testing.T) {
 	}{
 		{args: nil, mode: modeInstall},
 		{args: []string{"/S"}, mode: modeInstall, silent: true},
-		{args: []string{"/s", "--update", "--transaction-id", "update-1", "--generation", "1", "--expected-sha", digest, "--parent-pid", "42"}, mode: modeUpdate, silent: true},
+		{args: []string{"/s", "--update", "--transaction-id", "update-1", "--command-id", "41", "--payload-hash", digest, "--generation", "1", "--expected-sha", digest, "--parent-pid", "42"}, mode: modeUpdate, silent: true},
 		{args: []string{"--rollback", "update-1"}, mode: modeRollback},
 		{args: []string{"--uninstall"}, mode: modeUninstall},
 		{args: []string{"--recover"}, mode: modeRecover},
@@ -116,8 +116,8 @@ func TestInitialReleaseIdentityUsesSetupArtifactSHA(t *testing.T) {
 
 func TestUpdaterRequiresExactDurableAgentHandoff(t *testing.T) {
 	digest := strings.Repeat("a", 64)
-	options := installerOptions{mode: modeUpdate, transactionID: "update-7", generation: 7, expectedSHA: digest}
-	journal := vieweragent.UpdateJournal{State: "installer_launched", TransactionID: "update-7", Generation: 7, ArtifactSHA256: digest, TargetVersion: "2.0.7"}
+	options := installerOptions{mode: modeUpdate, transactionID: "update-7", commandID: 41, payloadHash: "payload-41", generation: 7, expectedSHA: digest}
+	journal := vieweragent.UpdateJournal{State: "installer_launched", TransactionID: "update-7", CommandID: 41, PayloadHash: "payload-41", Generation: 7, ArtifactSHA256: digest, TargetVersion: "2.0.7"}
 	if err := validateUpdateHandoff(journal, options, "2.0.7"); err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func installerUpdateRequest(t *testing.T, layout viewerinstall.Layout, options i
 		}
 	}
 	release := viewerinstall.Release{Version: version, Digest: options.expectedSHA, ReleaseID: viewerinstall.ReleaseID(version, options.expectedSHA)}
-	return viewerinstall.Request{TransactionID: options.transactionID, Generation: options.generation, SourceDir: source, Release: release}
+	return viewerinstall.Request{TransactionID: options.transactionID, CommandID: options.commandID, PayloadHash: options.payloadHash, Generation: options.generation, SourceDir: source, Release: release}
 }
 
 func TestEmbeddedBuildPayloadIsReadableByProductionExtractor(t *testing.T) {

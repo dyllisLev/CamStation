@@ -40,6 +40,8 @@ type Release struct {
 
 type Request struct {
 	TransactionID string
+	CommandID     int64
+	PayloadHash   string
 	Generation    int64
 	SourceDir     string
 	Release       Release
@@ -56,6 +58,8 @@ type Quarantine struct {
 type Journal struct {
 	SchemaVersion int          `json:"schemaVersion"`
 	TransactionID string       `json:"transactionId,omitempty"`
+	CommandID     int64        `json:"commandId,omitempty"`
+	PayloadHash   string       `json:"payloadHash,omitempty"`
 	Generation    int64        `json:"generation,omitempty"`
 	Release       Release      `json:"release,omitempty"`
 	Previous      *Current     `json:"previous,omitempty"`
@@ -175,6 +179,8 @@ func (manager Manager) applyOwned(ctx context.Context, owner *Ownership, request
 		return loadErr
 	}
 	journal.TransactionID = request.TransactionID
+	journal.CommandID = request.CommandID
+	journal.PayloadHash = request.PayloadHash
 	journal.Generation = request.Generation
 	journal.Release = request.Release
 	journal.Previous = previous
@@ -227,6 +233,11 @@ func (manager Manager) applyOwned(ctx context.Context, owner *Ownership, request
 	if err := manager.advance(&journal, PhasePointerBackedUp); err != nil {
 		return err
 	}
+	if previous != nil {
+		if err := RemoveCommitMarker(manager.Layout); err != nil {
+			return manager.rollbackFailure(ctx, &journal, "commit_marker_reset_failed", err)
+		}
+	}
 	if err := manager.Registration.Stop(ctx); err != nil {
 		return manager.rollbackFailure(ctx, &journal, "registration_stop_failed", err)
 	}
@@ -252,7 +263,8 @@ func (manager Manager) applyOwned(ctx context.Context, owner *Ownership, request
 }
 
 func journalMatchesRequest(journal Journal, request Request) bool {
-	return journal.TransactionID == request.TransactionID && journal.Generation == request.Generation &&
+	return journal.TransactionID == request.TransactionID && journal.CommandID == request.CommandID &&
+		journal.PayloadHash == request.PayloadHash && journal.Generation == request.Generation &&
 		journal.Release.Version == request.Release.Version && journal.Release.Digest == request.Release.Digest &&
 		journal.Release.ReleaseID == request.Release.ReleaseID
 }

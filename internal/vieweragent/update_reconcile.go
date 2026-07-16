@@ -63,6 +63,7 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 
 func transactionMatchesUpdate(transaction viewerinstall.Journal, journal UpdateJournal) bool {
 	return journal.TransactionID != "" && journal.TransactionID == transaction.TransactionID &&
+		journal.CommandID == transaction.CommandID && journal.PayloadHash == transaction.PayloadHash &&
 		journal.Generation == transaction.Generation && journal.TargetVersion == transaction.Release.Version &&
 		strings.EqualFold(journal.ArtifactSHA256, transaction.Release.Digest)
 }

@@ -54,7 +54,7 @@ func TestUpdateRunnerDownloadsVerifiesAndLaunchesFixedSameOriginInstaller(t *tes
 			return nil
 		},
 	}
-	target := UpdateTarget{Version: "2.0.1", SHA256: digest, Generation: 9, TransactionID: "update-9"}
+	target := UpdateTarget{Version: "2.0.1", SHA256: digest, Generation: 9, TransactionID: "update-9", CommandID: 41, PayloadHash: "payload-41"}
 	if err := runner.Run(t.Context(), target); !errors.Is(err, ErrUpdateLaunched) {
 		t.Fatalf("Run error=%v", err)
 	}
@@ -65,12 +65,12 @@ func TestUpdateRunnerDownloadsVerifiesAndLaunchesFixedSameOriginInstaller(t *tes
 	if err != nil || !reflect.DeepEqual(data, payload) {
 		t.Fatalf("staged installer=%q err=%v", data, err)
 	}
-	wantArgs := []string{"--update", "--transaction-id", "update-9", "--generation", "9", "--expected-sha", digest, "--parent-pid"}
+	wantArgs := []string{"--update", "--transaction-id", "update-9", "--command-id", "41", "--payload-hash", "payload-41", "--generation", "9", "--expected-sha", digest, "--parent-pid"}
 	if len(args) != len(wantArgs)+1 || !reflect.DeepEqual(args[:len(wantArgs)], wantArgs) {
 		t.Fatalf("launch args=%v", args)
 	}
 	journal, err := LoadUpdateJournal(filepath.Join(runner.StateDir, "update.json"))
-	if err != nil || journal.State != "launching_installer" || journal.DownloadAttempts != 1 || journal.TransactionID != target.TransactionID {
+	if err != nil || journal.State != "launching_installer" || journal.DownloadAttempts != 1 || journal.TransactionID != target.TransactionID || journal.CommandID != target.CommandID || journal.PayloadHash != target.PayloadHash {
 		t.Fatalf("journal=%+v err=%v", journal, err)
 	}
 }
@@ -407,7 +407,7 @@ func TestDefaultAgentExecutesUpdateThroughProductionRunner(t *testing.T) {
 	if !errors.Is(err, ErrAgentRestartRequested) || record.State != CommandRunning {
 		t.Fatalf("record=%+v err=%v", record, err)
 	}
-	if received.Version != command.DesiredVersion || received.SHA256 != digest || received.Generation != 12 || received.TransactionID != record.OperationKey {
+	if received.Version != command.DesiredVersion || received.SHA256 != digest || received.Generation != 12 || received.TransactionID != record.OperationKey || received.CommandID != command.ID || received.PayloadHash != command.PayloadHash {
 		t.Fatalf("update target=%+v record=%+v", received, record)
 	}
 }
@@ -768,7 +768,7 @@ func TestCommittedTransactionReconcilesUpdateJournalAfterBoundaryFailure(t *test
 	path := filepath.Join(stateDir, "update.json")
 	journal := UpdateJournal{
 		State: "installer_launched", TransactionID: target.TransactionID, Generation: target.Generation,
-		TargetVersion: target.Version, ArtifactSHA256: target.SHA256,
+		CommandID: target.CommandID, PayloadHash: target.PayloadHash, TargetVersion: target.Version, ArtifactSHA256: target.SHA256,
 	}
 	if err := SaveUpdateJournal(path, journal); err != nil {
 		t.Fatal(err)
@@ -795,9 +795,11 @@ func TestCommittedTransactionReconcilesUpdateJournalAfterBoundaryFailure(t *test
 func TestCommittedTransactionNeverReconcilesMismatchedUpdateJournal(t *testing.T) {
 	stateDir, target := committedUpdateFixture(t)
 	tests := []UpdateJournal{
-		{State: "installer_launched", TransactionID: "other", Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
-		{State: "installer_launched", TransactionID: target.TransactionID, Generation: target.Generation + 1, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
-		{State: "installer_launched", TransactionID: target.TransactionID, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: strings.Repeat("b", 64)},
+		{State: "installer_launched", TransactionID: "other", CommandID: target.CommandID, PayloadHash: target.PayloadHash, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
+		{State: "installer_launched", TransactionID: target.TransactionID, CommandID: target.CommandID + 1, PayloadHash: target.PayloadHash, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
+		{State: "installer_launched", TransactionID: target.TransactionID, CommandID: target.CommandID, PayloadHash: "wrong", Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
+		{State: "installer_launched", TransactionID: target.TransactionID, CommandID: target.CommandID, PayloadHash: target.PayloadHash, Generation: target.Generation + 1, TargetVersion: target.Version, ArtifactSHA256: target.SHA256},
+		{State: "installer_launched", TransactionID: target.TransactionID, CommandID: target.CommandID, PayloadHash: target.PayloadHash, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: strings.Repeat("b", 64)},
 	}
 	for index, journal := range tests {
 		if err := SaveUpdateJournal(filepath.Join(stateDir, "update.json"), journal); err != nil {
@@ -849,10 +851,10 @@ func TestRolledBackQuarantinedTransactionReconcilesRejectedUpdate(t *testing.T) 
 func TestAgentReconcileFinishesCommandFromMatchingCommittedTransaction(t *testing.T) {
 	stateDir, target := committedUpdateFixture(t)
 	paths := MachinePaths{State: filepath.Join(stateDir, "state.json"), Commands: filepath.Join(stateDir, "commands.json"), Update: filepath.Join(stateDir, "update.json")}
-	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TransactionID: target.TransactionID, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256}); err != nil {
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TransactionID: target.TransactionID, CommandID: target.CommandID, PayloadHash: target.PayloadHash, Generation: target.Generation, TargetVersion: target.Version, ArtifactSHA256: target.SHA256}); err != nil {
 		t.Fatal(err)
 	}
-	record := CommandRecord{ID: 91, Type: "update_app", PayloadHash: "p", OperationKey: target.TransactionID, DesiredVersion: target.Version, ArtifactSHA256: target.SHA256, Generation: target.Generation, State: CommandRunning}
+	record := CommandRecord{ID: target.CommandID, Type: "update_app", PayloadHash: target.PayloadHash, OperationKey: target.TransactionID, DesiredVersion: target.Version, ArtifactSHA256: target.SHA256, Generation: target.Generation, State: CommandRunning}
 	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"91": record}}); err != nil {
 		t.Fatal(err)
 	}
@@ -878,8 +880,8 @@ func committedUpdateFixture(t *testing.T) (string, UpdateTarget) {
 			t.Fatal(err)
 		}
 	}
-	target := UpdateTarget{Version: "2.2.0", SHA256: strings.Repeat("a", 64), Generation: 11, TransactionID: "update-11"}
-	request := viewerinstall.Request{TransactionID: target.TransactionID, Generation: target.Generation, SourceDir: source, Release: viewerinstall.Release{Version: target.Version, Digest: target.SHA256, ReleaseID: viewerinstall.ReleaseID(target.Version, target.SHA256)}}
+	target := UpdateTarget{Version: "2.2.0", SHA256: strings.Repeat("a", 64), Generation: 11, TransactionID: "update-11", CommandID: 91, PayloadHash: strings.Repeat("d", 64)}
+	request := viewerinstall.Request{TransactionID: target.TransactionID, CommandID: target.CommandID, PayloadHash: target.PayloadHash, Generation: target.Generation, SourceDir: source, Release: viewerinstall.Release{Version: target.Version, Digest: target.SHA256, ReleaseID: viewerinstall.ReleaseID(target.Version, target.SHA256)}}
 	if err := (viewerinstall.Manager{Layout: layout, Registration: updateTestRegistration{}}).Apply(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}

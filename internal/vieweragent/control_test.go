@@ -41,6 +41,30 @@ func TestControlTimingIsExplicitAndBounded(t *testing.T) {
 	}
 }
 
+func TestHeartbeatDecodesBoundedDesiredUpdateAndCommitToken(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"viewer":{"id":"viewer-1"},"desiredRelease":{"version":"2.4.0","sha256":"%s","downloadUrl":"/api/viewers/app/download","commandId":41,"payloadHash":"%s","generation":7,"ttlSeconds":300,"commandState":"running","createdAt":"2026-07-16T00:00:00Z"},"commitToken":"%s"}`,
+			digest, strings.Repeat("b", 64), strings.Repeat("c", 64))
+	}))
+	defer server.Close()
+	response, err := (ControlClient{HTTPClient: server.Client(), ServerURL: server.URL}).ExchangeHeartbeat(t.Context(), HeartbeatPayload{})
+	if err != nil || response.DesiredRelease == nil || response.DesiredRelease.CommandID != 41 ||
+		response.DesiredRelease.Generation != 7 || response.DesiredRelease.SHA256 != digest || response.CommitToken != strings.Repeat("c", 64) {
+		t.Fatalf("heartbeat response=%#v err=%v", response, err)
+	}
+}
+
+func TestHeartbeatRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"viewer":{"id":"` + strings.Repeat("x", maxControlMessageBytes) + `"}}`))
+	}))
+	defer server.Close()
+	if _, err := (ControlClient{HTTPClient: server.Client(), ServerURL: server.URL}).ExchangeHeartbeat(t.Context(), HeartbeatPayload{}); err == nil {
+		t.Fatal("oversized heartbeat response accepted")
+	}
+}
+
 func TestControlFallsBackFromSSEToLongPoll(t *testing.T) {
 	var sseCalls, pollCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

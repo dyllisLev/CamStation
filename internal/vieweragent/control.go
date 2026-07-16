@@ -22,6 +22,7 @@ const (
 	DefaultCommandReportDeadline    = 5 * time.Second
 	ControlTransportSSE             = "sse"
 	ControlTransportLongPoll        = "long_poll"
+	controlTransportHeartbeat       = "heartbeat"
 	maxControlMessageBytes          = 64 * 1024
 )
 
@@ -455,8 +456,9 @@ type HeartbeatPayload struct {
 	Route       string `json:"route"`
 	Mode        string `json:"mode"`
 	Agent       struct {
-		State   string `json:"state"`
-		Version string `json:"version,omitempty"`
+		State          string `json:"state"`
+		Version        string `json:"version,omitempty"`
+		ArtifactSHA256 string `json:"artifactSha256,omitempty"`
 	} `json:"agent"`
 	Control struct {
 		State         string     `json:"state"`
@@ -473,9 +475,13 @@ type HeartbeatPayload struct {
 		LastProgressAt  *time.Time `json:"lastProgressAt,omitempty"`
 	} `json:"renderer"`
 	Update struct {
-		State         string `json:"state"`
-		TargetVersion string `json:"targetVersion,omitempty"`
-		Generation    int64  `json:"generation"`
+		State          string `json:"state"`
+		TargetVersion  string `json:"targetVersion,omitempty"`
+		ArtifactSHA256 string `json:"artifactSha256,omitempty"`
+		Generation     int64  `json:"generation"`
+		CommandID      int64  `json:"commandId,omitempty"`
+		PayloadHash    string `json:"payloadHash,omitempty"`
+		TransactionID  string `json:"transactionId,omitempty"`
 	} `json:"update"`
 	Streams []ViewerStreamState `json:"streams,omitempty"`
 }
@@ -489,25 +495,65 @@ type ViewerStreamState struct {
 	UpdatedAt      *time.Time `json:"updatedAt,omitempty"`
 }
 
+type HeartbeatResponse struct {
+	Viewer         json.RawMessage         `json:"viewer"`
+	DesiredRelease *HeartbeatDesiredUpdate `json:"desiredRelease"`
+	CommitToken    string                  `json:"commitToken,omitempty"`
+}
+
+type HeartbeatDesiredUpdate struct {
+	Version             string    `json:"version"`
+	SHA256              string    `json:"sha256"`
+	DownloadURL         string    `json:"downloadUrl"`
+	CommandID           int64     `json:"commandId"`
+	PayloadHash         string    `json:"payloadHash"`
+	Generation          int64     `json:"generation"`
+	TTLSeconds          int       `json:"ttlSeconds"`
+	CommandState        string    `json:"commandState"`
+	CreatedAt           time.Time `json:"createdAt"`
+	DevelopmentUnsigned bool      `json:"developmentUnsigned"`
+}
+
+func (desired HeartbeatDesiredUpdate) Command() Command {
+	return Command{
+		ID: desired.CommandID, Type: "update_app", DesiredVersion: desired.Version,
+		ArtifactSHA256: desired.SHA256, PayloadHash: desired.PayloadHash, Generation: desired.Generation,
+		TTLSeconds: desired.TTLSeconds, CreatedAt: desired.CreatedAt,
+	}
+}
+
 func (client ControlClient) SendHeartbeat(ctx context.Context, heartbeat HeartbeatPayload) error {
+	_, err := client.ExchangeHeartbeat(ctx, heartbeat)
+	return err
+}
+
+func (client ControlClient) ExchangeHeartbeat(ctx context.Context, heartbeat HeartbeatPayload) (HeartbeatResponse, error) {
 	encoded, err := json.Marshal(heartbeat)
 	if err != nil {
-		return err
+		return HeartbeatResponse{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint("/api/viewers/heartbeat"), bytes.NewReader(encoded))
 	if err != nil {
-		return err
+		return HeartbeatResponse{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.httpClient().Do(request)
 	if err != nil {
-		return err
+		return HeartbeatResponse{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("heartbeat status %s", response.Status)
+		return HeartbeatResponse{}, fmt.Errorf("heartbeat status %s", response.Status)
 	}
-	return nil
+	var heartbeatResponse HeartbeatResponse
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxControlMessageBytes+1))
+	if err := decoder.Decode(&heartbeatResponse); err != nil {
+		return HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return HeartbeatResponse{}, errors.New("heartbeat response contains trailing data")
+	}
+	return heartbeatResponse, nil
 }
 
 func (client ControlClient) endpoint(path string) string {

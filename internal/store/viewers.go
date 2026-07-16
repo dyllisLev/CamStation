@@ -46,9 +46,13 @@ type ViewerRendererHealth struct {
 }
 
 type ViewerUpdateHealth struct {
-	State         string `json:"state"`
-	TargetVersion string `json:"targetVersion,omitempty"`
-	Generation    int64  `json:"generation"`
+	State          string `json:"state"`
+	TargetVersion  string `json:"targetVersion,omitempty"`
+	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
+	Generation     int64  `json:"generation"`
+	CommandID      int64  `json:"commandId,omitempty"`
+	PayloadHash    string `json:"payloadHash,omitempty"`
+	TransactionID  string `json:"transactionId,omitempty"`
 }
 
 type ViewerHeartbeat struct {

@@ -187,6 +187,8 @@ type UpdateJournal struct {
 	ArtifactSHA256   string              `json:"artifactSha256,omitempty"`
 	Generation       int64               `json:"generation"`
 	TransactionID    string              `json:"transactionId,omitempty"`
+	CommandID        int64               `json:"commandId,omitempty"`
+	PayloadHash      string              `json:"payloadHash,omitempty"`
 	MetadataAttempts int                 `json:"metadataAttempts,omitempty"`
 	MetadataNextAt   *time.Time          `json:"metadataNextAttemptAt,omitempty"`
 	DownloadAttempts int                 `json:"downloadAttempts,omitempty"`

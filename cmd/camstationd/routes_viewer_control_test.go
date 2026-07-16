@@ -129,6 +129,150 @@ func TestViewerHeartbeatRequiresExactReportedVersionAndDigest(t *testing.T) {
 	}
 }
 
+func TestViewerUpdateCommitHealthRequiresExactFreshIndependentSignals(t *testing.T) {
+	now := time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)
+	digest := strings.Repeat("a", 64)
+	command := store.ViewerCommand{
+		ID: 41, ViewerID: "viewer-health-gate", Type: "update_app", DesiredVersion: "2.4.0", ArtifactSHA256: digest,
+		PayloadHash: "payload-41", Generation: 7, OperationKey: "update-2.4.0-target-7",
+		State: store.ViewerCommandRunning,
+	}
+	heartbeat := store.ViewerHeartbeat{
+		ID: "viewer-health-gate", AppVersion: "2.4.0",
+		Agent:    store.ViewerAgentHealth{State: "online", Version: "2.4.0", ArtifactSHA256: digest},
+		Control:  store.ViewerControlHealth{State: "online", LastSuccessAt: timePointer(now.Add(-time.Second))},
+		Viewer:   store.ViewerProcessHealth{State: "running", Version: "2.4.0", LastHeartbeatAt: timePointer(now.Add(-time.Second))},
+		Renderer: store.ViewerRendererHealth{State: "ready", LastHeartbeatAt: timePointer(now.Add(-time.Second))},
+		Update: store.ViewerUpdateHealth{
+			State: "installer_launched", TargetVersion: "2.4.0", ArtifactSHA256: digest,
+			Generation: 7, CommandID: 41, PayloadHash: command.PayloadHash, TransactionID: "update-2.4.0-target-7",
+		},
+	}
+	observation, exact := viewerUpdateValidationObservation(heartbeat, command, now)
+	if !exact || !observation.Healthy || observation.TransactionID != heartbeat.Update.TransactionID {
+		t.Fatalf("exact health rejected: exact=%v observation=%#v", exact, observation)
+	}
+
+	checks := []func(*store.ViewerHeartbeat){
+		func(value *store.ViewerHeartbeat) {
+			value.Control.LastSuccessAt = timePointer(now.Add(-16 * time.Second))
+		},
+		func(value *store.ViewerHeartbeat) { value.Viewer.State = "restarting" },
+		func(value *store.ViewerHeartbeat) { value.Renderer.LastHeartbeatAt = nil },
+		func(value *store.ViewerHeartbeat) { value.Agent.ArtifactSHA256 = strings.Repeat("b", 64) },
+		func(value *store.ViewerHeartbeat) { value.Update.PayloadHash = "wrong-payload" },
+		func(value *store.ViewerHeartbeat) { value.Update.TransactionID = "wrong-transaction" },
+	}
+	for index, mutate := range checks {
+		changed := heartbeat
+		mutate(&changed)
+		observation, exact := viewerUpdateValidationObservation(changed, command, now)
+		if index >= len(checks)-2 {
+			if exact {
+				t.Fatalf("case %d mismatched transaction accepted", index)
+			}
+			continue
+		}
+		if exact && observation.Healthy {
+			t.Fatalf("case %d unhealthy signal accepted: %#v", index, observation)
+		}
+	}
+}
+
+func TestViewerHeartbeatCommitTokenAppearsOnlyAfterContinuousExactRouteHealth(t *testing.T) {
+	server := newTestRouteServer(t)
+	digest := strings.Repeat("a", 64)
+	viewer, err := server.db.UpsertViewerHeartbeat(t.Context(), store.ViewerHeartbeat{
+		ID: "viewer-token-route", DisplayName: "Token route", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := server.db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.4.0", digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationKey := "update-2.4.0-route-1"
+	command, err = server.db.ApplyViewerCommandResult(t.Context(), viewer.ID, command.ID, store.ViewerCommandResult{
+		State: store.ViewerCommandRunning, OperationKey: operationKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := &viewerDesiredReleaseResponse{CommandID: command.ID}
+	base := time.Date(2026, 7, 16, 6, 0, 0, 0, time.UTC)
+	heartbeat := store.ViewerHeartbeat{
+		ID: viewer.ID, AppVersion: command.DesiredVersion,
+		Agent:    store.ViewerAgentHealth{State: "online", Version: command.DesiredVersion, ArtifactSHA256: digest},
+		Control:  store.ViewerControlHealth{State: "online"},
+		Viewer:   store.ViewerProcessHealth{State: "running", Version: command.DesiredVersion},
+		Renderer: store.ViewerRendererHealth{State: "ready"},
+		Update: store.ViewerUpdateHealth{
+			State: "installer_launched", TargetVersion: command.DesiredVersion, ArtifactSHA256: digest,
+			Generation: command.Generation, CommandID: command.ID, PayloadHash: command.PayloadHash, TransactionID: operationKey,
+		},
+	}
+	deps := routeDeps{db: server.db}
+	var token string
+	for _, elapsed := range []time.Duration{0, 10 * time.Second, 20 * time.Second, 30 * time.Second} {
+		now := base.Add(elapsed)
+		heartbeat.Control.LastSuccessAt = timePointer(now)
+		heartbeat.Viewer.LastHeartbeatAt = timePointer(now)
+		heartbeat.Renderer.LastHeartbeatAt = timePointer(now)
+		token, err = deps.viewerUpdateCommitToken(t.Context(), heartbeat, desired, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if elapsed < 30*time.Second && token != "" {
+			t.Fatalf("token issued at %v: %q", elapsed, token)
+		}
+	}
+	if len(token) != 64 {
+		t.Fatalf("commit token=%q", token)
+	}
+	heartbeat.Update.TransactionID = "wrong-transaction"
+	if token, err = deps.viewerUpdateCommitToken(t.Context(), heartbeat, desired, base.Add(40*time.Second)); err != nil || token != "" {
+		t.Fatalf("mismatch token=%q err=%v", token, err)
+	}
+}
+
+func TestExactInstalledHeartbeatRecoversMissedRunningCommandReport(t *testing.T) {
+	server := newTestRouteServer(t)
+	digest := strings.Repeat("e", 64)
+	viewer, err := server.db.UpsertViewerHeartbeat(t.Context(), store.ViewerHeartbeat{
+		ID: "viewer-missed-running", DisplayName: "Missed running", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := server.db.EnsureViewerUpdateCommand(t.Context(), viewer.ID, "2.4.1", digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 16, 7, 0, 0, 0, time.UTC)
+	heartbeat := store.ViewerHeartbeat{
+		ID:       viewer.ID,
+		Agent:    store.ViewerAgentHealth{State: "online", Version: command.DesiredVersion, ArtifactSHA256: digest},
+		Control:  store.ViewerControlHealth{State: "online", LastSuccessAt: timePointer(now)},
+		Viewer:   store.ViewerProcessHealth{State: "running", LastHeartbeatAt: timePointer(now)},
+		Renderer: store.ViewerRendererHealth{State: "ready", LastHeartbeatAt: timePointer(now)},
+		Update: store.ViewerUpdateHealth{
+			State: "installer_launched", TargetVersion: command.DesiredVersion, ArtifactSHA256: digest,
+			Generation: command.Generation, CommandID: command.ID, PayloadHash: command.PayloadHash, TransactionID: expectedViewerUpdateOperationKey(command),
+		},
+	}
+	token, err := (routeDeps{db: server.db}).viewerUpdateCommitToken(t.Context(), heartbeat, &viewerDesiredReleaseResponse{CommandID: command.ID}, now)
+	if err != nil || token != "" {
+		t.Fatalf("first recovered observation token=%q err=%v", token, err)
+	}
+	recovered, err := server.db.GetViewerCommand(t.Context(), viewer.ID, command.ID)
+	if err != nil || recovered.State != store.ViewerCommandRunning || recovered.OperationKey != heartbeat.Update.TransactionID {
+		t.Fatalf("recovered command=%#v err=%v", recovered, err)
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
 func TestViewerAdminListDoesNotDeliverAndSSEDeliversCommand(t *testing.T) {
 	server := newTestRouteServer(t)
 	seedRouteViewer(t, server, "viewer-sse")

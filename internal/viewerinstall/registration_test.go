@@ -14,7 +14,58 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSystemRegistrationUpdateRequiresExactCommitMarkerButInitialInstallDoesNot(t *testing.T) {
+	root := t.TempDir()
+	layout := Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("a", 64)
+	release := Release{Version: "2.4.0", Digest: digest, ReleaseID: ReleaseID("2.4.0", digest)}
+	if err := os.MkdirAll(filepath.Join(layout.ReleaseDir(release.ReleaseID), "viewer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"camstation-viewer-agent.exe", filepath.Join("viewer", "CamStationViewer.exe")} {
+		if err := os.WriteFile(filepath.Join(layout.ReleaseDir(release.ReleaseID), name), []byte("binary"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SaveCurrent(layout, currentFor(release)); err != nil {
+		t.Fatal(err)
+	}
+	registration := SystemRegistration{Layout: layout}
+	initial := Journal{TransactionID: "install-1", Generation: 1, Release: release}
+	if err := registration.Validate(t.Context(), initial); err != nil {
+		t.Fatalf("initial validation unexpectedly required commit marker: %v", err)
+	}
+
+	previous := currentFor(Release{Version: "2.3.0", Digest: strings.Repeat("b", 64), ReleaseID: ReleaseID("2.3.0", strings.Repeat("b", 64))})
+	update := Journal{TransactionID: "update-2.4.0-a-7", CommandID: 41, PayloadHash: "payload-41", Generation: 7, Release: release, Previous: &previous}
+	marker := CommitMarker{
+		TransactionID: update.TransactionID, CommandID: 41, PayloadHash: "payload-41",
+		Version: release.Version, Digest: release.Digest, Generation: update.Generation,
+		Token: strings.Repeat("c", 64),
+	}
+	if err := SaveCommitMarker(layout, marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := registration.Validate(t.Context(), update); err != nil {
+		t.Fatalf("exact update marker rejected: %v", err)
+	}
+
+	marker.TransactionID = "stale-transaction"
+	if err := SaveCommitMarker(layout, marker); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if err := registration.Validate(ctx, update); err == nil {
+		t.Fatal("mismatched update marker accepted")
+	}
+}
 
 func TestUnregisterAbortsBeforeDeletingAnythingWhenDisableOrStopFails(t *testing.T) {
 	stopErr := errors.New("service did not stop")
@@ -41,6 +92,15 @@ func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {
 		t.Fatalf("Windows recovery action mapping=%+v want=%+v", got, wantActions)
+	}
+}
+
+func TestRegistrationValidationRequiresRunningServiceAndViewerTask(t *testing.T) {
+	script := validateRegisteredScript()
+	for _, required := range []string{ServiceName, ViewerTaskName, "Running"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("registration validation omitted %q: %s", required, script)
+		}
 	}
 }
 
