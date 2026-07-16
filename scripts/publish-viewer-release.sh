@@ -96,9 +96,7 @@ chmod 0644 "$stage/release.json"
 [[ $(sha256sum -- "$stage/CamStationViewerSetup.exe" | awk '{print $1}') == "$sha256" ]] || die "staged installer hash mismatch"
 
 if command -v sync >/dev/null 2>&1; then
-  sync -f "$stage/CamStationViewerSetup.exe"
-  sync -f "$stage/release.json"
-  sync -f "$stage"
+  sync "$stage/CamStationViewerSetup.exe" "$stage/release.json" "$stage"
 fi
 
 if [[ -e "$release_dir/previous" ]]; then
@@ -116,7 +114,7 @@ published=true
 
 [[ -z "$old_previous" || ! -e "$old_previous" ]] || rm -rf -- "$old_previous" || true
 if command -v sync >/dev/null 2>&1; then
-  sync -f "$release_dir" || true
+  sync "$release_dir" || true
 fi
 
 printf 'published %s (%s bytes, %s)\n' "$version" "$size_bytes" "$sha256"
