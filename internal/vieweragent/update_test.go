@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -237,10 +238,11 @@ func TestUpdateRunnerBoundsMetadataResponseHeaderBlackhole(t *testing.T) {
 		MetadataDeadline: 20 * time.Millisecond,
 		Sleep:            func(_ context.Context, delay time.Duration) error { delays = append(delays, delay); return nil },
 	}
-	started := time.Now()
-	err := runner.Run(t.Context(), UpdateTarget{Version: "2.0.9", SHA256: digest, Generation: 9, TransactionID: "tx-9"})
-	if err == nil || time.Since(started) > time.Second || requests.Load() != 4 {
-		t.Fatalf("err=%v elapsed=%v requests=%d", err, time.Since(started), requests.Load())
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	err := runner.Run(ctx, UpdateTarget{Version: "2.0.9", SHA256: digest, Generation: 9, TransactionID: "tx-9"})
+	if !errors.Is(err, context.DeadlineExceeded) || requests.Load() != 4 {
+		t.Fatalf("err=%v requests=%d", err, requests.Load())
 	}
 	journal, loadErr := LoadUpdateJournal(filepath.Join(stateDir, "update.json"))
 	if loadErr != nil || journal.MetadataAttempts != 4 || journal.State != "metadata_failed" {
@@ -310,10 +312,11 @@ func TestUpdateRunnerBoundsStalledInstallerBodyPerAttempt(t *testing.T) {
 		DownloadDeadline: 20 * time.Millisecond,
 		Sleep:            func(context.Context, time.Duration) error { return nil },
 	}
-	started := time.Now()
-	err := runner.Run(t.Context(), UpdateTarget{Version: "2.0.10", SHA256: digest, Generation: 10, TransactionID: "tx-10"})
-	if err == nil || time.Since(started) > time.Second || downloads.Load() != 4 {
-		t.Fatalf("err=%v elapsed=%v downloads=%d", err, time.Since(started), downloads.Load())
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	err := runner.Run(ctx, UpdateTarget{Version: "2.0.10", SHA256: digest, Generation: 10, TransactionID: "tx-10"})
+	if !errors.Is(err, context.DeadlineExceeded) || downloads.Load() != 4 {
+		t.Fatalf("err=%v downloads=%d", err, downloads.Load())
 	}
 	journal, loadErr := LoadUpdateJournal(filepath.Join(stateDir, "update.json"))
 	if loadErr != nil || journal.DownloadAttempts != 4 || journal.State != "download_failed" {
@@ -456,7 +459,7 @@ func TestReconcileRelaunchesStaleInstallerStateWithoutTransactionClaim(t *testin
 	}
 }
 
-func TestReconcileDoesNotRelaunchExactDurablyClaimedTransaction(t *testing.T) {
+func TestReconcileKeepsLiveExactOwnerThenCompletesAbandonedTransactionOnce(t *testing.T) {
 	root := t.TempDir()
 	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
 	if err := layout.Ensure(); err != nil {
@@ -495,13 +498,87 @@ func TestReconcileDoesNotRelaunchExactDurablyClaimedTransaction(t *testing.T) {
 	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TargetVersion: target.Version, ArtifactSHA256: digest, Generation: target.Generation, TransactionID: target.TransactionID}); err != nil {
 		t.Fatal(err)
 	}
-	agent := Agent{Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
-		t.Fatal("durably claimed transaction was relaunched")
+	liveOwner, err := viewerinstall.Acquire(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	agent := Agent{Config: Config{InstallDir: layout.InstallDir}, Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
+		called++
+		if err := (viewerinstall.Manager{Layout: layout, Registration: updateTestRegistration{}}).Apply(t.Context(), request); err != nil {
+			return err
+		}
+		matched, err := ReconcileCommittedUpdate(layout.StateDir)
+		if err != nil || !matched {
+			return fmt.Errorf("commit reconciliation matched=%v: %w", matched, err)
+		}
 		return nil
 	})}
 	results, err := agent.Reconcile(t.Context())
-	if err != nil || len(results) != 0 {
-		t.Fatalf("results=%+v err=%v", results, err)
+	if err != nil || len(results) != 0 || called != 0 {
+		t.Fatalf("live results=%+v calls=%d err=%v", results, called, err)
+	}
+	if err := liveOwner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	results, err = agent.Reconcile(t.Context())
+	if err != nil || len(results) != 1 || results[0].State != CommandSucceeded || called != 1 {
+		t.Fatalf("abandoned results=%+v calls=%d err=%v", results, called, err)
+	}
+	results, err = agent.Reconcile(t.Context())
+	if err != nil || len(results) != 0 || called != 1 {
+		t.Fatalf("repeat results=%+v calls=%d err=%v", results, called, err)
+	}
+}
+
+func TestReconcileNeverResumesMismatchedIncompleteTransaction(t *testing.T) {
+	root := t.TempDir()
+	layout := viewerinstall.Layout{InstallDir: filepath.Join(root, "install"), StateDir: filepath.Join(root, "state")}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "release")
+	if err := os.MkdirAll(filepath.Join(source, "viewer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"camstation-viewer-agent.exe": []byte("agent"), "viewer/CamStationViewer.exe": []byte("viewer")} {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), data, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	transactionDigest := sha256Hex([]byte("transaction"))
+	injected := errors.New("prepared unrelated transaction")
+	manager := viewerinstall.Manager{Layout: layout, Registration: updateTestRegistration{}, FailAfter: func(phase viewerinstall.Phase) error {
+		if phase == viewerinstall.PhasePreparing {
+			return injected
+		}
+		return nil
+	}}
+	request := viewerinstall.Request{TransactionID: "other-transaction", Generation: 9, SourceDir: source, Release: viewerinstall.Release{Version: "9.0.0", Digest: transactionDigest, ReleaseID: viewerinstall.ReleaseID("9.0.0", transactionDigest)}}
+	if err := manager.Apply(t.Context(), request); !errors.Is(err, injected) {
+		t.Fatalf("Apply error=%v", err)
+	}
+	digest := sha256Hex([]byte("wanted"))
+	paths := MachinePaths{State: filepath.Join(layout.StateDir, "state.json"), Commands: filepath.Join(layout.StateDir, "commands.json"), Update: filepath.Join(layout.StateDir, "update.json")}
+	record := CommandRecord{ID: 88, Type: "update_app", PayloadHash: "p", OperationKey: "wanted-transaction", DesiredVersion: "2.1.6", ArtifactSHA256: digest, Generation: 10, State: CommandRunning}
+	if err := SaveCommandLedger(paths.Commands, CommandLedger{Records: map[string]CommandRecord{"88": record}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveUpdateJournal(paths.Update, UpdateJournal{State: "installer_launched", TargetVersion: record.DesiredVersion, ArtifactSHA256: digest, Generation: record.Generation, TransactionID: record.OperationKey}); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	agent := Agent{Config: Config{InstallDir: layout.InstallDir}, Paths: paths, Updater: updateExecutorFunc(func(context.Context, UpdateTarget) error {
+		called++
+		return nil
+	})}
+	results, err := agent.Reconcile(t.Context())
+	if err != nil || len(results) != 0 || called != 0 {
+		t.Fatalf("results=%+v calls=%d err=%v", results, called, err)
+	}
+	journal, err := LoadUpdateJournal(paths.Update)
+	if err != nil || journal.State != "installer_launched" {
+		t.Fatalf("journal=%+v err=%v", journal, err)
 	}
 }
 

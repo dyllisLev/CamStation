@@ -25,9 +25,7 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 	if err != nil {
 		return false, err
 	}
-	matched := journal.TransactionID != "" && journal.TransactionID == transaction.TransactionID &&
-		journal.Generation == transaction.Generation && journal.TargetVersion == transaction.Release.Version &&
-		strings.EqualFold(journal.ArtifactSHA256, transaction.Release.Digest)
+	matched := transactionMatchesUpdate(transaction, journal)
 	if matched && transaction.Phase == viewerinstall.PhaseCommitted {
 		if journal.State == "committed" {
 			return true, nil
@@ -40,6 +38,9 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 		return true, nil
 	}
 	if journal.State != "installer_launched" {
+		return false, nil
+	}
+	if transaction.TransactionID != "" && !matched {
 		return false, nil
 	}
 	if matched && incompleteTransactionPhase(transaction.Phase) {
@@ -58,6 +59,12 @@ func reconcileCommittedUpdate(stateDir string, save func(string, UpdateJournal) 
 	journal.State = "launching_installer"
 	journal.LastError = ""
 	return false, save(path, journal)
+}
+
+func transactionMatchesUpdate(transaction viewerinstall.Journal, journal UpdateJournal) bool {
+	return journal.TransactionID != "" && journal.TransactionID == transaction.TransactionID &&
+		journal.Generation == transaction.Generation && journal.TargetVersion == transaction.Release.Version &&
+		strings.EqualFold(journal.ArtifactSHA256, transaction.Release.Digest)
 }
 
 func incompleteTransactionPhase(phase viewerinstall.Phase) bool {

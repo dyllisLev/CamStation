@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -20,32 +21,41 @@ type Ownership struct {
 	handle       windows.Handle
 	stateDir     string
 	threadLocked bool
+	processGuard bool
 }
 
+var processTransactionOwned atomic.Bool
+
 func Acquire(layout Layout) (*Ownership, error) {
+	if !processTransactionOwned.CompareAndSwap(false, true) {
+		return nil, ErrUpdateOwned
+	}
 	// Windows mutex ownership belongs to an OS thread, not a goroutine.
 	// Every production caller defers Close on this same goroutine.
 	runtime.LockOSThread()
 	name, err := windows.UTF16PtrFromString(`Global\CamStationViewerUpdate`)
 	if err != nil {
 		runtime.UnlockOSThread()
+		processTransactionOwned.Store(false)
 		return nil, err
 	}
 	handle, err := windows.CreateMutex(nil, false, name)
 	if err != nil {
 		runtime.UnlockOSThread()
+		processTransactionOwned.Store(false)
 		return nil, err
 	}
 	result, err := windows.WaitForSingleObject(handle, 0)
 	if err != nil || (result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED) {
 		windows.CloseHandle(handle)
 		runtime.UnlockOSThread()
+		processTransactionOwned.Store(false)
 		if err == nil {
 			err = ErrUpdateOwned
 		}
 		return nil, err
 	}
-	owner := &Ownership{handle: handle, stateDir: filepath.Clean(layout.StateDir), threadLocked: true}
+	owner := &Ownership{handle: handle, stateDir: filepath.Clean(layout.StateDir), threadLocked: true, processGuard: true}
 	if err := layout.Ensure(); err != nil {
 		_ = owner.Close()
 		return nil, err
@@ -64,11 +74,15 @@ func (owner *Ownership) Close() error {
 		owner.threadLocked = false
 		runtime.UnlockOSThread()
 	}
+	if owner.processGuard {
+		owner.processGuard = false
+		processTransactionOwned.Store(false)
+	}
 	return err
 }
 
 func (owner *Ownership) owns(layout Layout) bool {
-	return owner != nil && owner.handle != 0 && owner.stateDir == filepath.Clean(layout.StateDir)
+	return owner != nil && owner.handle != 0 && owner.processGuard && owner.stateDir == filepath.Clean(layout.StateDir)
 }
 
 func RegisterAll(ctx context.Context, layout Layout, options RegistrationOptions) (string, error) {

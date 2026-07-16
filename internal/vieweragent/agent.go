@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"camstation/internal/viewerinstall"
 )
 
 const defaultHeartbeatInterval = 10 * time.Second
@@ -37,23 +39,24 @@ type UpdateExecutor interface {
 }
 
 type Agent struct {
-	Config                   Config
-	Paths                    MachinePaths
-	Executor                 Executor
-	Reporter                 CommandReporter
-	HTTPClient               *http.Client
-	HeartbeatInterval        time.Duration
-	HeartbeatRequestDeadline time.Duration
-	ControlReadDeadline      time.Duration
-	ViewerCommandDeadline    time.Duration
-	ViewerRestartDeadline    time.Duration
-	AgentVersion             string
-	Now                      func() time.Time
-	LoadLedger               func(string) (CommandLedger, error)
-	SaveLedger               func(string, CommandLedger) error
-	ServePipe                func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
-	Ready                    func()
-	Updater                  UpdateExecutor
+	Config                    Config
+	Paths                     MachinePaths
+	Executor                  Executor
+	Reporter                  CommandReporter
+	HTTPClient                *http.Client
+	HeartbeatInterval         time.Duration
+	HeartbeatRequestDeadline  time.Duration
+	ControlReadDeadline       time.Duration
+	ViewerCommandDeadline     time.Duration
+	ViewerRestartDeadline     time.Duration
+	AgentVersion              string
+	Now                       func() time.Time
+	LoadLedger                func(string) (CommandLedger, error)
+	SaveLedger                func(string, CommandLedger) error
+	ServePipe                 func(context.Context, Config, func(PipeMessage) (PipeMessage, error), func()) error
+	Ready                     func()
+	Updater                   UpdateExecutor
+	TransactionOwnershipProbe func(viewerinstall.Layout) (bool, error)
 
 	stateMu          sync.Mutex
 	telemetryMu      sync.Mutex
@@ -236,6 +239,9 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 	if _, err := ReconcileCommittedUpdate(filepath.Dir(agent.Paths.Update)); err != nil {
 		return nil, err
 	}
+	if err := agent.reconcileAbandonedInstallerHandoff(); err != nil {
+		return nil, err
+	}
 	ledger, err := agent.loadCommandLedger()
 	if err != nil {
 		return nil, err
@@ -284,6 +290,50 @@ func (agent *Agent) Reconcile(ctx context.Context) (results []CommandRecord, res
 		}
 	}
 	return results, nil
+}
+
+func (agent *Agent) reconcileAbandonedInstallerHandoff() error {
+	stateDir := filepath.Dir(agent.Paths.Update)
+	layout := viewerinstall.Layout{InstallDir: agent.Config.InstallDir, StateDir: stateDir}
+	transaction, err := viewerinstall.LoadJournal(layout)
+	if err != nil {
+		return err
+	}
+	journal, err := LoadUpdateJournal(agent.Paths.Update)
+	if err != nil {
+		return err
+	}
+	if journal.State != "installer_launched" || !transactionMatchesUpdate(transaction, journal) || !incompleteTransactionPhase(transaction.Phase) {
+		return nil
+	}
+	if !filepath.IsAbs(layout.InstallDir) {
+		return errors.New("absolute Viewer install directory is required for ownership probe")
+	}
+	probe := agent.TransactionOwnershipProbe
+	if probe == nil {
+		probe = viewerinstall.TransactionOwned
+	}
+	owned, err := probe(layout)
+	if err != nil || owned {
+		return err
+	}
+
+	// Re-read both atomic journals after probing so a commit that raced the
+	// available-owner observation is never downgraded to a launch request.
+	transaction, err = viewerinstall.LoadJournal(layout)
+	if err != nil {
+		return err
+	}
+	journal, err = LoadUpdateJournal(agent.Paths.Update)
+	if err != nil {
+		return err
+	}
+	if journal.State != "installer_launched" || !transactionMatchesUpdate(transaction, journal) || !incompleteTransactionPhase(transaction.Phase) {
+		return nil
+	}
+	journal.State = "launching_installer"
+	journal.LastError = ""
+	return SaveUpdateJournal(agent.Paths.Update, journal)
 }
 
 func updateCanResume(state string) bool {

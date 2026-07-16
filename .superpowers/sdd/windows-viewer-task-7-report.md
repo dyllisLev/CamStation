@@ -124,10 +124,10 @@ $ file viewer-app/dist/CamStationViewerSetup.exe
 PE32+ executable (console) x86-64, for MS Windows
 
 $ stat -c '%s bytes' viewer-app/dist/CamStationViewerSetup.exe
-383865344 bytes
+383879680 bytes
 
 $ sha256sum viewer-app/dist/CamStationViewerSetup.exe
-1215810fb2f669e5483f334afa00ba96a8c3a80306707dd84aedecebc91b4ce0
+5bcf55505d7f424f0d2a63cfe7bb0a0483bb631a229daf2467f3fe4d08d5277d
 
 $ test ! -e cmd/camstation-viewer-installer/payload/release.zip
 PASS
@@ -144,3 +144,6 @@ The follow-up focused review also verified these restart/concurrency cases witho
 - An unrelated owner is never accepted as update success. Only the exact committed transaction can satisfy bounded ownership observation.
 - Update ownership blocks uninstall before unregister or file-removal callbacks execute.
 - Windows named-mutex acquisition pins the owning goroutine to its OS thread until `Ownership.Close`, satisfying Win32 mutex release semantics across the full transaction.
+- A process-local non-reentrant guard rejects recursive same-thread and concurrent acquisition before the Win32 mutex call, releases on every error/close path, and permits reacquisition only after close.
+- Agent reconciliation probes the real transaction ownership primitive for an exact incomplete `installer_launched` transaction. A live owner is left alone; an absent/abandoned owner is atomically returned to the resumable handoff and the same transaction recovers and commits once. A mismatched transaction is never resumed.
+- Deadline regression tests use a bounded parent context plus exact attempt/error assertions instead of a CPU-sensitive one-second wall-clock assertion.

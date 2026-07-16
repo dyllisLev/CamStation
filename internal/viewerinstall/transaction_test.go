@@ -204,6 +204,49 @@ func TestTransactionOwnershipIsExclusive(t *testing.T) {
 	}
 }
 
+func TestOwnershipRejectsNestedAndConcurrentAcquisitionThenReacquires(t *testing.T) {
+	manager, _, _ := transactionFixture(t)
+	owner, err := Acquire(manager.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nested, nestedErr := Acquire(manager.Layout); !errors.Is(nestedErr, ErrUpdateOwned) {
+		if nested != nil {
+			_ = nested.Close()
+		}
+		t.Fatalf("nested acquisition error=%v", nestedErr)
+	}
+	concurrent := make(chan error, 1)
+	go func() {
+		contender, contenderErr := Acquire(manager.Layout)
+		if contender != nil {
+			_ = contender.Close()
+		}
+		concurrent <- contenderErr
+	}()
+	if concurrentErr := <-concurrent; !errors.Is(concurrentErr, ErrUpdateOwned) {
+		t.Fatalf("concurrent acquisition error=%v", concurrentErr)
+	}
+	owned, err := TransactionOwned(manager.Layout)
+	if err != nil || !owned {
+		t.Fatalf("owned=%v err=%v", owned, err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	owned, err = TransactionOwned(manager.Layout)
+	if err != nil || owned {
+		t.Fatalf("released ownership=%v err=%v", owned, err)
+	}
+	reacquired, err := Acquire(manager.Layout)
+	if err != nil {
+		t.Fatalf("reacquire error=%v", err)
+	}
+	if err := reacquired.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApplyOwnedKeepsOneOwnerThroughDurablePreparationAndCommit(t *testing.T) {
 	manager, request, _ := transactionFixture(t)
 	owner, err := Acquire(manager.Layout)
