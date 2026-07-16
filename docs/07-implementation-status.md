@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-12
+Last updated: 2026-07-16
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -8,7 +8,7 @@ This document records the current implementation state so the next session can c
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
 - Active branch used for this work: `camstation2-initial`
-- Latest implementation commit at the time of this note: `f3dee5c guard rtsp probe fallback by applied graph`
+- Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.29:18080/`
 - Main monitoring page: `http://10.0.0.29:18080/live`
 
@@ -147,6 +147,16 @@ This document records the current implementation state so the next session can c
   - policy drafts survive the 10-second camera refetch, expose revision conflicts, and reload fresh server values after 409
   - 202 saved-but-pending state is shown as a warning instead of ordinary success
   - each policy card shows advertised/detected input plus desired/applied/effective/runtime state
+- Windows monitoring client delivery:
+  - the Settings page shows the current Windows installer version, size, digest prefix, development-unsigned marker, and a fixed download link
+  - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified `CamStationViewerSetup.exe`
+  - the Viewer registry stores independent Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
+  - durable idempotent commands, bounded SSE/long-poll recovery, force restart, and server-directed `update_app` control are implemented
+  - the Windows Agent runs behind a stable automatic SCM service host; the per-user bootstrap owns the Electron Viewer process tree through a Windows Job Object
+  - Electron opens only the CamStation 2.0 `/live?viewer=1` route and uses finite WebRTC-primary/MSE-fallback playback recovery
+  - the installer registers the automatic Agent service, SCM recovery actions, configured-user logon task, and boot recovery task in one unattended installation flow
+  - update activation, durable retry budgets, exact artifact verification, ownership, rollback, quarantine, and restart recovery are transactional
+  - `scripts/publish-viewer-release.sh` stages and fsyncs a fixed installer/manifest pair, atomically rotates `current`, and retains the prior release as `previous`
 
 ## Stream And Recording Policy
 
@@ -264,6 +274,14 @@ Browser/Playwright verification performed:
   - a bounded 소방서1 relay termination produced a replacement and stable byte growth in 11.18 seconds without restarting camstationd or go2rtc
   - local output probes received H.264 640x360 from 소방서1 in 9.7 seconds after fault recovery and from 소방서5 in 2.0 seconds
   - post-restart logs contained no stale-connection or invalid-input signature; the legacy `cctv` server and camera settings were untouched
+- Windows Viewer publication and application on 2026-07-16 19:33-19:43 KST:
+  - publisher contract tests, full Go tests, all 46 web tests, web lint/build, all 15 Viewer app tests, Viewer app build, and daemon build passed
+  - published development release `2.0.0-dev.1` is a PE32+ x86-64 installer built for `http://10.0.0.29:18080`
+  - source, published, and downloaded installers were each `383880704` bytes with SHA-256 `17fef68a70041b1f6d99f6c8f524fad46e5047da0c8b6a1f5f06959de619bf84`
+  - metadata returned HTTP 200 with `Cache-Control: no-store`; download returned HTTP 200 with the fixed attachment filename, PE content type, exact content length, and `X-Content-Type-Options: nosniff`
+  - `/settings` served the generated hashed asset containing the Windows installer card and fixed download route
+  - the controlled restart used `CAMSTATION_RECORDING_ENABLED=false`; recorder workers, managed go2rtc, and managed ffmpeg all remained empty before and after restart
+  - browser screenshot automation was unavailable because the local Chrome process was denied socket creation; API, generated-asset, and download verification completed without opening `/live`
 
 ## Important Corrections Learned
 
@@ -280,8 +298,9 @@ Browser/Playwright verification performed:
 
 - Timeline UI can read recording segment metadata, but aggregate timeline and motion data are still incomplete.
 - Recordings page shows storage/cleanup/recorder state, but does not yet include playback or segment browsing.
-- Settings page includes language settings, but does not yet cover all legacy settings.
-- System/Streams/Logs/Viewers pages are early status surfaces and feature matrices.
+- Settings includes language settings and Windows Viewer delivery, but does not yet cover all legacy settings.
+- System/Streams/Logs pages are early status surfaces and feature matrices.
+- Windows Viewer production rollout still needs Authenticode signing, installation on the target monitoring PCs, and the planned long-running Windows soak.
 - Camera grouping and advanced ONVIF management are not complete.
 - Event log is basic and still needs operational filtering and incident grouping.
 
@@ -307,10 +326,10 @@ Browser/Playwright verification performed:
 - Incident/alert dampening
 - Alert acknowledge/snooze
 - Backup/rclone orchestration
-- Viewer app fleet management
 - User authentication/authorization
 - systemd install/service packaging
-- Update workflow
+- Server-issued post-update commit-token validation; the first development release currently uses the documented exact local transaction validation seam
+- Production Authenticode signing and signer-thumbprint publication
 - Diagnostic bundle export
 
 ## Current Runtime Notes
