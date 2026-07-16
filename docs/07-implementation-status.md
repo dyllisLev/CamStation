@@ -278,16 +278,18 @@ Browser/Playwright verification performed:
   - a bounded 소방서1 relay termination produced a replacement and stable byte growth in 11.18 seconds without restarting camstationd or go2rtc
   - local output probes received H.264 640x360 from 소방서1 in 9.7 seconds after fault recovery and from 소방서5 in 2.0 seconds
   - post-restart logs contained no stale-connection or invalid-input signature; the legacy `cctv` server and camera settings were untouched
-- Windows Viewer publication and application on 2026-07-16 19:33-20:11 KST:
+- Windows Viewer publication and application on 2026-07-16 19:33-22:51 KST:
   - publisher contract tests, full Go tests, all 46 web tests, web lint/build, all 15 Viewer app tests, Viewer app build, and daemon build passed
   - published development release `2.0.0-dev.1` is a PE32+ x86-64 installer built for `http://10.0.0.29:18080`
-  - source, published, and downloaded installers were each `383880704` bytes with SHA-256 `17fef68a70041b1f6d99f6c8f524fad46e5047da0c8b6a1f5f06959de619bf84`
+  - the final source, published, and downloaded installers were each `384014848` bytes with SHA-256 `1ea12f3e33302f7f3a1fa973a0d13c0cbde7d3d93ec210634541e8eca1ed69f9`
   - metadata returned HTTP 200 with `Cache-Control: no-store`; download returned HTTP 200 with the fixed attachment filename, PE content type, exact content length, and `X-Content-Type-Options: nosniff`
   - `/settings` served the generated hashed asset containing the Windows installer card and fixed download route
   - the controlled restart used `CAMSTATION_RECORDING_ENABLED=false`; recorder workers, managed go2rtc, and managed ffmpeg all remained empty before and after restart
   - browser screenshot automation was unavailable because the local Chrome process was denied socket creation; API, generated-asset, and download verification completed without opening `/live`
   - focused publication review replaced directory rotation with a continuously available atomic pointer layout, added publisher serialization and checked rollback after post-switch durability failure, and migrated the same installer without moving the legacy files
-  - after the pointer-aware daemon restart, the source, active immutable release, and newly downloaded installer still had the exact recorded size and SHA-256; managed go2rtc and managed ffmpeg remained empty
+  - the Agent now converges missed SSE updates from heartbeat, reports the exact installed artifact identity, and keeps forced restart control responsive while an update is pending
+  - the server issues an update commit token only after 30 continuous seconds of exact Agent/control/Viewer/renderer health; update installs wait up to 120 seconds for the exact marker and otherwise roll back and quarantine the failed target
+  - after the pointer-aware daemon restart, the source, active immutable release, and newly downloaded installer still had the exact recorded size and SHA-256; recorder workers, managed go2rtc, and managed ffmpeg remained empty
 
 ## Important Corrections Learned
 
