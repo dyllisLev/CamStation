@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,8 @@ func TestLoadRejectsUnsafeManifestFields(t *testing.T) {
 		{name: "short digest", filename: "CamStationViewerSetup.exe", size: 9, digest: "00"},
 		{name: "uppercase digest", filename: "CamStationViewerSetup.exe", size: 9, digest: strings.Repeat("A", 64)},
 		{name: "non hex digest", filename: "CamStationViewerSetup.exe", size: 9, digest: strings.Repeat("z", 64)},
+		{name: "newline in filename", filename: "CamStation\nViewerSetup.exe", size: 9, digest: strings.Repeat("0", 64)},
+		{name: "delete control in filename", filename: "CamStation\x7fViewerSetup.exe", size: 9, digest: strings.Repeat("0", 64)},
 	}
 
 	for _, tt := range tests {
@@ -61,7 +64,11 @@ func TestLoadRejectsUnsafeManifestFields(t *testing.T) {
 }
 
 func TestLoadRejectsUnknownAndTrailingManifestData(t *testing.T) {
-	dir := t.TempDir()
+	root := t.TempDir()
+	dir := filepath.Join(root, "current")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create release dir: %v", err)
+	}
 	artifact := []byte("installer")
 	digest := sha256.Sum256(artifact)
 	manifest := `{"version":"2.0.0-dev.1","filename":"CamStationViewerSetup.exe","sizeBytes":9,"sha256":"` + hex.EncodeToString(digest[:]) + `","publishedAt":"2026-07-16T01:02:03Z","developmentUnsigned":true,"unexpected":true}`
@@ -71,11 +78,11 @@ func TestLoadRejectsUnknownAndTrailingManifestData(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "CamStationViewerSetup.exe"), artifact, 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if _, err := viewerrelease.Load(dir); !errors.Is(err, viewerrelease.ErrInvalid) {
+	if _, err := viewerrelease.Load(root); !errors.Is(err, viewerrelease.ErrInvalid) {
 		t.Fatalf("unknown field error = %v, want ErrInvalid", err)
 	}
 
-	writeReleaseFixture(t, dir, artifact, "")
+	writeReleaseFixture(t, root, artifact, "")
 	manifestBytes, err := os.ReadFile(filepath.Join(dir, "release.json"))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -83,7 +90,7 @@ func TestLoadRejectsUnknownAndTrailingManifestData(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "release.json"), append(manifestBytes, []byte("\n{}")...), 0o644); err != nil {
 		t.Fatalf("append manifest data: %v", err)
 	}
-	if _, err := viewerrelease.Load(dir); !errors.Is(err, viewerrelease.ErrInvalid) {
+	if _, err := viewerrelease.Load(root); !errors.Is(err, viewerrelease.ErrInvalid) {
 		t.Fatalf("trailing data error = %v, want ErrInvalid", err)
 	}
 }
@@ -103,7 +110,7 @@ func TestLoadRejectsMissingAndWrongSizedArtifactWithoutLeakingDirectory(t *testi
 		t.Fatalf("missing artifact error = %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "CamStationViewerSetup.exe"), []byte("short"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "current", "CamStationViewerSetup.exe"), []byte("short"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 	if _, err := viewerrelease.Load(dir); !errors.Is(err, viewerrelease.ErrInvalid) || strings.Contains(err.Error(), dir) {
@@ -132,7 +139,7 @@ func TestLoadAndOpenVerified(t *testing.T) {
 		t.Fatalf("OpenVerified() error = %v", err)
 	}
 	defer file.Close()
-	contents, err := os.ReadFile(file.Name())
+	contents, err := io.ReadAll(file)
 	if err != nil {
 		t.Fatalf("read verified file: %v", err)
 	}
@@ -148,7 +155,7 @@ func TestOpenVerifiedRejectsArtifactChangedAfterLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, release.Filename), []byte("tampered!"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "current", release.Filename), []byte("tampered!"), 0o644); err != nil {
 		t.Fatalf("tamper artifact: %v", err)
 	}
 	if _, err := release.OpenVerified(); !errors.Is(err, viewerrelease.ErrInvalid) || strings.Contains(err.Error(), dir) {
@@ -171,7 +178,7 @@ func TestLoadRejectsArtifactSymlinkOutsideReleaseDirectory(t *testing.T) {
 		t.Skipf("create artifact symlink: %v", err)
 	}
 	digest := sha256.Sum256(artifact)
-	writeManifest(t, dir, releaseManifest{
+	writeManifest(t, root, releaseManifest{
 		Version:     "2.0.0-dev.1",
 		Filename:    "CamStationViewerSetup.exe",
 		SizeBytes:   int64(len(artifact)),
@@ -179,8 +186,21 @@ func TestLoadRejectsArtifactSymlinkOutsideReleaseDirectory(t *testing.T) {
 		PublishedAt: time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC),
 	})
 
-	if _, err := viewerrelease.Load(dir); err == nil || strings.Contains(err.Error(), root) {
+	if _, err := viewerrelease.Load(root); err == nil || strings.Contains(err.Error(), root) {
 		t.Fatalf("escaping symlink error = %v", err)
+	}
+}
+
+func TestLoadRejectsCurrentSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeReleaseFixtureAtDir(t, outside, []byte("outside installer"), "")
+	if err := os.Symlink(outside, filepath.Join(root, "current")); err != nil {
+		t.Skipf("create current symlink: %v", err)
+	}
+
+	if _, err := viewerrelease.Load(root); !errors.Is(err, viewerrelease.ErrInvalid) || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), outside) {
+		t.Fatalf("escaping current symlink error = %v, want ErrInvalid without paths", err)
 	}
 }
 
@@ -193,7 +213,12 @@ type releaseManifest struct {
 	DevelopmentUnsigned bool      `json:"developmentUnsigned"`
 }
 
-func writeReleaseFixture(t *testing.T, dir string, artifact []byte, digestOverride string) {
+func writeReleaseFixture(t *testing.T, root string, artifact []byte, digestOverride string) {
+	t.Helper()
+	writeReleaseFixtureAtDir(t, filepath.Join(root, "current"), artifact, digestOverride)
+}
+
+func writeReleaseFixtureAtDir(t *testing.T, dir string, artifact []byte, digestOverride string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create release dir: %v", err)
@@ -203,7 +228,7 @@ func writeReleaseFixture(t *testing.T, dir string, artifact []byte, digestOverri
 	if digestOverride != "" {
 		digestHex = digestOverride
 	}
-	writeManifest(t, dir, releaseManifest{
+	writeManifestAtDir(t, dir, releaseManifest{
 		Version:             "2.0.0-dev.1",
 		Filename:            "CamStationViewerSetup.exe",
 		SizeBytes:           int64(len(artifact)),
@@ -216,7 +241,12 @@ func writeReleaseFixture(t *testing.T, dir string, artifact []byte, digestOverri
 	}
 }
 
-func writeManifest(t *testing.T, dir string, manifest releaseManifest) {
+func writeManifest(t *testing.T, root string, manifest releaseManifest) {
+	t.Helper()
+	writeManifestAtDir(t, filepath.Join(root, "current"), manifest)
+}
+
+func writeManifestAtDir(t *testing.T, dir string, manifest releaseManifest) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create release dir: %v", err)

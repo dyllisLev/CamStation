@@ -91,7 +91,50 @@ func TestViewerReleaseRoutesReturnServiceUnavailableWithoutValidRelease(t *testi
 	}
 }
 
+func TestViewerReleaseRoutesRejectCurrentSymlinkOutsideRoot(t *testing.T) {
+	server := newTestRouteServer(t)
+	releaseRoot := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases")
+	outside := t.TempDir()
+	publishViewerFixture(t, outside, []byte("outside installer"))
+	if err := os.MkdirAll(releaseRoot, 0o755); err != nil {
+		t.Fatalf("create viewer release root: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(releaseRoot, "current")); err != nil {
+		t.Skipf("create current symlink: %v", err)
+	}
+
+	response := performRequest(t, server.handler, http.MethodGet, "/api/viewers/app/download")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("escaping current symlink status = %d, want %d; body=%s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), releaseRoot) || strings.Contains(response.Body.String(), outside) {
+		t.Fatalf("escaping current symlink leaked path in %q", response.Body.String())
+	}
+}
+
+func TestViewerReleaseRoutesRejectControlCharacterFilename(t *testing.T) {
+	for _, filename := range []string{"CamStation\nViewerSetup.exe", "CamStation\x7fViewerSetup.exe"} {
+		t.Run(strconv.Quote(filename), func(t *testing.T) {
+			server := newTestRouteServer(t)
+			releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
+			publishViewerFixtureNamed(t, releaseDir, filename, []byte("installer"))
+
+			for _, target := range []string{"/api/viewers/app/version", "/api/viewers/app/download"} {
+				response := performRequest(t, server.handler, http.MethodGet, target)
+				if response.Code != http.StatusServiceUnavailable {
+					t.Fatalf("GET %s control filename status = %d, want %d; body=%s", target, response.Code, http.StatusServiceUnavailable, response.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func publishViewerFixture(t *testing.T, dir string, artifact []byte) string {
+	t.Helper()
+	return publishViewerFixtureNamed(t, dir, "CamStationViewerSetup.exe", artifact)
+}
+
+func publishViewerFixtureNamed(t *testing.T, dir string, filename string, artifact []byte) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create viewer release dir: %v", err)
@@ -107,7 +150,7 @@ func publishViewerFixture(t *testing.T, dir string, artifact []byte) string {
 		DevelopmentUnsigned bool      `json:"developmentUnsigned"`
 	}{
 		Version:             "2.0.0-dev.1",
-		Filename:            "CamStationViewerSetup.exe",
+		Filename:            filename,
 		SizeBytes:           int64(len(artifact)),
 		SHA256:              digestHex,
 		PublishedAt:         time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC),

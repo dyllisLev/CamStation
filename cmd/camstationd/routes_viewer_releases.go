@@ -3,7 +3,6 @@ package main
 import (
 	"io"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -22,7 +21,7 @@ func (d routeDeps) registerViewerReleaseRoutes(mux *http.ServeMux) {
 
 func (d routeDeps) handleViewerReleaseVersion(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	release, err := viewerrelease.Load(filepath.Join(d.viewerReleasesDir, "current"))
+	release, err := viewerrelease.Load(d.viewerReleasesDir)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
@@ -31,7 +30,7 @@ func (d routeDeps) handleViewerReleaseVersion(w http.ResponseWriter, _ *http.Req
 }
 
 func (d routeDeps) handleViewerReleaseDownload(w http.ResponseWriter, _ *http.Request) {
-	release, err := viewerrelease.Load(filepath.Join(d.viewerReleasesDir, "current"))
+	release, err := viewerrelease.Load(d.viewerReleasesDir)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -24,16 +25,21 @@ type Release struct {
 	SHA256              string    `json:"sha256"`
 	PublishedAt         time.Time `json:"publishedAt"`
 	DevelopmentUnsigned bool      `json:"developmentUnsigned"`
-	dir                 string
+	rootDir             string
 }
 
-func Load(dir string) (Release, error) {
-	root, err := os.OpenRoot(dir)
+func Load(rootDir string) (Release, error) {
+	root, err := os.OpenRoot(rootDir)
 	if err != nil {
 		return Release{}, ErrUnavailable
 	}
 	defer root.Close()
-	manifest, err := root.Open("release.json")
+	current, err := root.OpenRoot("current")
+	if err != nil {
+		return Release{}, currentRootError(err)
+	}
+	defer current.Close()
+	manifest, err := current.Open("release.json")
 	if err != nil {
 		return Release{}, ErrUnavailable
 	}
@@ -48,7 +54,7 @@ func Load(dir string) (Release, error) {
 	if err := ensureJSONEnd(decoder); err != nil || !release.validManifest() {
 		return Release{}, ErrInvalid
 	}
-	release.dir = dir
+	release.rootDir = rootDir
 
 	file, err := release.OpenVerified()
 	if err != nil {
@@ -66,12 +72,17 @@ func (r Release) OpenVerified() (*os.File, error) {
 	if !r.validManifest() {
 		return nil, ErrInvalid
 	}
-	root, err := os.OpenRoot(r.dir)
+	root, err := os.OpenRoot(r.rootDir)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	defer root.Close()
-	file, err := root.Open(r.Filename)
+	current, err := root.OpenRoot("current")
+	if err != nil {
+		return nil, currentRootError(err)
+	}
+	defer current.Close()
+	file, err := current.Open(r.Filename)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -104,7 +115,7 @@ func (r Release) OpenVerified() (*os.File, error) {
 }
 
 func (r Release) validManifest() bool {
-	if r.Filename == "" || filepath.IsAbs(r.Filename) || strings.ContainsAny(r.Filename, `/\`) || filepath.Ext(r.Filename) != ".exe" {
+	if r.Filename == "" || filepath.IsAbs(r.Filename) || strings.ContainsAny(r.Filename, `/\`) || strings.IndexFunc(r.Filename, unicode.IsControl) >= 0 || filepath.Ext(r.Filename) != ".exe" {
 		return false
 	}
 	if r.SizeBytes <= 0 || len(r.SHA256) != sha256.Size*2 || strings.ToLower(r.SHA256) != r.SHA256 {
@@ -112,6 +123,13 @@ func (r Release) validManifest() bool {
 	}
 	_, err := hex.DecodeString(r.SHA256)
 	return err == nil
+}
+
+func currentRootError(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return ErrInvalid
 }
 
 func ensureJSONEnd(decoder *json.Decoder) error {
