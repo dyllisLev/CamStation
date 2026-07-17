@@ -305,6 +305,48 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 	}
 }
 
+func TestTaskXMLUsesSchedulerPrincipalLogonTypes(t *testing.T) {
+	viewer, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := RecoveryTaskXML(`C:\ProgramData\CamStation\Viewer\updater\CamStationViewerUpdater.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name          string
+		document      string
+		wantLogonType string
+		wantPrincipal string
+	}{
+		{"Viewer", viewer, "InteractiveToken", `<UserId>S-1-5-21-123</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>`},
+		{"Recovery", recovery, "", `<UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel>`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var task struct {
+				Principals struct {
+					Principal struct {
+						LogonType string `xml:"LogonType"`
+					} `xml:"Principal"`
+				} `xml:"Principals"`
+			}
+			if err := xml.Unmarshal([]byte(test.document), &task); err != nil {
+				t.Fatalf("task XML is not parseable: %v", err)
+			}
+			if task.Principals.Principal.LogonType != test.wantLogonType {
+				t.Fatalf("LogonType=%q want=%q", task.Principals.Principal.LogonType, test.wantLogonType)
+			}
+			if !strings.Contains(test.document, test.wantPrincipal) {
+				t.Fatalf("task XML missing principal %q: %s", test.wantPrincipal, test.document)
+			}
+			if test.wantLogonType == "" && strings.Contains(test.document, "<LogonType>") {
+				t.Fatalf("SYSTEM task XML declares LogonType: %s", test.document)
+			}
+		})
+	}
+}
+
 func TestTaskXMLUsesSchedulerCompatibleProlog(t *testing.T) {
 	viewer, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
 	if err != nil {

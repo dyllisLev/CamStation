@@ -239,7 +239,7 @@ func RecoveryTaskXML(updaterPath string) (string, error) {
 		return "", errors.New("invalid recovery updater path")
 	}
 	return taskXML(
-		`<BootTrigger><Enabled>true</Enabled></BootTrigger>`, "S-1-5-18", "ServiceAccount", "HighestAvailable",
+		`<BootTrigger><Enabled>true</Enabled></BootTrigger>`, "S-1-5-18", "", "HighestAvailable",
 		updaterPath, "--recover", true,
 	), nil
 }
@@ -253,11 +253,15 @@ func taskXML(trigger, sid, logonType, runLevel, command, arguments string, enabl
 	if enabled {
 		enabledText = "true"
 	}
+	logonTypeXML := ""
+	if logonType != "" {
+		logonTypeXML = `<LogonType>` + logonType + `</LogonType>`
+	}
 	return `<?xml version="1.0"?>` +
 		`<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` +
 		`<RegistrationInfo><Description>CamStation Viewer supervised startup</Description></RegistrationInfo>` +
 		`<Triggers>` + trigger + `</Triggers>` +
-		`<Principals><Principal id="Author"><UserId>` + xmlEscape(sid) + `</UserId><LogonType>` + logonType + `</LogonType><RunLevel>` + runLevel + `</RunLevel></Principal></Principals>` +
+		`<Principals><Principal id="Author"><UserId>` + xmlEscape(sid) + `</UserId>` + logonTypeXML + `<RunLevel>` + runLevel + `</RunLevel></Principal></Principals>` +
 		`<Settings><Enabled>` + enabledText + `</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>` +
 		`<Actions Context="Author"><Exec><Command>` + xmlEscape(command) + `</Command><Arguments>` + arguments + `</Arguments></Exec></Actions></Task>`
 }
