@@ -305,6 +305,31 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 	}
 }
 
+func TestTaskXMLUsesSchedulerCompatibleProlog(t *testing.T) {
+	viewer, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := RecoveryTaskXML(`C:\ProgramData\CamStation\Viewer\updater\CamStationViewerUpdater.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, document := range map[string]string{"Viewer": viewer, "Recovery": recovery} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.HasPrefix(document, `<?xml version="1.0"?><Task`) {
+				t.Fatalf("task XML has incompatible prolog: %s", document)
+			}
+			if strings.Contains(document, "encoding=") {
+				t.Fatalf("task XML declares an encoding: %s", document)
+			}
+			var task any
+			if err := xml.Unmarshal([]byte(document), &task); err != nil {
+				t.Fatalf("task XML is not parseable: %v", err)
+			}
+		})
+	}
+}
+
 func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
 	bootstrapPath := `C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`
 	installDir := `C:\Program Files\CamStation Viewer`
