@@ -114,6 +114,7 @@ func (d *DB) Migrate(ctx context.Context) error {
 					recording_stream_name TEXT NOT NULL DEFAULT '',
 					live_stream_name TEXT NOT NULL DEFAULT '',
 					state TEXT NOT NULL,
+					enabled INTEGER NOT NULL DEFAULT 1,
 					profile_template_id INTEGER,
 					manufacturer TEXT NOT NULL DEFAULT '',
 					model TEXT NOT NULL DEFAULT '',

@@ -10,6 +10,7 @@ import (
 
 func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	var camera Camera
+	var enabled int
 	var createdAt, updatedAt, probeJSON, scanJSON, controlCapabilitiesJSON string
 	var channelIndex sql.NullInt64
 	var profileTemplateID sql.NullInt64
@@ -22,6 +23,7 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 		&camera.RecordingStreamName,
 		&camera.LiveStreamName,
 		&camera.State,
+		&enabled,
 		&profileTemplateID,
 		&camera.Manufacturer,
 		&camera.Model,
@@ -39,6 +41,7 @@ func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
 	); err != nil {
 		return Camera{}, err
 	}
+	camera.Enabled = enabled != 0
 	if camera.LayoutKey == "" {
 		camera.LayoutKey = camera.StreamName
 	}

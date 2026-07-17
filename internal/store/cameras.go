@@ -114,7 +114,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 
 func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
+		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state, enabled,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
 		 FROM cameras ORDER BY id`,
@@ -156,7 +156,7 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 
 func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state,
+		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state, enabled,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
 		 FROM cameras c
@@ -186,6 +186,24 @@ func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, 
 	}
 	applyOutputStreamNames(&camera)
 	return camera, nil
+}
+
+func (d *DB) SetCameraEnabled(ctx context.Context, streamName string, enabled bool) error {
+	result, err := d.db.ExecContext(ctx,
+		`UPDATE cameras SET enabled = ?, updated_at = ? WHERE stream_name = ?`,
+		enabled, time.Now().UTC().Format(time.RFC3339Nano), streamName,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (d *DB) UpdateCameraControlCapabilities(ctx context.Context, streamName string, capabilities CameraControlCapabilities) error {
