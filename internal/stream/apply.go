@@ -233,6 +233,30 @@ func (g *Go2RTC) applyConfig(ctx context.Context, config []byte, restart func(co
 	return tx.Commit()
 }
 
+func (g *Go2RTC) applyConfigFailClosed(ctx context.Context, config []byte, restart func(context.Context) error) error {
+	g.applyMu.Lock()
+	defer g.applyMu.Unlock()
+
+	if err := writeFileAtomic(g.configPath, config); err != nil {
+		return err
+	}
+	if err := restart(ctx); err != nil {
+		return err
+	}
+	lastGoodPath := g.configPath + ".last-good"
+	if err := writeFileAtomic(lastGoodPath, config); err != nil {
+		invalidateErr := os.Remove(lastGoodPath)
+		if invalidateErr == nil || errors.Is(invalidateErr, os.ErrNotExist) {
+			return &lastGoodCommitError{err: err, invariantSafe: true}
+		}
+		return &lastGoodCommitError{
+			err:           fmt.Errorf("%v; stale last-good invalidation failed: %w", err, invalidateErr),
+			invariantSafe: false,
+		}
+	}
+	return nil
+}
+
 func (g *Go2RTC) PrepareConfig(ctx context.Context, config []byte) (runtimeConfigTransaction, error) {
 	return g.prepareConfig(ctx, config, g.restartProcess)
 }

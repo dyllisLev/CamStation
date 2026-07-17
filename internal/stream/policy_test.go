@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -437,6 +438,43 @@ func TestStartupPendingPolicyDoesNotRestoreDisabledCameraFromLastGood(t *testing
 	}
 	if !strings.Contains(string(config), "enabled-focus") {
 		t.Fatalf("enabled applied stream missing: %s", config)
+	}
+}
+
+func TestEnsureFailsClosedWithoutRestartingDisabledLastGood(t *testing.T) {
+	path := t.TempDir() + "/go2rtc.yaml"
+	unsafe := []byte("streams:\n  disabled: rtsp://admin:secret@192.0.2.2/main\n")
+	if err := os.WriteFile(path, unsafe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".last-good", unsafe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	enabled.Outputs = []store.CameraOutput{output}
+	disabled := enabled
+	disabled.ID, disabled.Enabled, disabled.StreamName = 2, false, "disabled"
+	restarts := 0
+
+	err := NewGo2RTC(path).ensure(t.Context(), []store.Camera{enabled, disabled}, func(context.Context) error {
+		restarts++
+		if restarts == 1 {
+			return fmt.Errorf("safe config failed health check")
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected safe startup failure")
+	}
+	if restarts != 1 {
+		t.Fatalf("restart calls=%d, previous unsafe config was restarted", restarts)
+	}
+	config, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(config), "disabled") || strings.Contains(string(config), "192.0.2.2") {
+		t.Fatalf("unsafe config restored: %s", config)
 	}
 }
 
