@@ -91,31 +91,45 @@ func TestDisableAndStopKeepsRunningBootRecoveryProcessAlive(t *testing.T) {
 func TestMissingSafeStopScriptsExitSuccessfullyButKeepMutationsTerminating(t *testing.T) {
 	for name, test := range map[string]struct {
 		script    string
+		probes    []string
 		mutations []string
 	}{
 		"disable and stop": {
 			script: disableAndStopScript(),
+			probes: []string{
+				"Get-ScheduledTask -TaskName '" + ViewerTaskName + "' -ErrorAction SilentlyContinue",
+				"Get-Service -Name '" + ServiceName + "' -ErrorAction SilentlyContinue",
+			},
 			mutations: []string{
 				"Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop",
 				"Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop",
 				"Set-Service -Name '" + ServiceName + "' -StartupType Disabled -ErrorAction Stop",
-				"Stop-Service -InputObject $s -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))",
 			},
 		},
 		"stop": {
 			script: stopRegisteredScript(),
+			probes: []string{
+				"Get-ScheduledTask -TaskName '" + ViewerTaskName + "' -ErrorAction SilentlyContinue",
+				"Get-Service -Name '" + ServiceName + "' -ErrorAction SilentlyContinue",
+			},
 			mutations: []string{
 				"Stop-ScheduledTask -InputObject $t -ErrorAction Stop",
-				"Stop-Service -InputObject $s -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))",
 			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			if !strings.HasPrefix(test.script, `$ErrorActionPreference='Stop'; `) {
+				t.Fatalf("missing-safe script does not start in strict error mode: %s", test.script)
+			}
 			if !strings.HasSuffix(strings.TrimSpace(test.script), "exit 0") {
 				t.Fatalf("missing-safe script does not explicitly exit successfully: %s", test.script)
 			}
-			if !strings.Contains(test.script, "-ErrorAction SilentlyContinue") {
-				t.Fatalf("missing-safe script omitted non-terminating probes: %s", test.script)
+			for _, probe := range test.probes {
+				if !strings.Contains(test.script, probe) {
+					t.Fatalf("missing-safe script omitted missing-safe probe %q: %s", probe, test.script)
+				}
 			}
 			for _, mutation := range test.mutations {
 				if !strings.Contains(test.script, mutation) {
@@ -259,6 +273,9 @@ func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
 	if !reflect.DeepEqual(environment, wantEnvironment) {
 		t.Fatalf("shortcut environment=%q want=%q", environment, wantEnvironment)
 	}
+	if !strings.HasPrefix(script, `$ErrorActionPreference='Stop'; `) {
+		t.Fatalf("shortcut script does not start in strict error mode: %s", script)
+	}
 	for _, required := range []string{
 		"CommonDesktopDirectory",
 		"CamStation Viewer.lnk",
@@ -267,6 +284,11 @@ func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
 		"CreateShortcut",
 		`$link.IconLocation=$env:CAMSTATION_VIEWER_SHORTCUT_ICON+',0'`,
 		`$link.WorkingDirectory=$env:CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY`,
+		`$link.Save(); if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'shortcut was not created'}; $saved=(New-Object -ComObject WScript.Shell).CreateShortcut($path)`,
+		`if($saved.TargetPath -ne [IO.Path]::Combine($env:SystemRoot,'System32','schtasks.exe')){throw 'shortcut target verification failed'}`,
+		`if($saved.Arguments -ne '/Run /TN "CamStationViewer"'){throw 'shortcut arguments verification failed'}`,
+		`if($saved.IconLocation -ne $env:CAMSTATION_VIEWER_SHORTCUT_ICON+',0'){throw 'shortcut icon verification failed'}`,
+		`if($saved.WorkingDirectory -ne $env:CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY){throw 'shortcut working directory verification failed'}`,
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("shortcut script missing %q: %s", required, script)
@@ -276,6 +298,9 @@ func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("shortcut script embeds %q: %s", forbidden, script)
 		}
+	}
+	if strings.Count(script, "CreateShortcut($path)") != 2 {
+		t.Fatalf("shortcut script does not reload the saved link exactly once: %s", script)
 	}
 }
 

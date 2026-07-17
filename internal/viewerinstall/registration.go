@@ -104,12 +104,12 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 }
 
 func disableAndStopScript() string {
-	return `$viewer=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($viewer){Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop}; ` +
+	return `$ErrorActionPreference='Stop'; $viewer=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($viewer){Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop}; ` +
 		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}; exit 0`
 }
 
 func stopRegisteredScript() string {
-	return `$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
+	return `$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
 		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s -and $s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}; exit 0`
 }
 
@@ -132,7 +132,7 @@ func publicDesktopShortcutScript(bootstrapPath, installDir string) (string, []st
 	if !absolutePlatformPath(bootstrapPath) || !absolutePlatformPath(installDir) {
 		return "", nil, errors.New("invalid Viewer shortcut paths")
 	}
-	script := `$desktop=[Environment]::GetFolderPath('CommonDesktopDirectory'); if(!$desktop){throw 'public desktop is unavailable'}; ` +
+	script := `$ErrorActionPreference='Stop'; $desktop=[Environment]::GetFolderPath('CommonDesktopDirectory'); if(!$desktop){throw 'public desktop is unavailable'}; ` +
 		`$path=[IO.Path]::Combine($desktop,'` + viewerShortcutName + `'); ` +
 		`$link=(New-Object -ComObject WScript.Shell).CreateShortcut($path); ` +
 		`$link.TargetPath=[IO.Path]::Combine($env:SystemRoot,'System32','schtasks.exe'); ` +
@@ -140,7 +140,12 @@ func publicDesktopShortcutScript(bootstrapPath, installDir string) (string, []st
 		`$link.IconLocation=$env:` + viewerShortcutIconEnv + `+',0'; ` +
 		`$link.WorkingDirectory=$env:` + viewerShortcutWorkingDirectoryEnv + `; ` +
 		`$link.Description='CamStation Viewer'; $link.Save(); ` +
-		`if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'shortcut was not created'}`
+		`if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'shortcut was not created'}; ` +
+		`$saved=(New-Object -ComObject WScript.Shell).CreateShortcut($path); ` +
+		`if($saved.TargetPath -ne [IO.Path]::Combine($env:SystemRoot,'System32','schtasks.exe')){throw 'shortcut target verification failed'}; ` +
+		`if($saved.Arguments -ne '/Run /TN "` + ViewerTaskName + `"'){throw 'shortcut arguments verification failed'}; ` +
+		`if($saved.IconLocation -ne $env:` + viewerShortcutIconEnv + `+',0'){throw 'shortcut icon verification failed'}; ` +
+		`if($saved.WorkingDirectory -ne $env:` + viewerShortcutWorkingDirectoryEnv + `){throw 'shortcut working directory verification failed'}`
 	environment := []string{
 		viewerShortcutIconEnv + "=" + bootstrapPath,
 		viewerShortcutWorkingDirectoryEnv + "=" + installDir,
