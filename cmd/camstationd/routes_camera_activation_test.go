@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"camstation/internal/store"
@@ -48,6 +50,49 @@ func TestCameraActivationRestoresStoredStateWhenApplyFails(t *testing.T) {
 	}
 }
 
+func TestCameraActivationRollbackSurvivesClientCancellation(t *testing.T) {
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	calls := 0
+	server, camera := newPolicyRouteServer(t, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
+		calls++
+		if calls == 1 {
+			cancelRequest()
+			return stream.PolicyApplyResult{Pending: true, Error: "runtime unavailable"}
+		}
+		return stream.PolicyApplyResult{Applied: true}
+	}))
+	req := httptest.NewRequest(http.MethodPatch, "/api/cameras/"+camera.StreamName+"/enabled", strings.NewReader(`{"enabled":false}`)).WithContext(requestContext)
+	for key, values := range trustedConsoleHeaders() {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	rec := httptest.NewRecorder()
+
+	server.handler.ServeHTTP(rec, req)
+
+	stored, err := server.db.GetCameraByStream(t.Context(), camera.StreamName)
+	if err != nil || !stored.Enabled || calls != 2 {
+		t.Fatalf("status=%d stored=%#v calls=%d err=%v", rec.Code, stored, calls, err)
+	}
+}
+
+func TestCameraActivationSameValueStillConvergesRuntime(t *testing.T) {
+	calls := 0
+	server, camera := newPolicyRouteServer(t, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
+		calls++
+		return stream.PolicyApplyResult{Applied: true}
+	}))
+	if err := server.db.SetCameraEnabled(t.Context(), camera.StreamName, false); err != nil {
+		t.Fatal(err)
+	}
+
+	status, payload := requestJSON(t, server.handler, http.MethodPatch, "/api/cameras/"+camera.StreamName+"/enabled", `{"enabled":false}`)
+	if status != http.StatusOK || payload["applied"] != true || calls != 1 {
+		t.Fatalf("status=%d payload=%#v calls=%d", status, payload, calls)
+	}
+}
+
 func TestDisabledCameraConnectionRoutesFailBeforeNetworkUse(t *testing.T) {
 	prober := &occupiedRTSPPolicyProber{}
 	server, camera := newPolicyRouteServerWithProber(t, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
@@ -67,6 +112,8 @@ func TestDisabledCameraConnectionRoutesFailBeforeNetworkUse(t *testing.T) {
 		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/preview", `{}`},
 		{http.MethodGet, "/api/cameras/" + camera.StreamName + "/controls", ""},
 		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/stream-outputs/probe", ""},
+		{http.MethodPost, "/api/cameras/" + camera.StreamName + "/stream-outputs/reapply", `{"expectedDesiredRevision":1}`},
+		{http.MethodPost, "/api/recorders/start?stream=" + camera.StreamName, ""},
 	}
 	for _, test := range tests {
 		status, payload := requestJSON(t, server.handler, test.method, test.path, test.body)

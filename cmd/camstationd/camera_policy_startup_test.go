@@ -22,10 +22,14 @@ func (f *startupCameraStoreFake) ListCameras(context.Context, bool) ([]store.Cam
 	return f.reads[index], nil
 }
 
-type startupStreamerFake struct{ ensures int }
+type startupStreamerFake struct {
+	ensures int
+	cameras []store.Camera
+}
 
-func (f *startupStreamerFake) Ensure(context.Context, []store.Camera) error {
+func (f *startupStreamerFake) Ensure(_ context.Context, cameras []store.Camera) error {
 	f.ensures++
+	f.cameras = append([]store.Camera(nil), cameras...)
 	return nil
 }
 
@@ -91,5 +95,21 @@ func TestStartCameraPoliciesDoesNotAutoApplyMixedOrFailedPolicies(t *testing.T) 
 				t.Fatalf("recorder cameras = %#v, want %d", recorder.reconciled, tt.wantRecorders)
 			}
 		})
+	}
+}
+
+func TestStartCameraPoliciesPassesDisabledRowsToStartupSanitizer(t *testing.T) {
+	enabled := store.Camera{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 1, ApplyState: store.CameraApplyApplied}}
+	disabled := store.Camera{ID: 2, Enabled: false, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 1, ApplyState: store.CameraApplyApplied}}
+	db := &startupCameraStoreFake{reads: [][]store.Camera{{enabled, disabled}, {enabled, disabled}}}
+	streamer := &startupStreamerFake{}
+
+	if err := startCameraPolicies(t.Context(), db, streamer, policyApplyFunc(func(context.Context) stream.PolicyApplyResult {
+		return stream.PolicyApplyResult{Applied: true}
+	}), &startupRecorderFake{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if streamer.ensures != 1 || len(streamer.cameras) != 2 {
+		t.Fatalf("ensure calls=%d cameras=%#v", streamer.ensures, streamer.cameras)
 	}
 }

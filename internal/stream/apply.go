@@ -202,12 +202,15 @@ func freshActiveCameras(active, fresh []store.Camera) []store.Camera {
 }
 
 func newerRevisionExists(before, after []store.Camera) bool {
+	if len(before) != len(after) {
+		return true
+	}
 	revisions := make(map[int64]int64, len(before))
 	for _, camera := range before {
 		revisions[camera.ID] = camera.PolicyState.DesiredRevision
 	}
 	for _, camera := range after {
-		if previous, ok := revisions[camera.ID]; !ok || camera.PolicyState.DesiredRevision > previous {
+		if previous, ok := revisions[camera.ID]; !ok || camera.PolicyState.DesiredRevision != previous {
 			return true
 		}
 	}

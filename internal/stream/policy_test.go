@@ -412,6 +412,34 @@ func TestStartupFailedFirstApplyAndMixedPendingCameraFailClosed(t *testing.T) {
 	}
 }
 
+func TestStartupPendingPolicyDoesNotRestoreDisabledCameraFromLastGood(t *testing.T) {
+	path := t.TempDir() + "/go2rtc.yaml"
+	if err := os.WriteFile(path+".last-good", []byte("streams:\n  disabled: rtsp://admin:secret@192.0.2.2/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	output.StreamName = "enabled-focus"
+	output.AppliedPolicy = store.CameraOutputPolicySnapshot{
+		SourceStreamID: output.SourceStreamID, SourceKey: output.SourceKey, VideoMode: output.VideoMode,
+		AudioMode: output.AudioMode, Activation: output.Activation,
+	}
+	enabled.Outputs = []store.CameraOutput{output}
+	enabled.PolicyState = store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyPending}
+	disabled := enabled
+	disabled.ID, disabled.Enabled, disabled.StreamName = 2, false, "disabled"
+
+	config, preserve, err := NewGo2RTC(path).startupConfig([]store.Camera{enabled, disabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preserve || strings.Contains(string(config), "disabled") || strings.Contains(string(config), "192.0.2.2") {
+		t.Fatalf("unsafe startup config preserve=%v config=%s", preserve, config)
+	}
+	if !strings.Contains(string(config), "enabled-focus") {
+		t.Fatalf("enabled applied stream missing: %s", config)
+	}
+}
+
 func policyFixture(codec, pixelFormat string, bitDepth, width, height int, fps float64) (store.Camera, store.CameraOutput) {
 	stream := store.CameraStream{
 		ID: 10, CameraID: 1, SourceKey: "recording", URL: "rtsp://user:pass@192.0.2.1/main",

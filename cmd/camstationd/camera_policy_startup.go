@@ -24,11 +24,11 @@ func startCameraPolicies(ctx context.Context, db startupCameraStore, streamer st
 	if err != nil {
 		return err
 	}
-	cameras = enabledCameraRows(cameras)
-	if len(cameras) == 0 {
+	enabled := enabledCameraRows(cameras)
+	if len(enabled) == 0 {
 		return streamer.Ensure(ctx, cameras)
 	}
-	if shouldBootstrapCameraPolicies(cameras) {
+	if shouldBootstrapCameraPolicies(enabled) {
 		result := applier.Apply(ctx)
 		if !result.Applied {
 			return fmt.Errorf("initial camera policy apply failed: %s", result.Error)

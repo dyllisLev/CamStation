@@ -74,6 +74,7 @@ func (g *Go2RTC) WriteConfig(cameras []store.Camera) error {
 }
 
 func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
+	hadDisabled := len(enabledCameras(cameras)) != len(cameras)
 	cameras = enabledCameras(cameras)
 	preserve := false
 	hasApplied := false
@@ -92,6 +93,16 @@ func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
 	}
 	if !preserve {
 		config, err := renderStartupConfig(cameras)
+		return config, false, err
+	}
+	if hadDisabled {
+		applied := make([]store.Camera, 0, len(cameras))
+		for _, camera := range cameras {
+			if camera.PolicyState.AppliedRevision > 0 {
+				applied = append(applied, camera)
+			}
+		}
+		config, err := renderStartupConfig(applied)
 		return config, false, err
 	}
 	for _, path := range []string{g.configPath + ".last-good", g.configPath} {

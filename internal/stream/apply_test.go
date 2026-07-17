@@ -286,6 +286,13 @@ func TestApplyCoordinatorStopsRecorderForDisabledCamera(t *testing.T) {
 	}
 }
 
+func TestNewerRevisionExistsDetectsEnabledCameraRemoval(t *testing.T) {
+	before := []store.Camera{{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 3}}}
+	if !newerRevisionExists(before, nil) {
+		t.Fatal("enabled camera removal was not detected")
+	}
+}
+
 func TestApplyCoordinatorKeepsNewRecorderRunningWhenFreshRevisionReadFails(t *testing.T) {
 	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
 	camera.Outputs = threeOutputs(output)

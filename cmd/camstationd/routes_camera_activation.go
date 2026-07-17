@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"camstation/internal/store"
 )
@@ -32,32 +34,39 @@ func (d routeDeps) registerCameraActivationRoutes(mux *http.ServeMux) {
 			return
 		}
 
+		d.activationMu.Lock()
+		defer d.activationMu.Unlock()
+		applyCtx, cancelApply := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+		defer cancelApply()
+
 		streamName := r.PathValue("streamName")
-		camera, err := d.db.GetCameraByStream(r.Context(), streamName)
+		camera, err := d.db.GetCameraByStream(applyCtx, streamName)
 		if err != nil || camera.StreamName != streamName {
 			writeSafeError(w, http.StatusNotFound, store.ErrNotFound)
 			return
 		}
-		if camera.Enabled == *req.Enabled {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"saved": true, "applied": true, "camera": publicCameraFromStore(camera, d.streamer.Status(r.Context())),
-			})
-			return
+		changed := camera.Enabled != *req.Enabled
+		if changed {
+			err = d.db.SetCameraEnabled(applyCtx, camera.StreamName, *req.Enabled)
 		}
-
-		if err := d.db.SetCameraEnabled(r.Context(), camera.StreamName, *req.Enabled); err != nil {
+		if err != nil {
 			writeSafeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		result := d.applyPolicies(r.Context())
+		result := d.applyPolicies(applyCtx)
 		if !result.Applied {
-			restoreErr := d.db.SetCameraEnabled(r.Context(), camera.StreamName, camera.Enabled)
+			recoveryCtx, cancelRecovery := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+			defer cancelRecovery()
+			var restoreErr error
+			if changed {
+				restoreErr = d.db.SetCameraEnabled(recoveryCtx, camera.StreamName, camera.Enabled)
+			}
 			recovery := result
 			if restoreErr == nil {
-				recovery = d.applyPolicies(r.Context())
+				recovery = d.applyPolicies(recoveryCtx)
 			}
-			fresh, _ := d.db.GetCameraByStream(r.Context(), camera.StreamName)
-			_ = d.db.AppendEvent(r.Context(), store.Event{
+			fresh, _ := d.db.GetCameraByStream(recoveryCtx, camera.StreamName)
+			_ = d.db.AppendEvent(recoveryCtx, store.Event{
 				Source: "camera", Level: "error", Message: "camera activation apply failed",
 				Details: map[string]any{"name": camera.Name, "stream": camera.StreamName, "enabled": *req.Enabled},
 			})
@@ -73,25 +82,25 @@ func (d routeDeps) registerCameraActivationRoutes(mux *http.ServeMux) {
 			return
 		}
 
-		fresh, err := d.db.GetCameraByStream(r.Context(), camera.StreamName)
+		fresh, err := d.db.GetCameraByStream(applyCtx, camera.StreamName)
 		if err != nil {
 			writeSafeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if d.recordingEnabled && d.recorderManager != nil {
-			cameras, listErr := d.db.ListCameras(r.Context(), true)
+			cameras, listErr := d.db.ListCameras(applyCtx, true)
 			if listErr != nil {
 				writeSafeError(w, http.StatusInternalServerError, listErr)
 				return
 			}
 			d.recorderManager.Reconcile(appliedRecordingCameras(cameras))
 		}
-		_ = d.db.AppendEvent(r.Context(), store.Event{
+		_ = d.db.AppendEvent(applyCtx, store.Event{
 			Source: "camera", Level: "info", Message: "camera activation changed",
 			Details: map[string]any{"name": fresh.Name, "stream": fresh.StreamName, "enabled": fresh.Enabled},
 		})
 		writeJSON(w, http.StatusOK, map[string]any{
-			"saved": true, "applied": true, "camera": publicCameraFromStore(fresh, d.streamer.Status(r.Context())),
+			"saved": true, "applied": true, "camera": publicCameraFromStore(fresh, d.streamer.Status(applyCtx)),
 		})
 	})
 }

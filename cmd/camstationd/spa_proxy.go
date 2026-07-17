@@ -49,8 +49,9 @@ type previewRegistry struct {
 }
 
 type previewStream struct {
-	URL       string
-	ExpiresAt time.Time
+	URL              string
+	CameraStreamName string
+	ExpiresAt        time.Time
 }
 
 func newPreviewRegistry() *previewRegistry {
@@ -58,25 +59,29 @@ func newPreviewRegistry() *previewRegistry {
 }
 
 func (p *previewRegistry) Put(rawURL string, ttl time.Duration) (string, time.Time) {
+	return p.PutForCamera(rawURL, "", ttl)
+}
+
+func (p *previewRegistry) PutForCamera(rawURL, cameraStreamName string, ttl time.Duration) (string, time.Time) {
 	expiresAt := time.Now().Add(ttl)
 	name := "camstation-preview-" + randomToken()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.streams[name] = previewStream{URL: rawURL, ExpiresAt: expiresAt}
+	p.streams[name] = previewStream{URL: rawURL, CameraStreamName: cameraStreamName, ExpiresAt: expiresAt}
 	p.cleanupLocked(time.Now())
 	return name, expiresAt
 }
 
-func (p *previewRegistry) Resolve(streamName string) (string, bool) {
+func (p *previewRegistry) Resolve(streamName string) (previewStream, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	now := time.Now()
 	p.cleanupLocked(now)
 	stream, ok := p.streams[streamName]
 	if !ok || now.After(stream.ExpiresAt) {
-		return "", false
+		return previewStream{}, false
 	}
-	return stream.URL, true
+	return stream, true
 }
 
 func (p *previewRegistry) cleanupLocked(now time.Time) {
@@ -132,8 +137,12 @@ func go2RTCProxy(previews *previewRegistry, registered func(context.Context, str
 				writeError(w, http.StatusForbidden, fmt.Errorf("player stream is not allowed"))
 				return
 			}
-			if rawURL, ok := previews.Resolve(sources[0]); ok {
-				r = r.WithContext(context.WithValue(r.Context(), previewURLContextKey{}, rawURL))
+			if preview, ok := previews.Resolve(sources[0]); ok {
+				if preview.CameraStreamName != "" && (registered == nil || !registered(r.Context(), preview.CameraStreamName)) {
+					writeError(w, http.StatusForbidden, fmt.Errorf("player stream is not allowed"))
+					return
+				}
+				r = r.WithContext(context.WithValue(r.Context(), previewURLContextKey{}, preview.URL))
 			} else if registered == nil || !registered(r.Context(), sources[0]) {
 				writeError(w, http.StatusForbidden, fmt.Errorf("player stream is not allowed"))
 				return
