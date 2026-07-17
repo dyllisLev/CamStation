@@ -159,12 +159,18 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 }
 
 func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
-	script, err := publicDesktopShortcutScript(
-		`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`,
-		`C:\Program Files\CamStation Viewer`,
-	)
+	bootstrapPath := `C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`
+	installDir := `C:\Program Files\CamStation Viewer`
+	script, environment, err := publicDesktopShortcutScript(bootstrapPath, installDir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantEnvironment := []string{
+		`CAMSTATION_VIEWER_SHORTCUT_ICON=C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`,
+		`CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY=C:\Program Files\CamStation Viewer`,
+	}
+	if !reflect.DeepEqual(environment, wantEnvironment) {
+		t.Fatalf("shortcut environment=%q want=%q", environment, wantEnvironment)
 	}
 	for _, required := range []string{
 		"CommonDesktopDirectory",
@@ -172,24 +178,53 @@ func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
 		"schtasks.exe",
 		`/Run /TN "CamStationViewer"`,
 		"CreateShortcut",
-		"IconLocation",
-		"WorkingDirectory",
+		`$link.IconLocation=$env:CAMSTATION_VIEWER_SHORTCUT_ICON+',0'`,
+		`$link.WorkingDirectory=$env:CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY`,
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("shortcut script missing %q: %s", required, script)
+		}
+	}
+	for _, forbidden := range []string{"$args", bootstrapPath, installDir} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("shortcut script embeds %q: %s", forbidden, script)
+		}
+	}
+}
+
+func TestPublicDesktopShortcutRejectsRelativeEnvironmentSources(t *testing.T) {
+	for _, test := range []struct {
+		bootstrapPath string
+		installDir    string
+	}{
+		{bootstrapPath: `viewer\CamStationViewerBootstrap.exe`, installDir: `C:\Program Files\CamStation Viewer`},
+		{bootstrapPath: `C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, installDir: `viewer`},
+	} {
+		_, environment, err := publicDesktopShortcutScript(test.bootstrapPath, test.installDir)
+		if err == nil || environment != nil {
+			t.Fatalf("bootstrap=%q installDir=%q environment=%q err=%v", test.bootstrapPath, test.installDir, environment, err)
 		}
 	}
 }
 
 func TestPublicDesktopShortcutRemovalOwnsOnlyExactLink(t *testing.T) {
 	script := removePublicDesktopShortcutScript()
-	for _, required := range []string{"CommonDesktopDirectory", "CamStation Viewer.lnk", "-LiteralPath", "SilentlyContinue"} {
+	for _, required := range []string{
+		"CommonDesktopDirectory",
+		"CamStation Viewer.lnk",
+		"throw 'public desktop is unavailable'",
+		"Test-Path -LiteralPath $path -ErrorAction Stop",
+		"Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop",
+		"Remove-Item -LiteralPath $path -Force -ErrorAction Stop",
+	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("removal script missing %q: %s", required, script)
 		}
 	}
-	if strings.Contains(script, "*.lnk") {
-		t.Fatalf("removal script uses a broad shortcut pattern: %s", script)
+	for _, forbidden := range []string{"*.lnk", "SilentlyContinue"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("removal script contains %q: %s", forbidden, script)
+		}
 	}
 }
 

@@ -149,11 +149,11 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 	if _, err := runWindows(ctx, "schtasks.exe", "/Create", "/TN", RecoveryTaskName, "/XML", recoveryTaskFile, "/F"); err != nil {
 		return "", err
 	}
-	shortcutScript, err := publicDesktopShortcutScript(stableBootstrapPath(layout), layout.InstallDir)
+	shortcutScript, shortcutEnvironment, err := publicDesktopShortcutScript(stableBootstrapPath(layout), layout.InstallDir)
 	if err != nil {
 		return "", err
 	}
-	if _, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", shortcutScript, stableBootstrapPath(layout), layout.InstallDir); err != nil {
+	if _, err := runWindowsEnv(ctx, shortcutEnvironment, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", shortcutScript); err != nil {
 		return "", fmt.Errorf("register public desktop shortcut: %w", err)
 	}
 	for _, dir := range []string{layout.InstallDir, layout.StateDir} {
@@ -347,7 +347,12 @@ func validateRegistered(ctx context.Context, _ Layout) error {
 }
 
 func runWindows(ctx context.Context, name string, args ...string) (string, error) {
+	return runWindowsEnv(ctx, nil, name, args...)
+}
+
+func runWindowsEnv(ctx context.Context, environment []string, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
+	command.Env = append(command.Environ(), environment...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
