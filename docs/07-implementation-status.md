@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -137,6 +137,10 @@ This document records the current implementation state so the next session can c
   - shows segment length and temp-to-recordings policy
 - Camera administration page at `/cameras`:
   - shows registered cameras and their role streams
+  - stores a persistent active/inactive state per camera and exposes an activation toggle in the registered-camera table
+  - inactive cameras remain editable but are removed from go2rtc configuration, playback, preview, probe, PTZ, recorder reconciliation, and automatic retry paths
+  - operational dashboards, stream lists, counts, and `/live` render only active cameras; disabling an open camera closes its preview/focus/PTZ session without retargeting controls
+  - activation applies serially with bounded request-independent recovery, and startup fails closed instead of restoring a last-good configuration containing an inactive camera
   - uses one active camera workflow for registration or editing
   - scans a device and shows saved profile-template matches
   - lets an operator save a camera from selected recording/live streams
