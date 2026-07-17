@@ -18,9 +18,10 @@ function ControlRoomDashboard() {
   const recorders = useRecorderStatus();
   const storage = useRecordingStorage();
   const events = useEvents();
-  const [previewCamera, setPreviewCamera] = useState<CameraModel | null>(null);
+  const [previewStreamName, setPreviewStreamName] = useState<string | null>(null);
 
   const cameraRows = cameras.data?.filter((camera) => camera.enabled) ?? [];
+  const previewCamera = cameraRows.find((camera) => camera.streamName === previewStreamName) ?? null;
   const recorderWorkers = recorders.data?.workers ?? [];
   const recentErrors = (events.data ?? []).filter((event) => event.level === "error").length;
   const online = cameraRows.filter((camera) => camera.state === "streaming").length;
@@ -117,7 +118,7 @@ function ControlRoomDashboard() {
                         <td className="max-w-80 truncate px-3 py-3 text-slate-400">{recentError}</td>
                         <td className="px-3 py-3">
                           <div className="new-control-actions">
-                            <button className="new-ghost" type="button" onClick={() => setPreviewCamera(camera)}>
+                            <button className="new-ghost" type="button" onClick={() => setPreviewStreamName(camera.streamName)}>
                               <Eye size={14} />
                               보기
                             </button>
@@ -188,7 +189,7 @@ function ControlRoomDashboard() {
       </section>
 
       {previewCamera && (
-        <CameraPreviewModal camera={previewCamera} onClose={() => setPreviewCamera(null)} />
+        <CameraPreviewModal camera={previewCamera} onClose={() => setPreviewStreamName(null)} />
       )}
     </div>
   );
