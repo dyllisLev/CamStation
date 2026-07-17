@@ -1,8 +1,12 @@
 package vieweragent
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -31,6 +35,76 @@ func TestStateFilesReplaceAtomicallyAndRejectOversize(t *testing.T) {
 	}
 	if _, err := LoadMachineState(path); err == nil {
 		t.Fatal("oversized state file was accepted")
+	}
+}
+
+func TestOpenStateFileWithRetryRecoversTransientLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transient := errors.New("sharing violation")
+	attempts := 0
+	sleeps := 0
+	file, err := openStateFileWithRetry(
+		func() (*os.File, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, fmt.Errorf("open attempt %d: %w", attempts, transient)
+			}
+			return os.Open(path)
+		},
+		func(err error) bool { return errors.Is(err, transient) },
+		func(delay time.Duration) {
+			if delay != stateFileOpenRetryDelay {
+				t.Fatalf("retry delay=%v want=%v", delay, stateFileOpenRetryDelay)
+			}
+			sleeps++
+		},
+	)
+	if err != nil || attempts != 3 || sleeps != 2 {
+		t.Fatalf("file=%v attempts=%d sleeps=%d err=%v", file, attempts, sleeps, err)
+	}
+	contents, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || string(contents) != `{"schemaVersion":1}` {
+		t.Fatalf("contents=%q readErr=%v closeErr=%v", contents, readErr, closeErr)
+	}
+}
+
+func TestOpenStateFileWithRetryReturnsNonretryableErrorImmediately(t *testing.T) {
+	denied := errors.New("access denied")
+	attempts := 0
+	sleeps := 0
+	file, err := openStateFileWithRetry(
+		func() (*os.File, error) {
+			attempts++
+			return nil, fmt.Errorf("open state: %w", denied)
+		},
+		func(error) bool { return false },
+		func(time.Duration) { sleeps++ },
+	)
+	if file != nil || !errors.Is(err, denied) || attempts != 1 || sleeps != 0 {
+		t.Fatalf("file=%v attempts=%d sleeps=%d err=%v", file, attempts, sleeps, err)
+	}
+}
+
+func TestOpenStateFileWithRetryExhaustionIsBoundedAndWrapsLastCause(t *testing.T) {
+	attempts := 0
+	totalSleep := time.Duration(0)
+	var lastErr error
+	file, err := openStateFileWithRetry(
+		func() (*os.File, error) {
+			attempts++
+			lastErr = fmt.Errorf("sharing violation attempt %d", attempts)
+			return nil, lastErr
+		},
+		func(error) bool { return true },
+		func(delay time.Duration) { totalSleep += delay },
+	)
+	wantSleep := time.Duration(stateFileOpenAttempts-1) * stateFileOpenRetryDelay
+	if file != nil || attempts != stateFileOpenAttempts || totalSleep != wantSleep || totalSleep > 500*time.Millisecond || !errors.Is(err, lastErr) || !strings.Contains(err.Error(), fmt.Sprintf("after %d attempts", stateFileOpenAttempts)) {
+		t.Fatalf("file=%v attempts=%d totalSleep=%v lastErr=%v err=%v", file, attempts, totalSleep, lastErr, err)
 	}
 }
 
