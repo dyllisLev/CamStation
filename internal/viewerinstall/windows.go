@@ -239,16 +239,36 @@ func UnregisterAll(ctx context.Context, layout Layout) error {
 }
 
 func ActiveConsoleUserSID(ctx context.Context) (string, error) {
-	script := `$u=(Get-CimInstance Win32_ComputerSystem).UserName; if(!$u){exit 2}; (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value`
-	output, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	shell := windows.GetShellWindow()
+	if shell == 0 {
+		return "", errors.New("interactive desktop session is required")
+	}
+	var processID uint32
+	if _, err := windows.GetWindowThreadProcessId(shell, &processID); err != nil {
+		return "", fmt.Errorf("interactive shell process lookup failed: %w", err)
+	}
+	return interactiveShellSID(processID, shellProcessUserSID)
+}
+
+func shellProcessUserSID(processID uint32) (string, error) {
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, processID)
 	if err != nil {
-		return "", errors.New("active console user is required")
+		return "", err
 	}
-	sid := strings.TrimSpace(output)
-	if !validTaskSID(sid) {
-		return "", errors.New("active console user SID is invalid")
+	defer windows.CloseHandle(process)
+	var token windows.Token
+	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
+		return "", err
 	}
-	return sid, nil
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
 }
 
 func accountSID(ctx context.Context, account string) (string, error) {

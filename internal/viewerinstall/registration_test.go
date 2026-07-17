@@ -88,6 +88,30 @@ func TestDisableAndStopKeepsRunningBootRecoveryProcessAlive(t *testing.T) {
 	}
 }
 
+func TestInteractiveShellSIDUsesShellProcessOwner(t *testing.T) {
+	var selectedPID uint32
+	sid, err := interactiveShellSID(77, func(pid uint32) (string, error) {
+		selectedPID = pid
+		return "S-1-5-21-1000", nil
+	})
+	if err != nil || sid != "S-1-5-21-1000" || selectedPID != 77 {
+		t.Fatalf("sid=%q selectedPID=%d err=%v", sid, selectedPID, err)
+	}
+}
+
+func TestInteractiveShellSIDRejectsMissingShellAndInvalidOwner(t *testing.T) {
+	if _, err := interactiveShellSID(0, func(uint32) (string, error) {
+		return "S-1-5-21-1000", nil
+	}); err == nil || !strings.Contains(err.Error(), "interactive desktop session") {
+		t.Fatalf("missing shell err=%v", err)
+	}
+	if _, err := interactiveShellSID(77, func(uint32) (string, error) {
+		return "not-a-sid", nil
+	}); err == nil || !strings.Contains(err.Error(), "SID is invalid") {
+		t.Fatalf("invalid SID err=%v", err)
+	}
+}
+
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {

@@ -179,6 +179,21 @@ func validTaskSID(value string) bool {
 	return true
 }
 
+func interactiveShellSID(shellPID uint32, lookup func(uint32) (string, error)) (string, error) {
+	if shellPID == 0 {
+		return "", errors.New("interactive desktop session is required")
+	}
+	sid, err := lookup(shellPID)
+	if err != nil {
+		return "", fmt.Errorf("interactive shell user lookup failed: %w", err)
+	}
+	sid = strings.TrimSpace(sid)
+	if !validTaskSID(sid) {
+		return "", errors.New("interactive shell user SID is invalid")
+	}
+	return sid, nil
+}
+
 func stableHostPath(layout Layout) string {
 	return filepath.Join(layout.InstallDir, "CamStationViewerHost.exe")
 }
