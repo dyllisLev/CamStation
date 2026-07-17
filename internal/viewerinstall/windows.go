@@ -149,6 +149,13 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 	if _, err := runWindows(ctx, "schtasks.exe", "/Create", "/TN", RecoveryTaskName, "/XML", recoveryTaskFile, "/F"); err != nil {
 		return "", err
 	}
+	shortcutScript, err := publicDesktopShortcutScript(stableBootstrapPath(layout), layout.InstallDir)
+	if err != nil {
+		return "", err
+	}
+	if _, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", shortcutScript, stableBootstrapPath(layout), layout.InstallDir); err != nil {
+		return "", fmt.Errorf("register public desktop shortcut: %w", err)
+	}
 	for _, dir := range []string{layout.InstallDir, layout.StateDir} {
 		if _, err := runWindows(ctx, "icacls.exe", dir, "/inheritance:r", "/grant:r", `SYSTEM:(OI)(CI)F`, `BUILTIN\Administrators:(OI)(CI)F`, options.MonitoringUserSID+`:(OI)(CI)RX`); err != nil {
 			return "", err
@@ -233,6 +240,10 @@ func UnregisterAll(ctx context.Context, layout Layout) error {
 			return err
 		})
 	}
+	deletes = append(deletes, func(ctx context.Context) error {
+		_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", removePublicDesktopShortcutScript())
+		return err
+	})
 	return unregisterSequence(ctx, func(ctx context.Context) error {
 		return disableAndStopRegistered(ctx, layout)
 	}, deletes...)

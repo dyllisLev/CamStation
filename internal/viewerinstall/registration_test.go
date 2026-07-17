@@ -158,6 +158,41 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 	}
 }
 
+func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
+	script, err := publicDesktopShortcutScript(
+		`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`,
+		`C:\Program Files\CamStation Viewer`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"CommonDesktopDirectory",
+		"CamStation Viewer.lnk",
+		"schtasks.exe",
+		`/Run /TN "CamStationViewer"`,
+		"CreateShortcut",
+		"IconLocation",
+		"WorkingDirectory",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("shortcut script missing %q: %s", required, script)
+		}
+	}
+}
+
+func TestPublicDesktopShortcutRemovalOwnsOnlyExactLink(t *testing.T) {
+	script := removePublicDesktopShortcutScript()
+	for _, required := range []string{"CommonDesktopDirectory", "CamStation Viewer.lnk", "-LiteralPath", "SilentlyContinue"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("removal script missing %q: %s", required, script)
+		}
+	}
+	if strings.Contains(script, "*.lnk") {
+		t.Fatalf("removal script uses a broad shortcut pattern: %s", script)
+	}
+}
+
 func TestStagedViewerLogonTaskRemainsDisabledUntilReleaseActivation(t *testing.T) {
 	taskXML, err := viewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123", false)
 	if err != nil {

@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	ServiceName      = "CamStationViewerAgent"
-	ViewerTaskName   = "CamStationViewer"
-	RecoveryTaskName = "CamStationViewerRecovery"
+	ServiceName        = "CamStationViewerAgent"
+	ViewerTaskName     = "CamStationViewer"
+	RecoveryTaskName   = "CamStationViewerRecovery"
+	viewerShortcutName = "CamStation Viewer.lnk"
 )
 
 type RegistrationOptions struct {
@@ -108,6 +109,26 @@ func disableAndStopScript() string {
 func validateRegisteredScript() string {
 	return `$s=Get-Service -Name '` + ServiceName + `' -ErrorAction Stop; if($s.Status -ne 'Running'){exit 2}; ` +
 		`$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction Stop; if($t.State -ne 'Running'){exit 3}`
+}
+
+func publicDesktopShortcutScript(bootstrapPath, installDir string) (string, error) {
+	if !absolutePlatformPath(bootstrapPath) || !absolutePlatformPath(installDir) {
+		return "", errors.New("invalid Viewer shortcut paths")
+	}
+	return `$desktop=[Environment]::GetFolderPath('CommonDesktopDirectory'); if(!$desktop){throw 'public desktop is unavailable'}; ` +
+		`$path=[IO.Path]::Combine($desktop,'` + viewerShortcutName + `'); ` +
+		`$link=(New-Object -ComObject WScript.Shell).CreateShortcut($path); ` +
+		`$link.TargetPath=[IO.Path]::Combine($env:SystemRoot,'System32','schtasks.exe'); ` +
+		`$link.Arguments='/Run /TN "` + ViewerTaskName + `"'; ` +
+		`$link.IconLocation=$args[0]+',0'; $link.WorkingDirectory=$args[1]; ` +
+		`$link.Description='CamStation Viewer'; $link.Save(); ` +
+		`if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'shortcut was not created'}`, nil
+}
+
+func removePublicDesktopShortcutScript() string {
+	return `$desktop=[Environment]::GetFolderPath('CommonDesktopDirectory'); ` +
+		`if($desktop){$path=[IO.Path]::Combine($desktop,'` + viewerShortcutName + `'); ` +
+		`Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}`
 }
 
 func SCMRecoveryActions() []RecoveryAction {
