@@ -213,6 +213,13 @@ func TestInteractiveShellSIDRejectsMissingShellAndInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestNumericSIDACLGrantUsesLiteralSID(t *testing.T) {
+	const sid = "S-1-5-21-1972825288-2833176235-1431433953-1002"
+	if got, want := numericSIDACLGrant(sid), `*S-1-5-21-1972825288-2833176235-1431433953-1002:(OI)(CI)RX`; got != want {
+		t.Fatalf("numeric SID ACL grant=%q want=%q", got, want)
+	}
+}
+
 func TestParseServiceSIDAcceptsLocalizedLabelsAndNoise(t *testing.T) {
 	want := "S-1-5-80-996217163-872380615-1856343041-12470791-3549172787"
 	for name, output := range map[string]string{

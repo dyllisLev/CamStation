@@ -157,7 +157,7 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 		return "", fmt.Errorf("register public desktop shortcut: %w", err)
 	}
 	for _, dir := range []string{layout.InstallDir, layout.StateDir} {
-		if _, err := runWindows(ctx, "icacls.exe", dir, "/inheritance:r", "/grant:r", `SYSTEM:(OI)(CI)F`, `BUILTIN\Administrators:(OI)(CI)F`, options.MonitoringUserSID+`:(OI)(CI)RX`); err != nil {
+		if _, err := runWindows(ctx, "icacls.exe", dir, "/inheritance:r", "/grant:r", `SYSTEM:(OI)(CI)F`, `BUILTIN\Administrators:(OI)(CI)F`, numericSIDACLGrant(options.MonitoringUserSID)); err != nil {
 			return "", err
 		}
 	}

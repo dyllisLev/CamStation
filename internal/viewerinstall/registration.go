@@ -284,6 +284,10 @@ func validTaskSID(value string) bool {
 	return true
 }
 
+func numericSIDACLGrant(sid string) string {
+	return "*" + sid + `:(OI)(CI)RX`
+}
+
 func interactiveShellSID(shellPID uint32, lookup func(uint32) (string, error)) (string, error) {
 	if shellPID == 0 {
 		return "", errors.New("interactive desktop session is required")
