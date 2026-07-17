@@ -130,6 +130,10 @@ func (d routeDeps) streamCamera(w http.ResponseWriter, r *http.Request) (store.C
 		writeError(w, http.StatusNotFound, fmt.Errorf("stream not found: %s", streamName))
 		return store.Camera{}, false
 	}
+	if !cameraRow.Enabled {
+		writeCameraDisabled(w)
+		return store.Camera{}, false
+	}
 	return cameraRow, true
 }
 

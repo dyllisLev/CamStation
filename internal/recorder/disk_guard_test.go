@@ -23,7 +23,7 @@ func TestRecorderPausesBeforeStartingFFmpeg_whenDiskUsageIsAtLimit(t *testing.T)
 	t.Cleanup(manager.StopAll)
 
 	// When: recording is started for a camera.
-	if err := manager.Start(store.Camera{ID: 1, Name: "Front", StreamName: "front"}); err != nil {
+	if err := manager.Start(store.Camera{ID: 1, Name: "Front", StreamName: "front", Enabled: true}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 

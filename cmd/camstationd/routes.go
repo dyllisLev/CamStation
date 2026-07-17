@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"camstation/internal/backup"
@@ -57,6 +58,7 @@ type routeDeps struct {
 	recordingEnabled  bool
 	cameraController  cameraControlService
 	presetLocks       *cameraPresetLockSet
+	activationMu      *sync.Mutex
 }
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunnerOpt ...*backup.Runner) (http.Handler, error) {
@@ -96,6 +98,9 @@ func (d routeDeps) handler() (http.Handler, error) {
 	}
 	if d.presetLocks == nil {
 		d.presetLocks = &cameraPresetLockSet{}
+	}
+	if d.activationMu == nil {
+		d.activationMu = &sync.Mutex{}
 	}
 	if d.viewerReleasesDir == "" {
 		d.viewerReleasesDir = filepath.Join(filepath.Dir(d.recordingsDir), "viewer-releases")

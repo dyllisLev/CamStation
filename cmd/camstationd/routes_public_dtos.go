@@ -16,6 +16,7 @@ type publicCamera struct {
 	LiveStreamName      string                          `json:"liveStreamName,omitempty"`
 	FocusStreamName     string                          `json:"focusStreamName,omitempty"`
 	State               string                          `json:"state"`
+	Enabled             bool                            `json:"enabled"`
 	ProfileTemplateID   *int64                          `json:"profileTemplateId,omitempty"`
 	Manufacturer        string                          `json:"manufacturer,omitempty"`
 	Model               string                          `json:"model,omitempty"`
@@ -186,6 +187,7 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 		LiveStreamName:      camera.LiveStreamName,
 		FocusStreamName:     camera.FocusStreamName,
 		State:               camera.State,
+		Enabled:             camera.Enabled,
 		ProfileTemplateID:   camera.ProfileTemplateID,
 		Manufacturer:        camera.Manufacturer,
 		Model:               camera.Model,

@@ -190,6 +190,17 @@ export function useDeleteCamera() {
   });
 }
 
+export function useSetCameraEnabled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ streamName, enabled }: { readonly streamName: string; readonly enabled: boolean }) =>
+      api.setCameraEnabled(streamName, enabled),
+    onSuccess: async () => {
+      await Promise.all(CAMERA_POLICY_INVALIDATION_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    },
+  });
+}
+
 export function useScanCamera() {
   return useMutation({
     mutationFn: (camera: CameraScanRequest) => api.scanCamera(camera),

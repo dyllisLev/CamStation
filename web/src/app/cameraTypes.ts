@@ -7,6 +7,7 @@ export type Health = {
 export type Camera = {
   name: string;
   streamName: string;
+  enabled: boolean;
   layoutKey?: string;
   recordingStreamName?: string;
   liveStreamName?: string;

@@ -103,6 +103,10 @@ func (d routeDeps) registerCameraProfileRoutes(mux *http.ServeMux, previews *pre
 			writeSafeError(w, http.StatusNotFound, err)
 			return
 		}
+		if !existing.Enabled {
+			writeCameraDisabled(w)
+			return
+		}
 		var incoming cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			writeSafeError(w, http.StatusBadRequest, err)
@@ -147,6 +151,10 @@ func (d routeDeps) registerCameraProfileRoutes(mux *http.ServeMux, previews *pre
 			writeSafeError(w, http.StatusNotFound, err)
 			return
 		}
+		if !existing.Enabled {
+			writeCameraDisabled(w)
+			return
+		}
 		var req cameraPreviewRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeSafeError(w, http.StatusBadRequest, err)
@@ -182,7 +190,7 @@ func (d routeDeps) registerCameraProfileRoutes(mux *http.ServeMux, previews *pre
 			writeSafeError(w, http.StatusBadRequest, fmt.Errorf("preview profile candidate not found"))
 			return
 		}
-		streamName, expiresAt := previews.Put(candidates[0].URL, 10*time.Minute)
+		streamName, expiresAt := previews.PutForCamera(candidates[0].URL, existing.StreamName, 10*time.Minute)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"streamName": streamName,
 			"expiresAt":  expiresAt.UTC().Format(time.RFC3339),

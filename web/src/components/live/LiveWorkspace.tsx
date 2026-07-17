@@ -45,7 +45,7 @@ export function LiveWorkspace() {
   const deleteLayout = useDeleteLayout();
   const updateLayout = useUpdateLayout();
   const refreshCameraControls = useRefreshCameraControls();
-  const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
+  const rows = useMemo(() => cameras.data?.filter((camera) => camera.enabled) ?? [], [cameras.data]);
   const layouts = useMemo(() => layoutsQuery.data ?? [], [layoutsQuery.data]);
   const [layout, setLayout] = useState<MonitorLayoutItem[]>([]);
   const [currentId, setCurrentId] = useState<string>("");
@@ -58,7 +58,7 @@ export function LiveWorkspace() {
   const [zoomedStream, setZoomedStream] = useState<string | null>(null);
   const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
-  const selectedCamera = rows.find((camera) => camera.streamName === selectedStream) ?? rows[0];
+  const selectedCamera = rows.find((camera) => camera.streamName === selectedStream);
   const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
   const layoutInitializedRef = useRef(false);
   const refreshAttemptedRef = useRef(new Set<string>());
@@ -101,6 +101,20 @@ export function LiveWorkspace() {
   useEffect(() => {
     if (selectedStream || rows.length === 0) return;
     setSelectedStream(rows[0].streamName);
+  }, [rows, selectedStream]);
+
+  useEffect(() => {
+    if (!selectedStream || rows.some((camera) => camera.streamName === selectedStream)) return;
+    let active = true;
+    setZoomedStream(null);
+    void ptzStopRef.current().finally(() => {
+      if (!active) return;
+      setPtzPanelOpen(false);
+      setSelectedStream(rows[0]?.streamName ?? "");
+    });
+    return () => {
+      active = false;
+    };
   }, [rows, selectedStream]);
 
   useEffect(() => {

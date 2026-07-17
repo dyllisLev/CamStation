@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Camera, DeviceProfile } from "../app/api";
-import { useCameras } from "../app/queries";
+import { useCameras, useSetCameraEnabled } from "../app/queries";
 import { Button } from "../components/ui/button";
 import { CameraWorkflow } from "./cameras/CameraWorkflow";
 import { CameraSummary } from "./cameras/CameraSummary";
@@ -14,6 +14,7 @@ type CameraWorkflowMode = "create" | "edit";
 
 export function CamerasPage() {
   const cameras = useCameras();
+  const setCameraEnabled = useSetCameraEnabled();
   const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
   const [lastProfile, setLastProfile] = useState<DeviceProfile | null>(null);
   const [profileDraftSource, setProfileDraftSource] = useState<ProfileTemplateDraftSource | null>(null);
@@ -37,6 +38,16 @@ export function CamerasPage() {
         cameras={rows}
         selectedStreamName={selectedCamera?.streamName ?? null}
         onSelectCamera={selectCamera}
+        onSetEnabled={(streamName, enabled) => setCameraEnabled.mutate({ streamName, enabled })}
+        activationPending={setCameraEnabled.isPending}
+        activationPendingStreamName={setCameraEnabled.isPending ? setCameraEnabled.variables?.streamName ?? null : null}
+        activationNotice={
+          setCameraEnabled.isError
+            ? setCameraEnabled.error instanceof Error
+              ? setCameraEnabled.error.message
+              : "카메라 운영 상태를 변경하지 못했습니다."
+            : setCameraEnabled.data?.warning
+        }
       />
       <div className="new-camera-actions">
         <Button type="button" variant={activeMode === "create" ? "primary" : "secondary"} onClick={() => setWorkflowMode("create")}>

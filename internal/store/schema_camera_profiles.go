@@ -10,6 +10,7 @@ func (d *DB) ensureCameraProfileSchema(ctx context.Context) error {
 		{"layout_key", "TEXT NOT NULL DEFAULT ''"},
 		{"recording_stream_name", "TEXT NOT NULL DEFAULT ''"},
 		{"live_stream_name", "TEXT NOT NULL DEFAULT ''"},
+		{"enabled", "INTEGER NOT NULL DEFAULT 1"},
 		{"profile_template_id", "INTEGER"},
 		{"manufacturer", "TEXT NOT NULL DEFAULT ''"},
 		{"model", "TEXT NOT NULL DEFAULT ''"},

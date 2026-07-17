@@ -106,6 +106,9 @@ func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int, opts .
 func (m *Manager) Reconcile(cameras []store.Camera) {
 	wanted := map[string]store.Camera{}
 	for _, camera := range cameras {
+		if !camera.Enabled {
+			continue
+		}
 		camera = recordingCamera(camera)
 		if camera.StreamName == "" {
 			continue
@@ -187,6 +190,9 @@ type recordSpec struct {
 }
 
 func recordingSpec(camera store.Camera, rtspBase string) (recordSpec, error) {
+	if !camera.Enabled {
+		return recordSpec{}, fmt.Errorf("camera is disabled")
+	}
 	audioMode := store.CameraAudioSource
 	for _, output := range camera.Outputs {
 		if output.Purpose == store.CameraOutputRecording && output.AppliedPolicy.SourceKey != "" {

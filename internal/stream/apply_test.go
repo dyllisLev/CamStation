@@ -240,7 +240,7 @@ func TestLastGoodFinalizeFailureInvalidatesStaleConfigAndStartupUsesCurrentAppli
 	if err == nil || !lastGoodInvariantPreserved(err) {
 		t.Fatalf("commit error = %v, want safe invalidation warning", err)
 	}
-	camera := store.Camera{PolicyState: store.CameraPolicyState{
+	camera := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{
 		DesiredRevision: 3, AppliedRevision: 2, ApplyState: store.CameraApplyPending,
 	}}
 	config, preserve, err := g.startupConfig([]store.Camera{camera})
@@ -262,6 +262,34 @@ func TestApplyCoordinatorAppliesEmptyConfigAfterFinalCameraDeletion(t *testing.T
 	}
 	if len(recorder.active) != 0 {
 		t.Fatalf("deleted recorder restored: %+v", recorder.active)
+	}
+}
+
+func TestApplyCoordinatorStopsRecorderForDisabledCamera(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Enabled = false
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: camera.ID, DesiredRevision: 1, AppliedRevision: 1, ApplyState: store.CameraApplyApplied}
+	db := &fakePolicyStore{camera: camera}
+	runtime := &fakePolicyRuntime{}
+	recorder := &fakeRecorderHandoff{active: []store.Camera{{ID: camera.ID, Enabled: true, StreamName: "camera-recording"}}}
+
+	result := NewApplyCoordinator(db, runtime, recorder).Apply(t.Context())
+	if !result.Applied || result.Error != "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(recorder.active) != 0 {
+		t.Fatalf("disabled recorder restored: %+v", recorder.active)
+	}
+	if len(runtime.configs) != 1 || strings.Contains(string(runtime.configs[0]), "camera-recording") {
+		t.Fatalf("disabled runtime config = %q", runtime.configs)
+	}
+}
+
+func TestNewerRevisionExistsDetectsEnabledCameraRemoval(t *testing.T) {
+	before := []store.Camera{{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 3}}}
+	if !newerRevisionExists(before, nil) {
+		t.Fatal("enabled camera removal was not detected")
 	}
 }
 

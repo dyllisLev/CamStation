@@ -28,6 +28,27 @@ func TestCameraPolicyFreshDefaults(t *testing.T) {
 	}
 }
 
+func TestCameraActivationPersistsAndOrdinaryUpsertPreservesIt(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.UpsertCamera(t.Context(), Camera{
+		Name: "yard", URL: "rtsp://camera/main", StreamName: "yard", State: "unknown",
+	})
+	if err != nil || !camera.Enabled {
+		t.Fatalf("new camera enabled=%v err=%v", camera.Enabled, err)
+	}
+	if err := db.SetCameraEnabled(t.Context(), camera.StreamName, false); err != nil {
+		t.Fatal(err)
+	}
+	camera.Name = "yard renamed"
+	if _, err := db.UpsertCamera(t.Context(), camera); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetCameraByStream(t.Context(), camera.StreamName)
+	if err != nil || got.Enabled {
+		t.Fatalf("disabled camera=%#v err=%v", got, err)
+	}
+}
+
 func TestCameraPolicyLegacyMigrationIsIdempotent(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "legacy.db"))
 	if err != nil {

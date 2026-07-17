@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"camstation/internal/store"
 )
 
 func TestGo2RTCProxyAllowsOnlyRegisteredPublicStreamNames(t *testing.T) {
 	cameras := []store.Camera{{
+		Enabled:             true,
 		StreamName:          "yard",
 		RecordingStreamName: "yard-recording",
 		LiveStreamName:      "yard-live",
@@ -58,6 +60,27 @@ func TestGo2RTCProxyRejectsUnregisteredWebSocketSourceBeforeProxying(t *testing.
 	}
 	if !registrationChecked {
 		t.Fatal("registration callback was not reached")
+	}
+}
+
+func TestGo2RTCProxyRejectsRegisteredPreviewAfterCameraIsDisabled(t *testing.T) {
+	previews := newPreviewRegistry()
+	previewName, _ := previews.PutForCamera("rtsp://admin:secret@192.0.2.10/main", "yard", 10*time.Minute)
+	proxy, err := go2RTCProxy(previews, func(_ context.Context, streamName string) bool {
+		return streamName != "yard"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/ws?src="+previewName, nil)
+	req.Host = "camstation.local:18080"
+	req.Header.Set("Origin", "http://camstation.local:18080")
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 

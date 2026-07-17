@@ -23,8 +23,9 @@ export function StreamsPage() {
   const probeStream = useProbeStream();
 
   const runtime = streams.data?.streams ?? {};
-  const rows = buildStreamRows(cameras.data ?? [], runtime);
-  const configuredCount = (cameras.data ?? []).filter((camera) => camera.streamName !== "").length;
+  const enabledCameras = (cameras.data ?? []).filter((camera) => camera.enabled);
+  const rows = buildStreamRows(enabledCameras, runtime);
+  const configuredCount = enabledCameras.filter((camera) => camera.streamName !== "").length;
   const runtimeCount = Object.keys(runtime).length;
   const runningCount = rows.filter((row) => row.runtime?.state === "running").length;
   const producerCount = rows.reduce((total, row) => total + (row.runtime?.producerCount ?? 0), 0);

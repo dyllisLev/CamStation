@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -183,6 +184,33 @@ func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
 	}
 }
 
+func TestRenderPolicyConfigOmitsDisabledCamera(t *testing.T) {
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	enabled.Enabled = true
+	enabled.Outputs = []store.CameraOutput{output}
+	disabled := enabled
+	disabled.ID = 2
+	disabled.Enabled = false
+	disabled.StreamName = "disabled"
+	disabled.Streams = append([]store.CameraStream(nil), enabled.Streams...)
+	disabled.Streams[0].ID = 20
+	disabled.Streams[0].CameraID = disabled.ID
+	disabled.Streams[0].URL = "rtsp://secret@192.0.2.2/main"
+	disabled.Outputs = append([]store.CameraOutput(nil), enabled.Outputs...)
+	disabled.Outputs[0].CameraID = disabled.ID
+	disabled.Outputs[0].SourceStreamID = disabled.Streams[0].ID
+	disabled.Outputs[0].StreamName = "disabled-focus"
+
+	config, _, err := renderPolicyConfig([]store.Camera{enabled, disabled}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	if strings.Contains(text, "disabled-focus") || strings.Contains(text, "192.0.2.2") || strings.Contains(text, PrivateSourceName(disabled.ID, disabled.Streams[0].ID)) {
+		t.Fatalf("disabled camera rendered: %s", text)
+	}
+}
+
 func TestPrivateInputProducerUsesRestartableCopyRelay(t *testing.T) {
 	for _, tc := range []struct {
 		name, rawURL, want string
@@ -345,7 +373,7 @@ func TestStartupPendingPolicyUsesLastGoodConfigInsteadOfNewDesiredInput(t *testi
 		t.Fatal(err)
 	}
 	g := NewGo2RTC(path)
-	camera := store.Camera{PolicyState: store.CameraPolicyState{
+	camera := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{
 		DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyPending,
 	}}
 	config, preserve, err := g.startupConfig([]store.Camera{camera})
@@ -372,16 +400,81 @@ func TestStartupFailedFirstApplyAndMixedPendingCameraFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := NewGo2RTC(path)
-	failed := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}
+	failed := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}
 	config, preserve, err := g.startupConfig([]store.Camera{failed})
 	if err != nil || !preserve || string(config) != "verified-config\n" {
 		t.Fatalf("failed first apply startup = %q preserve=%v err=%v", config, preserve, err)
 	}
-	existing := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 3, AppliedRevision: 3, ApplyState: store.CameraApplyApplied}}
-	newPending := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
+	existing := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 3, AppliedRevision: 3, ApplyState: store.CameraApplyApplied}}
+	newPending := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
 	config, preserve, err = g.startupConfig([]store.Camera{existing, newPending})
 	if err != nil || !preserve || string(config) != "verified-config\n" {
 		t.Fatalf("mixed pending startup = %q preserve=%v err=%v", config, preserve, err)
+	}
+}
+
+func TestStartupPendingPolicyDoesNotRestoreDisabledCameraFromLastGood(t *testing.T) {
+	path := t.TempDir() + "/go2rtc.yaml"
+	if err := os.WriteFile(path+".last-good", []byte("streams:\n  disabled: rtsp://admin:secret@192.0.2.2/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	output.StreamName = "enabled-focus"
+	output.AppliedPolicy = store.CameraOutputPolicySnapshot{
+		SourceStreamID: output.SourceStreamID, SourceKey: output.SourceKey, VideoMode: output.VideoMode,
+		AudioMode: output.AudioMode, Activation: output.Activation,
+	}
+	enabled.Outputs = []store.CameraOutput{output}
+	enabled.PolicyState = store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyPending}
+	disabled := enabled
+	disabled.ID, disabled.Enabled, disabled.StreamName = 2, false, "disabled"
+
+	config, preserve, err := NewGo2RTC(path).startupConfig([]store.Camera{enabled, disabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preserve || strings.Contains(string(config), "disabled") || strings.Contains(string(config), "192.0.2.2") {
+		t.Fatalf("unsafe startup config preserve=%v config=%s", preserve, config)
+	}
+	if !strings.Contains(string(config), "enabled-focus") {
+		t.Fatalf("enabled applied stream missing: %s", config)
+	}
+}
+
+func TestEnsureFailsClosedWithoutRestartingDisabledLastGood(t *testing.T) {
+	path := t.TempDir() + "/go2rtc.yaml"
+	unsafe := []byte("streams:\n  disabled: rtsp://admin:secret@192.0.2.2/main\n")
+	if err := os.WriteFile(path, unsafe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".last-good", unsafe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	enabled.Outputs = []store.CameraOutput{output}
+	disabled := enabled
+	disabled.ID, disabled.Enabled, disabled.StreamName = 2, false, "disabled"
+	restarts := 0
+
+	err := NewGo2RTC(path).ensure(t.Context(), []store.Camera{enabled, disabled}, func(context.Context) error {
+		restarts++
+		if restarts == 1 {
+			return fmt.Errorf("safe config failed health check")
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected safe startup failure")
+	}
+	if restarts != 1 {
+		t.Fatalf("restart calls=%d, previous unsafe config was restarted", restarts)
+	}
+	config, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(config), "disabled") || strings.Contains(string(config), "192.0.2.2") {
+		t.Fatalf("unsafe config restored: %s", config)
 	}
 }
 
@@ -398,5 +491,5 @@ func policyFixture(codec, pixelFormat string, bitDepth, width, height int, fps f
 		SourceKey: "recording", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone,
 		Activation: store.CameraActivationOnDemand,
 	}
-	return store.Camera{ID: 1, StreamName: "camera", Streams: []store.CameraStream{stream}}, output
+	return store.Camera{ID: 1, Enabled: true, StreamName: "camera", Streams: []store.CameraStream{stream}}, output
 }

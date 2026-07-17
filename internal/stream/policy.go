@@ -115,6 +115,7 @@ func resolveOutputWithEffective(camera store.Camera, output store.CameraOutput, 
 }
 
 func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
+	cameras = enabledCameras(cameras)
 	resolved := make(map[int64][]resolvedOutput, len(cameras))
 	results := make(map[int64][]store.CameraOutputApplyResult, len(cameras))
 	for _, camera := range cameras {
@@ -208,6 +209,16 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 		buf.WriteString("  {}\n")
 	}
 	return buf.Bytes(), results, nil
+}
+
+func enabledCameras(cameras []store.Camera) []store.Camera {
+	enabled := make([]store.Camera, 0, len(cameras))
+	for _, camera := range cameras {
+		if camera.Enabled {
+			enabled = append(enabled, camera)
+		}
+	}
+	return enabled
 }
 
 func privateInputProducer(rawURL string) string {

@@ -70,13 +70,13 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 		return PolicyApplyResult{Error: ctx.Err().Error()}
 	}
 	for {
-		cameras, err := c.db.ListCameras(ctx, true)
+		allCameras, err := c.db.ListCameras(ctx, true)
 		if err != nil {
 			return PolicyApplyResult{Error: err.Error()}
 		}
 		if expected != nil {
 			matched := false
-			for _, camera := range cameras {
+			for _, camera := range allCameras {
 				if camera.ID == expected.cameraID {
 					matched = camera.PolicyState.DesiredRevision == expected.revision
 					break
@@ -87,6 +87,7 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 			}
 			expected = nil
 		}
+		cameras := enabledCameras(allCameras)
 		config, results, err := renderPolicyConfig(cameras, false)
 		if err != nil {
 			c.markFailed(ctx, cameras, err)
@@ -140,7 +141,7 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 			applied := lastGoodInvariantPreserved(commitErr)
 			return PolicyApplyResult{Applied: applied, RecoveryFailed: !applied, Error: commitErr.Error()}
 		}
-		if !newerRevisionExists(cameras, fresh) {
+		if !newerRevisionExists(cameras, enabledCameras(fresh)) {
 			return PolicyApplyResult{Applied: true}
 		}
 	}
@@ -201,12 +202,15 @@ func freshActiveCameras(active, fresh []store.Camera) []store.Camera {
 }
 
 func newerRevisionExists(before, after []store.Camera) bool {
+	if len(before) != len(after) {
+		return true
+	}
 	revisions := make(map[int64]int64, len(before))
 	for _, camera := range before {
 		revisions[camera.ID] = camera.PolicyState.DesiredRevision
 	}
 	for _, camera := range after {
-		if previous, ok := revisions[camera.ID]; !ok || camera.PolicyState.DesiredRevision > previous {
+		if previous, ok := revisions[camera.ID]; !ok || camera.PolicyState.DesiredRevision != previous {
 			return true
 		}
 	}
@@ -227,6 +231,30 @@ func (g *Go2RTC) applyConfig(ctx context.Context, config []byte, restart func(co
 		return err
 	}
 	return tx.Commit()
+}
+
+func (g *Go2RTC) applyConfigFailClosed(ctx context.Context, config []byte, restart func(context.Context) error) error {
+	g.applyMu.Lock()
+	defer g.applyMu.Unlock()
+
+	if err := writeFileAtomic(g.configPath, config); err != nil {
+		return err
+	}
+	if err := restart(ctx); err != nil {
+		return err
+	}
+	lastGoodPath := g.configPath + ".last-good"
+	if err := writeFileAtomic(lastGoodPath, config); err != nil {
+		invalidateErr := os.Remove(lastGoodPath)
+		if invalidateErr == nil || errors.Is(invalidateErr, os.ErrNotExist) {
+			return &lastGoodCommitError{err: err, invariantSafe: true}
+		}
+		return &lastGoodCommitError{
+			err:           fmt.Errorf("%v; stale last-good invalidation failed: %w", err, invalidateErr),
+			invariantSafe: false,
+		}
+	}
+	return nil
 }
 
 func (g *Go2RTC) PrepareConfig(ctx context.Context, config []byte) (runtimeConfigTransaction, error) {
