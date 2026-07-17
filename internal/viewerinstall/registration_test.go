@@ -213,6 +213,52 @@ func TestInteractiveShellSIDRejectsMissingShellAndInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestParseServiceSIDAcceptsLocalizedLabelsAndNoise(t *testing.T) {
+	want := "S-1-5-80-996217163-872380615-1856343041-12470791-3549172787"
+	for name, output := range map[string]string{
+		"English label": "NAME: CamStationViewerAgent\r\nSERVICE SID: " + want + "\r\n",
+		"Korean label":  "이름: CamStationViewerAgent\r\n서비스 SID: " + want + "\r\n",
+		"noise":         "[SC] OpenService SUCCESS 0\nignored=1060\ncandidate=(" + want + ")\ncompleted",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseServiceSID(output)
+			if err != nil || got != want {
+				t.Fatalf("parseServiceSID()=%q, %v; want %q", got, err, want)
+			}
+		})
+	}
+}
+
+func TestParseServiceSIDRejectsInvalidNamespaceShapeRangeAndMultiplicity(t *testing.T) {
+	valid := "S-1-5-80-996217163-872380615-1856343041-12470791-3549172787"
+	for name, output := range map[string]string{
+		"missing":         "SERVICE SID: unavailable",
+		"invalid":         "SERVICE SID: S-1-5-80-1-2-three-4-5",
+		"wrong namespace": "SERVICE SID: S-1-5-21-1-2-3-4-5",
+		"too few":         "SERVICE SID: S-1-5-80-1-2-3-4",
+		"too many":        "SERVICE SID: S-1-5-80-1-2-3-4-5-6",
+		"uint32 overflow": "SERVICE SID: S-1-5-80-1-2-3-4-4294967296",
+		"embedded token":  "SERVICE SID: prefix" + valid + "suffix",
+		"multiple":        valid + "\nS-1-5-80-1-2-3-4-5",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if sid, err := parseServiceSID(output); err == nil {
+				t.Fatalf("parseServiceSID()=%q accepted unsafe output %q", sid, output)
+			}
+		})
+	}
+}
+
+func TestResolveServiceSIDDistinguishesExecutionAndParseFailures(t *testing.T) {
+	commandErr := errors.New("sc showsid failed")
+	if _, err := resolveServiceSID("", commandErr); !errors.Is(err, commandErr) || !strings.Contains(err.Error(), "lookup failed") {
+		t.Fatalf("execution error=%v, want preserved lookup failure", err)
+	}
+	if _, err := resolveServiceSID("SERVICE SID: invalid", nil); !errors.Is(err, errInvalidServiceSIDOutput) || !strings.Contains(err.Error(), "parse failed") {
+		t.Fatalf("parse error=%v, want preserved parse failure", err)
+	}
+}
+
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {

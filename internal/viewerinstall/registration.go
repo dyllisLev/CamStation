@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +19,11 @@ const (
 	viewerShortcutName                = "CamStation Viewer.lnk"
 	viewerShortcutIconEnv             = "CAMSTATION_VIEWER_SHORTCUT_ICON"
 	viewerShortcutWorkingDirectoryEnv = "CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY"
+)
+
+var (
+	errInvalidServiceSIDOutput = errors.New("invalid service SID output")
+	serviceSIDPattern          = regexp.MustCompile(`S-[0-9]+(?:-[0-9]+)+`)
 )
 
 type RegistrationOptions struct {
@@ -101,6 +108,49 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 		result = errors.Join(result, remove(ctx))
 	}
 	return result
+}
+
+func parseServiceSID(output string) (string, error) {
+	candidates := make([]string, 0, 1)
+	for _, match := range serviceSIDPattern.FindAllStringIndex(output, -1) {
+		if (match[0] > 0 && serviceSIDTokenByte(output[match[0]-1])) || (match[1] < len(output) && serviceSIDTokenByte(output[match[1]])) {
+			continue
+		}
+		candidate := output[match[0]:match[1]]
+		parts := strings.Split(candidate, "-")
+		if len(parts) != 9 || parts[0] != "S" || parts[1] != "1" || parts[2] != "5" || parts[3] != "80" {
+			continue
+		}
+		valid := true
+		for _, part := range parts[4:] {
+			if _, err := strconv.ParseUint(part, 10, 32); err != nil {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if len(candidates) != 1 {
+		return "", fmt.Errorf("%w: expected one exact service SID, found %d", errInvalidServiceSIDOutput, len(candidates))
+	}
+	return candidates[0], nil
+}
+
+func resolveServiceSID(output string, commandErr error) (string, error) {
+	if commandErr != nil {
+		return "", fmt.Errorf("service SID lookup failed: %w", commandErr)
+	}
+	sid, err := parseServiceSID(output)
+	if err != nil {
+		return "", fmt.Errorf("service SID parse failed: %w", err)
+	}
+	return sid, nil
+}
+
+func serviceSIDTokenByte(value byte) bool {
+	return value == '-' || (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
 }
 
 func disableAndStopScript() string {

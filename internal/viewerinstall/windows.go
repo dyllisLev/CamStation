@@ -123,7 +123,7 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 	if _, err := runWindows(ctx, "sc.exe", "sidtype", ServiceName, "unrestricted"); err != nil {
 		return "", err
 	}
-	serviceSID, err := accountSID(ctx, `NT SERVICE\`+ServiceName)
+	serviceSID, err := accountSID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -277,17 +277,9 @@ func shellProcessUserSID(processID uint32) (string, error) {
 	return user.User.Sid.String(), nil
 }
 
-func accountSID(ctx context.Context, account string) (string, error) {
-	script := `(New-Object Security.Principal.NTAccount($args[0])).Translate([Security.Principal.SecurityIdentifier]).Value`
-	output, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, account)
-	if err != nil {
-		return "", errors.New("service SID lookup failed")
-	}
-	sid := strings.TrimSpace(output)
-	if !validTaskSID(sid) {
-		return "", errors.New("service SID is invalid")
-	}
-	return sid, nil
+func accountSID(ctx context.Context) (string, error) {
+	output, err := runWindows(ctx, "sc.exe", "showsid", ServiceName)
+	return resolveServiceSID(output, err)
 }
 
 func stopRegistered(ctx context.Context, _ Layout) error {
