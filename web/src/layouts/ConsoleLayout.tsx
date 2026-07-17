@@ -56,7 +56,7 @@ export function ConsoleLayout() {
   const health = useHealth();
   const cameras = useCameras();
   const streams = useStreamStatus();
-  const online = cameras.data?.filter((camera) => camera.state === "streaming").length ?? 0;
+  const online = cameras.data?.filter((camera) => camera.enabled && camera.state === "streaming").length ?? 0;
   const title = t(titles[location.pathname] ?? "controlRoom");
   const isLiveWorkspace = location.pathname === "/live";
 

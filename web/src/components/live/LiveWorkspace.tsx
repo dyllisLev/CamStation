@@ -45,7 +45,7 @@ export function LiveWorkspace() {
   const deleteLayout = useDeleteLayout();
   const updateLayout = useUpdateLayout();
   const refreshCameraControls = useRefreshCameraControls();
-  const rows = useMemo(() => cameras.data ?? [], [cameras.data]);
+  const rows = useMemo(() => cameras.data?.filter((camera) => camera.enabled) ?? [], [cameras.data]);
   const layouts = useMemo(() => layoutsQuery.data ?? [], [layoutsQuery.data]);
   const [layout, setLayout] = useState<MonitorLayoutItem[]>([]);
   const [currentId, setCurrentId] = useState<string>("");

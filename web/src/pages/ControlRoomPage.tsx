@@ -20,7 +20,7 @@ function ControlRoomDashboard() {
   const events = useEvents();
   const [previewCamera, setPreviewCamera] = useState<CameraModel | null>(null);
 
-  const cameraRows = cameras.data ?? [];
+  const cameraRows = cameras.data?.filter((camera) => camera.enabled) ?? [];
   const recorderWorkers = recorders.data?.workers ?? [];
   const recentErrors = (events.data ?? []).filter((event) => event.level === "error").length;
   const online = cameraRows.filter((camera) => camera.state === "streaming").length;

@@ -62,6 +62,11 @@ export const cameraApi = {
     }),
   deleteCamera: (streamName: string) =>
     request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}`, { method: "DELETE" }),
+  setCameraEnabled: (streamName: string, enabled: boolean) =>
+    request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/enabled`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
   updateStreamOutputs: (streamName: string, input: UpdateStreamOutputsRequest) =>
     request<StreamOutputMutationResponse>(`/api/cameras/${encodeURIComponent(streamName)}/stream-outputs`, {
       method: "PUT",
