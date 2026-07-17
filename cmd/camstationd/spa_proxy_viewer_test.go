@@ -11,6 +11,7 @@ import (
 
 func TestGo2RTCProxyAllowsOnlyRegisteredPublicStreamNames(t *testing.T) {
 	cameras := []store.Camera{{
+		Enabled:             true,
 		StreamName:          "yard",
 		RecordingStreamName: "yard-recording",
 		LiveStreamName:      "yard-live",

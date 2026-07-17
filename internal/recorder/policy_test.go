@@ -9,7 +9,7 @@ import (
 
 func TestRecordingSpecUsesAppliedOutputAndNeverRawCameraURL(t *testing.T) {
 	camera := store.Camera{
-		ID: 7, StreamName: "legacy", URL: "rtsp://admin:secret@192.0.2.8/raw",
+		ID: 7, Enabled: true, StreamName: "legacy", URL: "rtsp://admin:secret@192.0.2.8/raw",
 		Outputs: []store.CameraOutput{{
 			Purpose: store.CameraOutputRecording, StreamName: "server-owned-recording",
 			VideoMode: store.CameraVideoH264, AudioMode: store.CameraAudioNone,
@@ -77,13 +77,20 @@ func TestRestoreActivePrevalidatesAllCamerasBeforeStartingAnyWorker(t *testing.T
 	manager := New(nil, t.TempDir(), t.TempDir(), 5)
 	t.Cleanup(manager.StopAll)
 	err := manager.RestoreActive([]store.Camera{
-		{ID: 1, StreamName: "valid"},
-		{ID: 2},
+		{ID: 1, Enabled: true, StreamName: "valid"},
+		{ID: 2, Enabled: true},
 	})
 	if err == nil {
 		t.Fatal("expected malformed second camera to fail validation")
 	}
 	if workers := manager.Status().Workers; len(workers) != 0 {
 		t.Fatalf("partial workers started: %+v", workers)
+	}
+}
+
+func TestRecordingSpecRejectsDisabledCamera(t *testing.T) {
+	_, err := recordingSpec(store.Camera{Enabled: false, StreamName: "disabled"}, "rtsp://127.0.0.1:8554")
+	if err == nil {
+		t.Fatal("disabled camera recording was accepted")
 	}
 }

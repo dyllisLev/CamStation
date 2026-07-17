@@ -77,6 +77,10 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 			writeSafeError(w, http.StatusNotFound, err)
 			return
 		}
+		if !cameraRow.Enabled {
+			writeCameraDisabled(w)
+			return
+		}
 		release, err := withCameraNetworkSlot(r.Context())
 		if err != nil {
 			writeSafeError(w, http.StatusTooManyRequests, err)
@@ -102,6 +106,10 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 		cameraRow, err := d.db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
 		if err != nil {
 			writeSafeError(w, http.StatusNotFound, err)
+			return
+		}
+		if !cameraRow.Enabled {
+			writeCameraDisabled(w)
 			return
 		}
 		var req reapplyStreamOutputsRequest
@@ -149,6 +157,9 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 		}
 		defer release()
 		for _, cameraRow := range cameras {
+			if !cameraRow.Enabled {
+				continue
+			}
 			if err := d.probeInputs(r.Context(), cameraRow); err != nil {
 				writeSafeError(w, http.StatusInternalServerError, err)
 				return
@@ -156,6 +167,9 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 		}
 		result := d.applyPolicies(r.Context())
 		for _, cameraRow := range cameras {
+			if !cameraRow.Enabled {
+				continue
+			}
 			if err := d.probeOutputs(r.Context(), cameraRow.StreamName); err != nil {
 				writeSafeError(w, http.StatusInternalServerError, err)
 				return

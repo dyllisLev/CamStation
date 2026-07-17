@@ -118,6 +118,11 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	if err := validatePublicOutputSourceKeys(req.StreamOutputs); err != nil {
 		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: %v", errBadCameraProfileRequest, err)
 	}
+	var existing store.Camera
+	if stableStreamName != "" {
+		existing, _ = db.GetCameraByStream(ctx, stableStreamName)
+	}
+	probeEnabled := existing.ID == 0 || existing.Enabled
 
 	profile := req.Profile
 	if req.SaveProfileTemplate != nil {
@@ -137,7 +142,7 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 		profile = mergeTemplateIntoDeviceProfile(profile, template, req)
 	}
 	scanReq := scanRequestFromCamera(req)
-	if !hasProfileCandidateURLs(profile) && len(req.Streams) == 0 && scanReqHasTarget(scanReq) {
+	if probeEnabled && !hasProfileCandidateURLs(profile) && len(req.Streams) == 0 && scanReqHasTarget(scanReq) {
 		scanned, err := newCameraProfileScanner().Scan(ctx, scanReq)
 		if err != nil {
 			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: %v", errCameraProfileScanFailed, err)
@@ -168,12 +173,8 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	if primaryURL == "" {
 		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: url or stream candidates are required", errBadCameraProfileRequest)
 	}
-	if prober == nil {
+	if probeEnabled && prober == nil {
 		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("camera prober unavailable")
-	}
-	var existing store.Camera
-	if stableStreamName != "" {
-		existing, _ = db.GetCameraByStream(ctx, stableStreamName)
 	}
 	streams := toStoreStreams(req.Stream, candidates, "unknown")
 	if len(streams) == 0 && existing.ID != 0 {
@@ -187,13 +188,24 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 			return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: unsafe resolved stream target", errBadCameraProfileRequest)
 		}
 	}
-	result, probeErr := prober.Probe(ctx, primaryURL, 12*time.Second)
-	state := "streaming"
-	if probeErr != nil {
-		state = "offline"
+	var result camera.ProbeResult
+	var probeErr error
+	state := existing.State
+	if state == "" {
+		state = "unknown"
+	}
+	if probeEnabled {
+		result, probeErr = prober.Probe(ctx, primaryURL, 12*time.Second)
+		state = "streaming"
+		if probeErr != nil {
+			state = "offline"
+		}
 	}
 	for i := range streams {
 		streams[i].State = state
+		if !probeEnabled {
+			continue
+		}
 		var inputResult camera.ProbeResult
 		var inputErr error
 		if streams[i].URL == primaryURL {
@@ -202,6 +214,10 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 			inputResult, inputErr = prober.Probe(ctx, streams[i].URL, 12*time.Second)
 		}
 		applyProbeResultToInput(&streams[i], inputResult, inputErr)
+	}
+	lastProbe := toMap(result)
+	if !probeEnabled {
+		lastProbe = existing.LastProbeJSON
 	}
 	outputs := requestedCameraOutputs(req.StreamOutputs, streams)
 	if len(req.StreamOutputs) == 0 && existing.ID != 0 {
@@ -222,7 +238,7 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 		HTTPPort:          firstNonZero(profile.HTTPPort, scanReq.HTTPPort),
 		ONVIFPort:         firstNonZero(profile.ONVIFPort, scanReq.ONVIFPort),
 		ChannelIndex:      req.ChannelIndex,
-		LastProbeJSON:     toMap(result),
+		LastProbeJSON:     lastProbe,
 		LastScanJSON:      profile.LastScan,
 	}
 	if existing.ID != 0 {

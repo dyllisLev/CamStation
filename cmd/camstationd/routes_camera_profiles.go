@@ -103,6 +103,10 @@ func (d routeDeps) registerCameraProfileRoutes(mux *http.ServeMux, previews *pre
 			writeSafeError(w, http.StatusNotFound, err)
 			return
 		}
+		if !existing.Enabled {
+			writeCameraDisabled(w)
+			return
+		}
 		var incoming cameraCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			writeSafeError(w, http.StatusBadRequest, err)
@@ -145,6 +149,10 @@ func (d routeDeps) registerCameraProfileRoutes(mux *http.ServeMux, previews *pre
 		existing, err := d.db.GetCameraByStream(r.Context(), r.PathValue("streamName"))
 		if err != nil {
 			writeSafeError(w, http.StatusNotFound, err)
+			return
+		}
+		if !existing.Enabled {
+			writeCameraDisabled(w)
 			return
 		}
 		var req cameraPreviewRequest

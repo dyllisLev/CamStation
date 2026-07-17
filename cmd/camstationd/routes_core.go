@@ -127,6 +127,10 @@ func (d routeDeps) registerCoreRoutes(mux *http.ServeMux) {
 				writeError(w, http.StatusNotFound, fmt.Errorf("camera stream not found: %s", streamName))
 				return
 			}
+			if !camera.Enabled {
+				writeCameraDisabled(w)
+				return
+			}
 			if err := d.recorderManager.Start(camera); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return

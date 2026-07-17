@@ -6,6 +6,7 @@ func (d routeDeps) registerCameraRoutes(mux *http.ServeMux, previews *previewReg
 	d.registerCameraProfileTemplateRoutes(mux)
 	d.registerCameraProfileRoutes(mux, previews)
 	d.registerCameraMutationRoutes(mux)
+	d.registerCameraActivationRoutes(mux)
 	d.registerCameraStreamOutputRoutes(mux)
 	d.registerCameraControlRoutes(mux)
 }

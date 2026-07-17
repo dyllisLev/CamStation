@@ -21,8 +21,12 @@ type startupRecorder interface {
 
 func startCameraPolicies(ctx context.Context, db startupCameraStore, streamer startupStreamer, applier policyApplier, recorders startupRecorder, recordingEnabled bool) error {
 	cameras, err := db.ListCameras(ctx, true)
-	if err != nil || len(cameras) == 0 {
+	if err != nil {
 		return err
+	}
+	cameras = enabledCameraRows(cameras)
+	if len(cameras) == 0 {
+		return streamer.Ensure(ctx, cameras)
 	}
 	if shouldBootstrapCameraPolicies(cameras) {
 		result := applier.Apply(ctx)
@@ -45,6 +49,9 @@ func startCameraPolicies(ctx context.Context, db startupCameraStore, streamer st
 func appliedRecordingCameras(cameras []store.Camera) []store.Camera {
 	applied := make([]store.Camera, 0, len(cameras))
 	for _, camera := range cameras {
+		if !camera.Enabled {
+			continue
+		}
 		if camera.PolicyState.AppliedRevision == 0 {
 			continue
 		}
@@ -56,6 +63,16 @@ func appliedRecordingCameras(cameras []store.Camera) []store.Camera {
 		}
 	}
 	return applied
+}
+
+func enabledCameraRows(cameras []store.Camera) []store.Camera {
+	enabled := make([]store.Camera, 0, len(cameras))
+	for _, camera := range cameras {
+		if camera.Enabled {
+			enabled = append(enabled, camera)
+		}
+	}
+	return enabled
 }
 
 func shouldBootstrapCameraPolicies(cameras []store.Camera) bool {

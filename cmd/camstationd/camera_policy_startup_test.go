@@ -34,7 +34,7 @@ type startupRecorderFake struct{ reconciled []store.Camera }
 func (f *startupRecorderFake) Reconcile(cameras []store.Camera) { f.reconciled = cameras }
 
 func TestStartCameraPoliciesBootstrapsAllZeroPendingThroughCoordinatorAndReloads(t *testing.T) {
-	pending := store.Camera{ID: 1, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
+	pending := store.Camera{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
 	applied := pending
 	applied.PolicyState.AppliedRevision = 1
 	applied.PolicyState.ApplyState = store.CameraApplyApplied
@@ -66,10 +66,10 @@ func TestStartCameraPoliciesDoesNotAutoApplyMixedOrFailedPolicies(t *testing.T) 
 		wantRecorders int
 	}{
 		{"mixed", []store.Camera{
-			{ID: 1, PolicyState: store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 2, ApplyState: store.CameraApplyApplied}, Outputs: []store.CameraOutput{{Purpose: store.CameraOutputRecording, AppliedPolicy: store.CameraOutputPolicySnapshot{SourceKey: "recording"}}}},
-			{ID: 2, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}},
+			{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 2, AppliedRevision: 2, ApplyState: store.CameraApplyApplied}, Outputs: []store.CameraOutput{{Purpose: store.CameraOutputRecording, AppliedPolicy: store.CameraOutputPolicySnapshot{SourceKey: "recording"}}}},
+			{ID: 2, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}},
 		}, 1},
-		{"failed", []store.Camera{{ID: 1, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}}, 0},
+		{"failed", []store.Camera{{ID: 1, Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}}, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

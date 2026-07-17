@@ -183,6 +183,33 @@ func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
 	}
 }
 
+func TestRenderPolicyConfigOmitsDisabledCamera(t *testing.T) {
+	enabled, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	enabled.Enabled = true
+	enabled.Outputs = []store.CameraOutput{output}
+	disabled := enabled
+	disabled.ID = 2
+	disabled.Enabled = false
+	disabled.StreamName = "disabled"
+	disabled.Streams = append([]store.CameraStream(nil), enabled.Streams...)
+	disabled.Streams[0].ID = 20
+	disabled.Streams[0].CameraID = disabled.ID
+	disabled.Streams[0].URL = "rtsp://secret@192.0.2.2/main"
+	disabled.Outputs = append([]store.CameraOutput(nil), enabled.Outputs...)
+	disabled.Outputs[0].CameraID = disabled.ID
+	disabled.Outputs[0].SourceStreamID = disabled.Streams[0].ID
+	disabled.Outputs[0].StreamName = "disabled-focus"
+
+	config, _, err := renderPolicyConfig([]store.Camera{enabled, disabled}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	if strings.Contains(text, "disabled-focus") || strings.Contains(text, "192.0.2.2") || strings.Contains(text, PrivateSourceName(disabled.ID, disabled.Streams[0].ID)) {
+		t.Fatalf("disabled camera rendered: %s", text)
+	}
+}
+
 func TestPrivateInputProducerUsesRestartableCopyRelay(t *testing.T) {
 	for _, tc := range []struct {
 		name, rawURL, want string
@@ -345,7 +372,7 @@ func TestStartupPendingPolicyUsesLastGoodConfigInsteadOfNewDesiredInput(t *testi
 		t.Fatal(err)
 	}
 	g := NewGo2RTC(path)
-	camera := store.Camera{PolicyState: store.CameraPolicyState{
+	camera := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{
 		DesiredRevision: 2, AppliedRevision: 1, ApplyState: store.CameraApplyPending,
 	}}
 	config, preserve, err := g.startupConfig([]store.Camera{camera})
@@ -372,13 +399,13 @@ func TestStartupFailedFirstApplyAndMixedPendingCameraFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := NewGo2RTC(path)
-	failed := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}
+	failed := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyFailed}}
 	config, preserve, err := g.startupConfig([]store.Camera{failed})
 	if err != nil || !preserve || string(config) != "verified-config\n" {
 		t.Fatalf("failed first apply startup = %q preserve=%v err=%v", config, preserve, err)
 	}
-	existing := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 3, AppliedRevision: 3, ApplyState: store.CameraApplyApplied}}
-	newPending := store.Camera{PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
+	existing := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 3, AppliedRevision: 3, ApplyState: store.CameraApplyApplied}}
+	newPending := store.Camera{Enabled: true, PolicyState: store.CameraPolicyState{DesiredRevision: 1, AppliedRevision: 0, ApplyState: store.CameraApplyPending}}
 	config, preserve, err = g.startupConfig([]store.Camera{existing, newPending})
 	if err != nil || !preserve || string(config) != "verified-config\n" {
 		t.Fatalf("mixed pending startup = %q preserve=%v err=%v", config, preserve, err)
@@ -398,5 +425,5 @@ func policyFixture(codec, pixelFormat string, bitDepth, width, height int, fps f
 		SourceKey: "recording", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone,
 		Activation: store.CameraActivationOnDemand,
 	}
-	return store.Camera{ID: 1, StreamName: "camera", Streams: []store.CameraStream{stream}}, output
+	return store.Camera{ID: 1, Enabled: true, StreamName: "camera", Streams: []store.CameraStream{stream}}, output
 }

@@ -156,6 +156,9 @@ func isRegisteredPublicStream(cameras []store.Camera, streamName string) bool {
 		return false
 	}
 	for _, camera := range cameras {
+		if !camera.Enabled {
+			continue
+		}
 		for _, publicName := range []string{camera.StreamName, camera.RecordingStreamName, camera.LiveStreamName, camera.FocusStreamName} {
 			if streamName == publicName && publicName != "" {
 				return true

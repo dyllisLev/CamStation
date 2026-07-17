@@ -74,6 +74,7 @@ func (g *Go2RTC) WriteConfig(cameras []store.Camera) error {
 }
 
 func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
+	cameras = enabledCameras(cameras)
 	preserve := false
 	hasApplied := false
 	for _, camera := range cameras {

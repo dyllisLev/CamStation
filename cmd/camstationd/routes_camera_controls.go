@@ -361,6 +361,9 @@ func (d routeDeps) controlCamera(ctx context.Context, streamName string) (store.
 	if err != nil || camera.StreamName != streamName {
 		return store.Camera{}, sql.ErrNoRows
 	}
+	if !camera.Enabled {
+		return store.Camera{}, errCameraDisabled
+	}
 	return camera, nil
 }
 
@@ -393,6 +396,8 @@ func writeCameraControlError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "카메라 인증에 실패했습니다."})
 	case errors.Is(err, sql.ErrNoRows):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "등록된 카메라를 찾을 수 없습니다."})
+	case errors.Is(err, errCameraDisabled):
+		writeCameraDisabled(w)
 	default:
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "카메라 제어를 사용할 수 없습니다."})
 	}

@@ -70,13 +70,13 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 		return PolicyApplyResult{Error: ctx.Err().Error()}
 	}
 	for {
-		cameras, err := c.db.ListCameras(ctx, true)
+		allCameras, err := c.db.ListCameras(ctx, true)
 		if err != nil {
 			return PolicyApplyResult{Error: err.Error()}
 		}
 		if expected != nil {
 			matched := false
-			for _, camera := range cameras {
+			for _, camera := range allCameras {
 				if camera.ID == expected.cameraID {
 					matched = camera.PolicyState.DesiredRevision == expected.revision
 					break
@@ -87,6 +87,7 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 			}
 			expected = nil
 		}
+		cameras := enabledCameras(allCameras)
 		config, results, err := renderPolicyConfig(cameras, false)
 		if err != nil {
 			c.markFailed(ctx, cameras, err)
@@ -140,7 +141,7 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 			applied := lastGoodInvariantPreserved(commitErr)
 			return PolicyApplyResult{Applied: applied, RecoveryFailed: !applied, Error: commitErr.Error()}
 		}
-		if !newerRevisionExists(cameras, fresh) {
+		if !newerRevisionExists(cameras, enabledCameras(fresh)) {
 			return PolicyApplyResult{Applied: true}
 		}
 	}
