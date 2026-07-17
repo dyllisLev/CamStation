@@ -218,32 +218,27 @@ func windowsRecoveryActions() ([]mgr.RecoveryAction, error) {
 }
 
 func UnregisterAll(ctx context.Context, layout Layout) error {
-	commands := [][]string{
-		{"schtasks.exe", "/Delete", "/TN", ViewerTaskName, "/F"},
-		{"schtasks.exe", "/Delete", "/TN", RecoveryTaskName, "/F"},
-		{"sc.exe", "delete", ServiceName},
-		{"reg.exe", "delete", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`, "/f"},
-	}
-	deletes := make([]func(context.Context) error, 0, len(commands))
-	for _, command := range commands {
-		command := command
-		deletes = append(deletes, func(ctx context.Context) error {
-			_, err := runWindows(ctx, command[0], command[1:]...)
-			if err == nil {
-				return nil
-			}
-			// Missing registrations are already in the desired uninstall state.
-			lower := strings.ToLower(err.Error())
-			if strings.Contains(lower, "1060") || strings.Contains(lower, "cannot find") || strings.Contains(lower, "not exist") {
-				return nil
-			}
+	deletes := []func(context.Context) error{
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", unregisterScheduledTasksScript())
 			return err
-		})
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "sc.exe", "delete", ServiceName)
+			if err != nil && !strings.Contains(err.Error(), "1060") {
+				return err
+			}
+			return nil
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", unregisterUninstallRegistryScript())
+			return err
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", removePublicDesktopShortcutScript())
+			return err
+		},
 	}
-	deletes = append(deletes, func(ctx context.Context) error {
-		_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", removePublicDesktopShortcutScript())
-		return err
-	})
 	return unregisterSequence(ctx, func(ctx context.Context) error {
 		return disableAndStopRegistered(ctx, layout)
 	}, deletes...)
@@ -297,9 +292,7 @@ func accountSID(ctx context.Context, account string) (string, error) {
 
 func stopRegistered(ctx context.Context, _ Layout) error {
 	// Ending the task terminates the bootstrap; closing its Job handle kills the full Electron tree.
-	script := `$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
-		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s -and $s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}`
-	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", stopRegisteredScript())
 	return err
 }
 

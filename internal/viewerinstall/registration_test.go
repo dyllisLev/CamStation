@@ -88,6 +88,93 @@ func TestDisableAndStopKeepsRunningBootRecoveryProcessAlive(t *testing.T) {
 	}
 }
 
+func TestMissingSafeStopScriptsExitSuccessfullyButKeepMutationsTerminating(t *testing.T) {
+	for name, test := range map[string]struct {
+		script    string
+		mutations []string
+	}{
+		"disable and stop": {
+			script: disableAndStopScript(),
+			mutations: []string{
+				"Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop",
+				"Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop",
+				"Set-Service -Name '" + ServiceName + "' -StartupType Disabled -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop",
+			},
+		},
+		"stop": {
+			script: stopRegisteredScript(),
+			mutations: []string{
+				"Stop-ScheduledTask -InputObject $t -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop",
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.HasSuffix(strings.TrimSpace(test.script), "exit 0") {
+				t.Fatalf("missing-safe script does not explicitly exit successfully: %s", test.script)
+			}
+			if !strings.Contains(test.script, "-ErrorAction SilentlyContinue") {
+				t.Fatalf("missing-safe script omitted non-terminating probes: %s", test.script)
+			}
+			for _, mutation := range test.mutations {
+				if !strings.Contains(test.script, mutation) {
+					t.Fatalf("missing-safe script omitted terminating mutation %q: %s", mutation, test.script)
+				}
+			}
+		})
+	}
+}
+
+func TestScheduledTaskRemovalUsesExactRootTaskOwnershipWithoutLocalizedErrors(t *testing.T) {
+	script := unregisterScheduledTasksScript()
+	for _, required := range []string{
+		`Get-ScheduledTask -TaskPath '\' -ErrorAction Stop`,
+		`$_.TaskName -eq '` + ViewerTaskName + `'`,
+		`$_.TaskName -eq '` + RecoveryTaskName + `'`,
+		`Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop`,
+		"exit 0",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("scheduled-task removal script missing %q: %s", required, script)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
+		t.Fatalf("scheduled-task removal script does not explicitly exit successfully: %s", script)
+	}
+	for _, forbidden := range []string{"*", "-like", "SilentlyContinue", "cannot find", "not exist", "schtasks.exe"} {
+		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
+			t.Fatalf("scheduled-task removal script contains %q: %s", forbidden, script)
+		}
+	}
+}
+
+func TestUninstallRegistryRemovalUsesOnlyExactLiteralPathWithoutLocalizedErrors(t *testing.T) {
+	script := unregisterUninstallRegistryScript()
+	path := `Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`
+	for _, required := range []string{
+		`$path='` + path + `'`,
+		`Test-Path -LiteralPath $path -ErrorAction Stop`,
+		`Remove-Item -LiteralPath $path -Force -ErrorAction Stop`,
+		"exit 0",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("uninstall registry removal script missing %q: %s", required, script)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
+		t.Fatalf("uninstall registry removal script does not explicitly exit successfully: %s", script)
+	}
+	if strings.Count(script, path) != 1 {
+		t.Fatalf("uninstall registry removal script does not own exactly one literal path: %s", script)
+	}
+	for _, forbidden := range []string{"*", "SilentlyContinue", "cannot find", "not exist", "reg.exe"} {
+		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
+			t.Fatalf("uninstall registry removal script contains %q: %s", forbidden, script)
+		}
+	}
+}
+
 func TestInteractiveShellSIDUsesShellProcessOwner(t *testing.T) {
 	var selectedPID uint32
 	sid, err := interactiveShellSID(77, func(pid uint32) (string, error) {

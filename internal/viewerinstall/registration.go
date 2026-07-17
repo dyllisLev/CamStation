@@ -105,7 +105,22 @@ func unregisterSequence(ctx context.Context, disableAndStop func(context.Context
 
 func disableAndStopScript() string {
 	return `$viewer=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($viewer){Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop | Out-Null; Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop}; ` +
-		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}`
+		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s){Set-Service -Name '` + ServiceName + `' -StartupType Disabled -ErrorAction Stop; if($s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}}; exit 0`
+}
+
+func stopRegisteredScript() string {
+	return `$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
+		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s -and $s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}; exit 0`
+}
+
+func unregisterScheduledTasksScript() string {
+	return `$tasks=Get-ScheduledTask -TaskPath '\' -ErrorAction Stop; ` +
+		`$tasks | Where-Object { $_.TaskName -eq '` + ViewerTaskName + `' -or $_.TaskName -eq '` + RecoveryTaskName + `' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop; exit 0`
+}
+
+func unregisterUninstallRegistryScript() string {
+	return `$path='Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer'; ` +
+		`if(Test-Path -LiteralPath $path -ErrorAction Stop){Remove-Item -LiteralPath $path -Force -ErrorAction Stop}; exit 0`
 }
 
 func validateRegisteredScript() string {
