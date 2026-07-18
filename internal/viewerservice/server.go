@@ -226,6 +226,12 @@ func (server *Server) status(ctx context.Context) (StatusSnapshot, error) {
 	return status, nil
 }
 
+// Snapshot exposes lease-backed telemetry to the service control loop while
+// preserving storage errors for callers that need to report them.
+func (server *Server) Snapshot(ctx context.Context) (StatusSnapshot, error) {
+	return server.status(ctx)
+}
+
 func (server *Server) recordReport(requestType string, payload map[string]json.RawMessage) error {
 	if requestType != "viewer_status" && requestType != "renderer_status" {
 		return nil

@@ -101,6 +101,74 @@ func TestControlHeartbeatContinuesWithViewerClosed(t *testing.T) {
 	}
 }
 
+func TestHeartbeatUsesLeaseTelemetryFromServer(t *testing.T) {
+	var payload HeartbeatPayload
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/viewers/heartbeat" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(HeartbeatResponse{})
+	}))
+	defer control.Close()
+
+	statusServer := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	peer := Peer{PID: 101, SessionID: 9, Interactive: true}
+	grantResponse, err := statusServer.Handle(t.Context(), "connection-1", peer, Request{Version: PipeProtocolVersion, RequestID: "acquire", Type: "acquire_lease"})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%+v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		requestType string
+		requestID   string
+		state       string
+	}{
+		{requestType: "viewer_status", requestID: "viewer", state: "running"},
+		{requestType: "renderer_status", requestID: "renderer", state: "ready"},
+	} {
+		payload, _ := json.Marshal(map[string]any{"leaseId": grant.LeaseID, "state": item.state})
+		response, err := statusServer.Handle(t.Context(), "connection-1", peer, Request{Version: PipeProtocolVersion, RequestID: item.requestID, Type: item.requestType, Payload: payload})
+		if err != nil || !response.OK {
+			t.Fatalf("telemetry=%+v err=%v", response, err)
+		}
+	}
+	loop := HTTPControlLoop{HTTPClient: control.Client(), HeartbeatRequestDeadline: time.Second}
+	config := MachineConfig{SchemaVersion: ConfigSchemaVersion, ServerURL: control.URL, DisplayName: "Wall", ClientID: "client-1"}
+	loop.sendHeartbeat(t.Context(), config, statusServer, commandSinkFunc{})
+	if payload.Agent.State != "online" || payload.Viewer.State != "running" || payload.Renderer.State != "ready" {
+		t.Fatalf("heartbeat=%+v", payload)
+	}
+}
+
+func TestHeartbeatMarksStatusStorageFailureDegraded(t *testing.T) {
+	var payload HeartbeatPayload
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(HeartbeatResponse{})
+	}))
+	defer control.Close()
+	loop := HTTPControlLoop{HTTPClient: control.Client(), HeartbeatRequestDeadline: time.Second}
+	config := MachineConfig{SchemaVersion: ConfigSchemaVersion, ServerURL: control.URL, DisplayName: "Wall", ClientID: "client-1"}
+	loop.sendHeartbeat(t.Context(), config, snapshotErrorSource{}, commandSinkFunc{})
+	if payload.Control.State != "degraded" || payload.Viewer.State != "closed" || payload.Renderer.State != "not_ready" {
+		t.Fatalf("heartbeat=%+v", payload)
+	}
+}
+
+type snapshotErrorSource struct{}
+
+func (snapshotErrorSource) Snapshot(context.Context) (StatusSnapshot, error) {
+	return StatusSnapshot{}, errors.New("storage unavailable")
+}
+
 func TestControlTransportUsesBoundedReconnectDelays(t *testing.T) {
 	state := ReconnectState{}
 	got := []time.Duration{state.NextDelay(), state.NextDelay(), state.NextDelay(), state.NextDelay(), state.NextDelay(), state.NextDelay()}
@@ -138,10 +206,12 @@ func TestServiceViewerCommandUsesOnlyCurrentLeaseConnection(t *testing.T) {
 		t.Fatalf("grant=%+v", grantResponse)
 	}
 	command := Command{ID: 7, Type: "reload_live", PayloadHash: strings.Repeat("a", 64), TTLSeconds: 300}
-	if err := runtime.DeliverViewerCommand(command); err != nil {
+	resultDone := make(chan error, 1)
+	go func() { resultDone <- runtime.DeliverViewerCommand(command) }()
+	commandResponse := readResponse(t, client)
+	if err := <-resultDone; err != nil {
 		t.Fatal(err)
 	}
-	commandResponse := readResponse(t, client)
 	var delivered Command
 	if err := json.Unmarshal(commandResponse.Payload, &delivered); err != nil || delivered.ID != command.ID {
 		t.Fatalf("response=%+v delivered=%+v err=%v", commandResponse, delivered, err)

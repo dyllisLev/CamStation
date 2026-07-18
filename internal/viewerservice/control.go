@@ -715,6 +715,14 @@ func readStatus(ctx context.Context, source StatusSource) StatusSnapshot {
 	}
 	switch value := source.(type) {
 	case interface {
+		Snapshot(context.Context) (StatusSnapshot, error)
+	}:
+		status, err := value.Snapshot(ctx)
+		if err != nil {
+			return StatusSnapshot{Connection: "degraded", Viewer: "closed", Renderer: "not_ready", Update: UpdateSnapshot{State: "idle"}}
+		}
+		return status
+	case interface {
 		Status(context.Context) StatusSnapshot
 	}:
 		return value.Status(ctx)

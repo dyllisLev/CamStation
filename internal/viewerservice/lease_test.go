@@ -35,6 +35,29 @@ func TestLeaseIsOwnedByConnectionAndVerifiedPeer(t *testing.T) {
 	}
 }
 
+func TestLeaseWithOwnerRevalidatesOwnershipBeforeWrite(t *testing.T) {
+	now := time.Now()
+	manager := NewLeaseManager(func() time.Time { return now }, time.Second)
+	peer := Peer{PID: 7, SessionID: 1, Interactive: true}
+	lease, err := manager.Acquire("connection-a", peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := manager.WithOwner("connection-b", func() error {
+		called = true
+		return nil
+	}); !errors.Is(err, ErrLeaseOwner) || called {
+		t.Fatalf("foreign err=%v called=%v", err, called)
+	}
+	if err := manager.WithOwner("connection-a", func() error {
+		called = true
+		return nil
+	}); err != nil || !called {
+		t.Fatalf("owner err=%v called=%v lease=%+v", err, called, lease)
+	}
+}
+
 func TestLeaseRefreshesAndExpiresAfterFifteenSeconds(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	leases := NewLeaseManager(clock.Now, 15*time.Second)

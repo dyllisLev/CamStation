@@ -118,6 +118,21 @@ func (manager *LeaseManager) Owner() string {
 	return manager.connectionID
 }
 
+// WithOwner runs callback while the current lease owner is held. This closes
+// the check-then-write race used by service command delivery.
+func (manager *LeaseManager) WithOwner(connectionID string, callback func() error) error {
+	if callback == nil {
+		return ErrLeaseOwner
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.expireLocked()
+	if manager.lease == nil || connectionID == "" || manager.connectionID != connectionID {
+		return ErrLeaseOwner
+	}
+	return callback()
+}
+
 func (manager *LeaseManager) ownsLocked(connectionID, leaseID string, peer Peer) bool {
 	manager.expireLocked()
 	return manager.lease != nil && validLeasePeer(connectionID, peer) && manager.connectionID == connectionID &&

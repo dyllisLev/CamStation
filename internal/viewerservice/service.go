@@ -176,7 +176,8 @@ func (service *Service) DeliverViewerCommand(command Command) error {
 	if command.Type != "reload_live" && command.Type != "resubscribe_stream" && command.Type != "shutdown" {
 		return ErrUnsupportedRequest
 	}
-	owner := service.server().leases.Owner()
+	server := service.server()
+	owner := server.leases.Owner()
 	if owner == "" {
 		return ErrLeaseOwner
 	}
@@ -196,12 +197,11 @@ func (service *Service) DeliverViewerCommand(command Command) error {
 		OK:        true,
 		Payload:   payload,
 	}
-	go func() {
+	return server.leases.WithOwner(owner, func() error {
 		state.writeMu.Lock()
 		defer state.writeMu.Unlock()
-		_ = WriteResponse(state.connection, response)
-	}()
-	return nil
+		return WriteResponse(state.connection, response)
+	})
 }
 
 func (service *Service) SetDesiredUpdate(update UpdateNotice) {
