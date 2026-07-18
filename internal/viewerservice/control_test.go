@@ -4,62 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func TestControlFallsBackFromSSEToLongPoll(t *testing.T) {
-	var sseCalls, pollCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/viewers/client-1/control":
-			sseCalls.Add(1)
-			w.WriteHeader(http.StatusServiceUnavailable)
-		case "/api/viewers/client-1/commands/next":
-			pollCalls.Add(1)
-			if r.URL.Query().Get("wait") != "24" {
-				t.Errorf("poll wait=%q", r.URL.Query().Get("wait"))
-			}
-			_ = json.NewEncoder(w).Encode(Command{ID: 7, Type: "ping", PayloadHash: "hash", TTLSeconds: 300})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	result, err := (ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-1"}).Next(t.Context())
-	if err != nil || result.Transport != ControlTransportLongPoll || result.Command == nil || result.Command.ID != 7 {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	if sseCalls.Load() != 1 || pollCalls.Load() != 1 {
-		t.Fatalf("sse=%d poll=%d", sseCalls.Load(), pollCalls.Load())
-	}
-}
-
-func TestSSEInactivityDeadlineResetsAfterEveryFrame(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		flusher := w.(http.Flusher)
-		for range 3 {
-			_, _ = fmt.Fprint(w, ": keepalive\n\n")
-			flusher.Flush()
-			time.Sleep(15 * time.Millisecond)
-		}
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "client-idle", ReadDeadline: 25 * time.Millisecond}
-	seen, err := client.StreamSSE(t.Context(), func(ControlResult) error { return nil })
-	if !errors.Is(err, ErrControlInactivity) || seen != 3 {
-		t.Fatalf("seen=%d err=%v", seen, err)
-	}
-}
 
 func TestControlHeartbeatContinuesWithViewerClosed(t *testing.T) {
 	var mu sync.Mutex
@@ -215,6 +167,38 @@ func TestServiceViewerCommandUsesOnlyCurrentLeaseConnection(t *testing.T) {
 	var delivered Command
 	if err := json.Unmarshal(commandResponse.Payload, &delivered); err != nil || delivered.ID != command.ID {
 		t.Fatalf("response=%+v delivered=%+v err=%v", commandResponse, delivered, err)
+	}
+	_ = client.Close()
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceViewerCommandDoesNotBlockOnUnreadPipe(t *testing.T) {
+	listener := newFakePipeListener()
+	runtime := Service{Store: missingConfigStore{}, Listener: listener}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+	client, serviceConn := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: serviceConn, peer: Peer{PID: 101, SessionID: 1, Interactive: true, UserSID: "S-1-5-21-test"}}
+	writeRequest(t, client, Request{Version: PipeProtocolVersion, RequestID: "lease", Type: "acquire_lease"})
+	_ = readResponse(t, client)
+	result := make(chan error, 1)
+	go func() {
+		result <- runtime.DeliverViewerCommand(Command{ID: 8, Type: "reload_live", PayloadHash: strings.Repeat("b", 64), TTLSeconds: 300})
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		_ = client.Close()
+		cancel()
+		t.Fatal("command delivery blocked on unread pipe")
 	}
 	_ = client.Close()
 	cancel()

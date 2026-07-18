@@ -58,6 +58,23 @@ func TestLeaseWithOwnerRevalidatesOwnershipBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestLeaseTokenStopsAfterExpiry(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	manager := NewLeaseManager(clock.Now, time.Second)
+	if _, err := manager.Acquire("connection-a", Peer{PID: 7, SessionID: 1, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	token, ok := manager.Token()
+	if !ok {
+		t.Fatal("missing owner token")
+	}
+	clock.Advance(time.Second)
+	called := false
+	if err := manager.WithToken(token, func() error { called = true; return nil }); !errors.Is(err, ErrLeaseOwner) || called {
+		t.Fatalf("expired token err=%v called=%v", err, called)
+	}
+}
+
 func TestLeaseRefreshesAndExpiresAfterFifteenSeconds(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	leases := NewLeaseManager(clock.Now, 15*time.Second)

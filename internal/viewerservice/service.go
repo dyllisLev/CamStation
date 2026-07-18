@@ -13,6 +13,7 @@ import (
 )
 
 var ErrListenerClosed = errors.New("viewer service listener is closed")
+var ErrCommandQueueFull = errors.New("viewer command queue is full")
 
 type PipeConnection interface {
 	io.ReadWriteCloser
@@ -48,6 +49,27 @@ type serviceConnection struct {
 	connection PipeConnection
 	id         string
 	writeMu    sync.Mutex
+	commands   chan queuedCommand
+	writerDone chan struct{}
+}
+
+type queuedCommand struct {
+	token    LeaseToken
+	response Response
+}
+
+func (state *serviceConnection) runWriter(leases *LeaseManager) {
+	defer close(state.writerDone)
+	for item := range state.commands {
+		if !leases.ValidateToken(item.token) {
+			continue
+		}
+		state.writeMu.Lock()
+		if leases.ValidateToken(item.token) {
+			_ = WriteResponse(state.connection, item.response)
+		}
+		state.writeMu.Unlock()
+	}
 }
 
 func (service *Service) Run(ctx context.Context) error {
@@ -177,12 +199,12 @@ func (service *Service) DeliverViewerCommand(command Command) error {
 		return ErrUnsupportedRequest
 	}
 	server := service.server()
-	owner := server.leases.Owner()
-	if owner == "" {
+	token, ok := server.leases.Token()
+	if !ok {
 		return ErrLeaseOwner
 	}
 	service.mu.Lock()
-	state := service.byID[owner]
+	state := service.byID[token.ConnectionID]
 	service.mu.Unlock()
 	if state == nil {
 		return ErrLeaseOwner
@@ -197,10 +219,13 @@ func (service *Service) DeliverViewerCommand(command Command) error {
 		OK:        true,
 		Payload:   payload,
 	}
-	return server.leases.WithOwner(owner, func() error {
-		state.writeMu.Lock()
-		defer state.writeMu.Unlock()
-		return WriteResponse(state.connection, response)
+	return server.leases.WithToken(token, func() error {
+		select {
+		case state.commands <- queuedCommand{token: token, response: response}:
+			return nil
+		default:
+			return ErrCommandQueueFull
+		}
 	})
 }
 
@@ -227,7 +252,11 @@ func (service *Service) handleConnection(ctx context.Context, server *Server, co
 	if err != nil {
 		return
 	}
-	state := &serviceConnection{connection: connection, id: connectionID}
+	state := &serviceConnection{
+		connection: connection, id: connectionID,
+		commands: make(chan queuedCommand, 8), writerDone: make(chan struct{}),
+	}
+	go state.runWriter(server.leases)
 	service.mu.Lock()
 	if service.byID == nil {
 		service.byID = make(map[string]*serviceConnection)
@@ -235,6 +264,9 @@ func (service *Service) handleConnection(ctx context.Context, server *Server, co
 	service.byID[connectionID] = state
 	service.mu.Unlock()
 	defer func() {
+		close(state.commands)
+		_ = connection.Close()
+		<-state.writerDone
 		service.mu.Lock()
 		delete(service.byID, connectionID)
 		service.mu.Unlock()

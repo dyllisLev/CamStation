@@ -28,6 +28,11 @@ type Lease struct {
 	ExpiresAt time.Time
 }
 
+type LeaseToken struct {
+	ConnectionID string
+	LeaseID      string
+}
+
 type LeaseManager struct {
 	mu           sync.Mutex
 	now          func() time.Time
@@ -118,6 +123,36 @@ func (manager *LeaseManager) Owner() string {
 	return manager.connectionID
 }
 
+func (manager *LeaseManager) Token() (LeaseToken, bool) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.expireLocked()
+	if manager.lease == nil || manager.connectionID == "" {
+		return LeaseToken{}, false
+	}
+	return LeaseToken{ConnectionID: manager.connectionID, LeaseID: manager.lease.ID}, true
+}
+
+func (manager *LeaseManager) ValidateToken(token LeaseToken) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.expireLocked()
+	return manager.ownsTokenLocked(token)
+}
+
+func (manager *LeaseManager) WithToken(token LeaseToken, callback func() error) error {
+	if callback == nil {
+		return ErrLeaseOwner
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.expireLocked()
+	if !manager.ownsTokenLocked(token) {
+		return ErrLeaseOwner
+	}
+	return callback()
+}
+
 // WithOwner runs callback while the current lease owner is held. This closes
 // the check-then-write race used by service command delivery.
 func (manager *LeaseManager) WithOwner(connectionID string, callback func() error) error {
@@ -137,6 +172,11 @@ func (manager *LeaseManager) ownsLocked(connectionID, leaseID string, peer Peer)
 	manager.expireLocked()
 	return manager.lease != nil && validLeasePeer(connectionID, peer) && manager.connectionID == connectionID &&
 		manager.lease.ID == leaseID && manager.lease.PID == peer.PID && manager.lease.SessionID == peer.SessionID
+}
+
+func (manager *LeaseManager) ownsTokenLocked(token LeaseToken) bool {
+	return manager.lease != nil && token.ConnectionID != "" && token.LeaseID != "" &&
+		manager.connectionID == token.ConnectionID && manager.lease.ID == token.LeaseID
 }
 
 func (manager *LeaseManager) expireLocked() {
