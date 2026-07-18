@@ -1,7 +1,7 @@
 # Standard Windows Viewer Installer Redesign
 
 **Date:** 2026-07-18
-**Status:** Approved design, pending written-spec review
+**Status:** Approved
 
 ## Goal
 
