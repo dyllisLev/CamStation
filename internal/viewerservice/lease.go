@@ -111,6 +111,13 @@ func (manager *LeaseManager) Available() bool {
 	return manager.lease == nil
 }
 
+func (manager *LeaseManager) Owner() string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.expireLocked()
+	return manager.connectionID
+}
+
 func (manager *LeaseManager) ownsLocked(connectionID, leaseID string, peer Peer) bool {
 	manager.expireLocked()
 	return manager.lease != nil && validLeasePeer(connectionID, peer) && manager.connectionID == connectionID &&

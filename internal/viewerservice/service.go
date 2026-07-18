@@ -3,9 +3,11 @@ package viewerservice
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,14 +30,24 @@ func (service *Service) Ready() <-chan struct{} {
 }
 
 type Service struct {
-	Store    ConfigStore
-	Listener PipeListener
-	Server   *Server
-	Logs     *LogManager
+	Store       ConfigStore
+	Listener    PipeListener
+	Server      *Server
+	Logs        *LogManager
+	Control     ControlLoop
+	ControlLoop ControlLoop
 
 	mu          sync.Mutex
 	connections map[PipeConnection]struct{}
+	byID        map[string]*serviceConnection
+	desired     UpdateNotice
 	handlers    sync.WaitGroup
+}
+
+type serviceConnection struct {
+	connection PipeConnection
+	id         string
+	writeMu    sync.Mutex
 }
 
 func (service *Service) Run(ctx context.Context) error {
@@ -44,6 +56,12 @@ func (service *Service) Run(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	server := service.server()
+	controlCtx, controlCancel := context.WithCancel(runCtx)
+	controlDone := make(chan struct{})
+	go func() {
+		defer close(controlDone)
+		service.runControl(controlCtx, server)
+	}()
 	if service.Logs != nil {
 		_ = service.Logs.WriteService(LogRecord{Component: "service", State: "running"})
 		defer func() { _ = service.Logs.WriteService(LogRecord{Component: "service", State: "stopped"}) }()
@@ -60,6 +78,8 @@ func (service *Service) Run(ctx context.Context) error {
 	defer close(stopClosing)
 	defer func() {
 		cancel()
+		controlCancel()
+		<-controlDone
 		_ = service.Listener.Close()
 		service.closeConnections()
 		service.handlers.Wait()
@@ -116,6 +136,81 @@ func (service *Service) server() *Server {
 	return service.Server
 }
 
+func (service *Service) runControl(ctx context.Context, server *Server) {
+	loop := service.Control
+	if loop == nil {
+		loop = service.ControlLoop
+	}
+	if loop == nil {
+		loop = HTTPControlLoop{}
+	}
+	for {
+		config, err := loadOrEmpty(ctx, service.Store)
+		if err == nil && config.SchemaVersion != 0 && strings.TrimSpace(config.ClientID) != "" {
+			if runErr := loop.Run(ctx, config, server, service); runErr != nil && ctx.Err() == nil {
+				server.SetConnection("degraded")
+				timer := time.NewTimer(250 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (service *Service) DeliverViewerCommand(command Command) error {
+	if command.Type != "reload_live" && command.Type != "resubscribe_stream" && command.Type != "shutdown" {
+		return ErrUnsupportedRequest
+	}
+	owner := service.server().leases.Owner()
+	if owner == "" {
+		return ErrLeaseOwner
+	}
+	service.mu.Lock()
+	state := service.byID[owner]
+	service.mu.Unlock()
+	if state == nil {
+		return ErrLeaseOwner
+	}
+	payload, err := json.Marshal(command)
+	if err != nil {
+		return err
+	}
+	response := Response{
+		Version:   PipeProtocolVersion,
+		RequestID: "command-" + command.Key(),
+		OK:        true,
+		Payload:   payload,
+	}
+	go func() {
+		state.writeMu.Lock()
+		defer state.writeMu.Unlock()
+		_ = WriteResponse(state.connection, response)
+	}()
+	return nil
+}
+
+func (service *Service) SetDesiredUpdate(update UpdateNotice) {
+	service.mu.Lock()
+	service.desired = update
+	service.mu.Unlock()
+	service.server().SetDesiredUpdate(update)
+}
+
 func (service *Service) handleConnection(ctx context.Context, server *Server, connection PipeConnection) {
 	defer service.handlers.Done()
 	defer service.removeConnection(connection)
@@ -132,6 +227,18 @@ func (service *Service) handleConnection(ctx context.Context, server *Server, co
 	if err != nil {
 		return
 	}
+	state := &serviceConnection{connection: connection, id: connectionID}
+	service.mu.Lock()
+	if service.byID == nil {
+		service.byID = make(map[string]*serviceConnection)
+	}
+	service.byID[connectionID] = state
+	service.mu.Unlock()
+	defer func() {
+		service.mu.Lock()
+		delete(service.byID, connectionID)
+		service.mu.Unlock()
+	}()
 	defer server.HandleDisconnect(connectionID)
 	reader := bufio.NewReaderSize(connection, MaxManagementMessageBytes+1)
 	for {
@@ -146,7 +253,10 @@ func (service *Service) handleConnection(ctx context.Context, server *Server, co
 		if err != nil {
 			return
 		}
-		if err := WriteResponse(connection, response); err != nil {
+		state.writeMu.Lock()
+		writeErr := WriteResponse(connection, response)
+		state.writeMu.Unlock()
+		if writeErr != nil {
 			return
 		}
 	}
@@ -185,5 +295,5 @@ func NewRuntimeService(store ConfigStore) (*Service, error) {
 		return nil, fmt.Errorf("create viewer service pipe: %w", err)
 	}
 	logs := NewLogManager()
-	return &Service{Store: store, Listener: listener, Logs: logs}, nil
+	return &Service{Store: store, Listener: listener, Logs: logs, Control: HTTPControlLoop{InstalledVersion: InstalledVersion}}, nil
 }

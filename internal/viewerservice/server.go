@@ -29,7 +29,14 @@ type PublicConfig struct {
 }
 
 type UpdateSnapshot struct {
-	State string `json:"state"`
+	State       string `json:"state"`
+	Version     string `json:"version,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	DownloadURL string `json:"downloadUrl,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+	CommandID   int64  `json:"commandId,omitempty"`
+	Generation  int64  `json:"generation,omitempty"`
 }
 
 type StatusSnapshot struct {
@@ -80,6 +87,22 @@ func (server *Server) SetLeaseLogAssigner(assigner func(Peer) (string, error)) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	server.leaseLogAssigner = assigner
+}
+
+func (server *Server) SetConnection(state string) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.connection = state
+}
+
+func (server *Server) SetDesiredUpdate(update UpdateNotice) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.update = UpdateSnapshot{
+		State: "idle", Version: update.Version, Filename: update.Filename,
+		SHA256: update.SHA256, DownloadURL: update.DownloadURL, SizeBytes: update.SizeBytes,
+		CommandID: update.CommandID, Generation: update.Generation,
+	}
 }
 
 func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer, request Request) (Response, error) {
