@@ -47,6 +47,7 @@ type StatusSnapshot struct {
 type LeaseGrant struct {
 	LeaseID          string `json:"leaseId"`
 	HeartbeatSeconds int    `json:"heartbeatSeconds"`
+	LogPath          string `json:"logPath,omitempty"`
 }
 
 type Server struct {
@@ -54,6 +55,7 @@ type Server struct {
 	leases           *LeaseManager
 	installedVersion string
 	logError         func(context.Context, error) string
+	leaseLogAssigner func(Peer) (string, error)
 
 	mu         sync.Mutex
 	connection string
@@ -72,6 +74,12 @@ func NewServer(config ConfigManager, leases *LeaseManager, installedVersion stri
 		renderer:         "not_ready",
 		update:           UpdateSnapshot{State: "idle"},
 	}
+}
+
+func (server *Server) SetLeaseLogAssigner(assigner func(Peer) (string, error)) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.leaseLogAssigner = assigner
 }
 
 func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer, request Request) (Response, error) {
@@ -105,7 +113,18 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 		if err != nil {
 			return server.errorResponse(ctx, request, err), nil
 		}
-		return successResponse(request, LeaseGrant{LeaseID: lease.ID, HeartbeatSeconds: LeaseHeartbeatSeconds}), nil
+		server.mu.Lock()
+		assignLog := server.leaseLogAssigner
+		server.mu.Unlock()
+		var logPath string
+		if assignLog != nil {
+			logPath, err = assignLog(peer)
+			if err != nil {
+				_ = server.leases.Release(connectionID, lease.ID, peer)
+				return server.errorResponse(ctx, request, fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)), nil
+			}
+		}
+		return successResponse(request, LeaseGrant{LeaseID: lease.ID, HeartbeatSeconds: LeaseHeartbeatSeconds, LogPath: logPath}), nil
 	case "lease_heartbeat":
 		leaseID, _, err := decodeLeasePayload(request.Payload)
 		if err != nil {
@@ -219,6 +238,8 @@ func (server *Server) errorResponse(ctx context.Context, request Request, err er
 			code = CodeUnsupportedRequest
 		case errors.Is(err, ErrLeaseBusy):
 			code = CodeLeaseBusy
+		case errors.Is(err, ErrLoggingUnavailable):
+			code = CodeLoggingUnavailable
 		default:
 			code = CodeLeaseFailed
 		}
@@ -293,6 +314,8 @@ func safeErrorMessage(code string) string {
 		return "지원하지 않는 요청입니다."
 	case CodeInvalidRequest:
 		return "요청 내용을 확인해 주세요."
+	case CodeLoggingUnavailable:
+		return "Viewer 로그를 준비할 수 없습니다. 잠시 후 다시 시도해 주세요."
 	default:
 		return "요청을 처리할 수 없습니다."
 	}

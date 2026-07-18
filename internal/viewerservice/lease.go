@@ -18,6 +18,7 @@ type Peer struct {
 	PID         uint32
 	SessionID   uint32
 	Interactive bool
+	UserSID     string
 }
 
 type Lease struct {

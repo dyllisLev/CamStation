@@ -1,13 +1,292 @@
 package viewerservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestServiceRunsWithoutConfigurationOrViewer(t *testing.T) {
+	listener := newFakePipeListener()
+	runtime := Service{Store: missingConfigStore{}, Listener: listener}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+	status := runtime.Status()
+	if status.Configured || status.Viewer != "closed" || status.Renderer != "not_ready" {
+		t.Fatalf("status=%+v", status)
+	}
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceCancellationClosesClientsAndWaitsForHandlers(t *testing.T) {
+	listener := newFakePipeListener()
+	connection := newBlockingPipeConnection(Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"})
+	listener.connections <- connection
+	runtime := Service{Store: missingConfigStore{}, Listener: listener}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+	connection.WaitRead(t)
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if !connection.Closed() {
+		t.Fatal("service returned before closing active client")
+	}
+}
+
+func TestServiceWritesBoundedLifecycleLog(t *testing.T) {
+	root := t.TempDir()
+	listener := newFakePipeListener()
+	logs := newLogManager(root, DefaultLogRotateBytes, DefaultLogRetainedFiles, func(string, string) error { return nil })
+	runtime := Service{Store: missingConfigStore{}, Listener: listener, Logs: logs}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ServiceLogFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
+	if len(lines) != 2 {
+		t.Fatalf("lifecycle records=%d want=2: %s", len(lines), data)
+	}
+	var states []string
+	for _, data := range lines {
+		var line logLine
+		decodeJSON(t, data, &line)
+		if line.CorrelationID == "" {
+			t.Fatalf("missing correlation: %+v", line)
+		}
+		states = append(states, line.State)
+	}
+	if !slices.Equal(states, []string{"running", "stopped"}) {
+		t.Fatalf("states=%v", states)
+	}
+}
+
+func TestServiceStructuredFailureKeepsClientAndAcceptLoopUsable(t *testing.T) {
+	listener := newFakePipeListener()
+	runtime := Service{Store: missingConfigStore{}, Listener: listener}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+
+	client, service := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: service, peer: Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"}}
+	writeRequest(t, client, Request{Version: PipeProtocolVersion, RequestID: "bad", Type: "unknown"})
+	if response := readResponse(t, client); response.OK || response.ErrorCode != CodeUnsupportedRequest {
+		t.Fatalf("response=%+v", response)
+	}
+	writeRequest(t, client, Request{Version: PipeProtocolVersion, RequestID: "status", Type: "get_status"})
+	if response := readResponse(t, client); !response.OK {
+		t.Fatalf("next response=%+v", response)
+	}
+	_ = client.Close()
+
+	malformedClient, malformedService := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: malformedService, peer: Peer{PID: 11, SessionID: 3, Interactive: true, UserSID: "S-1-5-21-1001"}}
+	if _, err := malformedClient.Write([]byte("not-json\n")); err != nil {
+		t.Fatal(err)
+	}
+	_ = malformedClient.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := malformedClient.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("malformed client was not closed: %v", err)
+	}
+
+	nextClient, nextService := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: nextService, peer: Peer{PID: 12, SessionID: 4, Interactive: true, UserSID: "S-1-5-21-1002"}}
+	writeRequest(t, nextClient, Request{Version: PipeProtocolVersion, RequestID: "next", Type: "get_status"})
+	if response := readResponse(t, nextClient); !response.OK {
+		t.Fatalf("response after malformed peer=%+v", response)
+	}
+	_ = nextClient.Close()
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceVerifiedIdentityFailureClosesOnlyThatClient(t *testing.T) {
+	listener := newFakePipeListener()
+	runtime := Service{Store: missingConfigStore{}, Listener: listener}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+	listener.WaitReady(t)
+
+	failedClient, failedService := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: failedService, peerErr: ErrPeerIdentity}
+	_ = failedClient.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := failedClient.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("identity-failed client was not closed: %v", err)
+	}
+
+	nextClient, nextService := net.Pipe()
+	listener.connections <- &fakePipeConnection{ReadWriteCloser: nextService, peer: Peer{PID: 12, SessionID: 4, UserSID: "S-1-5-21-1002"}}
+	writeRequest(t, nextClient, Request{Version: PipeProtocolVersion, RequestID: "next", Type: "get_status"})
+	if response := readResponse(t, nextClient); !response.OK {
+		t.Fatalf("response after identity failure=%+v", response)
+	}
+	_ = nextClient.Close()
+	cancel()
+	if err := waitResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type missingConfigStore struct{}
+
+func (missingConfigStore) Load(context.Context) (MachineConfig, error) {
+	return MachineConfig{}, ErrNotConfigured
+}
+func (missingConfigStore) Save(context.Context, MachineConfig) error { return nil }
+
+type fakePipeListener struct {
+	connections chan PipeConnection
+	closed      chan struct{}
+	ready       chan struct{}
+	readyOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func newFakePipeListener() *fakePipeListener {
+	return &fakePipeListener{connections: make(chan PipeConnection, 8), closed: make(chan struct{}), ready: make(chan struct{})}
+}
+
+func (listener *fakePipeListener) Accept() (PipeConnection, error) {
+	listener.readyOnce.Do(func() { close(listener.ready) })
+	select {
+	case connection := <-listener.connections:
+		return connection, nil
+	case <-listener.closed:
+		return nil, ErrListenerClosed
+	}
+}
+
+func (listener *fakePipeListener) Close() error {
+	listener.closeOnce.Do(func() { close(listener.closed) })
+	return nil
+}
+
+func (listener *fakePipeListener) Ready() <-chan struct{} { return listener.ready }
+
+func (listener *fakePipeListener) WaitReady(t *testing.T) {
+	t.Helper()
+	select {
+	case <-listener.ready:
+	case <-time.After(time.Second):
+		t.Fatal("listener was not started")
+	}
+}
+
+type fakePipeConnection struct {
+	io.ReadWriteCloser
+	peer    Peer
+	peerErr error
+}
+
+func (connection *fakePipeConnection) Peer() (Peer, error) {
+	return connection.peer, connection.peerErr
+}
+
+type blockingPipeConnection struct {
+	peer      Peer
+	read      chan struct{}
+	closed    chan struct{}
+	readOnce  sync.Once
+	closeOnce sync.Once
+}
+
+func newBlockingPipeConnection(peer Peer) *blockingPipeConnection {
+	return &blockingPipeConnection{peer: peer, read: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (connection *blockingPipeConnection) Read([]byte) (int, error) {
+	connection.readOnce.Do(func() { close(connection.read) })
+	<-connection.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (*blockingPipeConnection) Write(data []byte) (int, error) { return len(data), nil }
+func (connection *blockingPipeConnection) Close() error {
+	connection.closeOnce.Do(func() { close(connection.closed) })
+	return nil
+}
+func (connection *blockingPipeConnection) Peer() (Peer, error) { return connection.peer, nil }
+func (connection *blockingPipeConnection) WaitRead(t *testing.T) {
+	t.Helper()
+	select {
+	case <-connection.read:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start reading")
+	}
+}
+func (connection *blockingPipeConnection) Closed() bool {
+	select {
+	case <-connection.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+func writeRequest(t *testing.T, writer io.Writer, request Request) {
+	t.Helper()
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(append(data, '\n')); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readResponse(t *testing.T, reader io.Reader) Response {
+	t.Helper()
+	var response Response
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func waitResult(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not stop within bound")
+		return nil
+	}
+}
 
 func TestRequestErrorReturnsSafeResponseAndKeepsConnectionUsable(t *testing.T) {
 	secret := "registry C:\\secret token=do-not-return"
