@@ -17,6 +17,8 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLanguage } from "../app/useLanguage";
 import { useCameras, useHealth, useStreamStatus } from "../app/queries";
+import { withAppBase } from "../app/basePath";
+import { isViewerMode, viewerRoute } from "../app/viewerMode";
 import { Button } from "../components/ui/button";
 import { StatusDot } from "../components/StatusDot";
 import { cn, formatDate } from "../lib/utils";
@@ -59,6 +61,36 @@ export function ConsoleLayout() {
   const online = cameras.data?.filter((camera) => camera.state === "streaming").length ?? 0;
   const title = t(titles[location.pathname] ?? "controlRoom");
   const isLiveWorkspace = location.pathname === "/live";
+  const viewerMode = isViewerMode(location.search);
+
+  if (viewerMode) {
+    return (
+      <div className="new-console-app">
+        <header className="new-console-header sticky top-0 z-10">
+          <div className="flex min-h-14 items-center gap-4 px-4 lg:px-6">
+            <div className="new-brand-title">CamStation Viewer</div>
+            <nav className="new-console-nav flex gap-1" aria-label="Viewer 화면">
+              <a
+                className={cn("inline-flex h-9 items-center rounded-[7px] px-3 text-sm", location.pathname === "/live" && "new-active")}
+                href={withAppBase(viewerRoute("/live"))}
+              >
+                라이브
+              </a>
+              <a
+                className={cn("inline-flex h-9 items-center rounded-[7px] px-3 text-sm", location.pathname === "/recordings" && "new-active")}
+                href={withAppBase(viewerRoute("/recordings"))}
+              >
+                녹화
+              </a>
+            </nav>
+          </div>
+        </header>
+        <main className="new-console-main px-4 py-5 lg:px-6">
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
 
   if (isLiveWorkspace) {
     return (

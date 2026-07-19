@@ -44,10 +44,7 @@ func (RegistryStore) Save(ctx context.Context, config MachineConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegistrySubkey, registry.SET_VALUE)
-	if errors.Is(err, registry.ErrNotExist) {
-		return ErrNotConfigured
-	}
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, RegistrySubkey, registry.CREATE_SUB_KEY|registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("%w: open key: %w", ErrRegistryAccess, err)
 	}

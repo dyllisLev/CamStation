@@ -19,6 +19,7 @@ const statusOptions: readonly { readonly value: string; readonly label: string }
 ];
 
 type RecordingSegmentsPanelProps = {
+  readonly readOnly?: boolean;
   readonly segments: UseQueryResult<RecordingSegmentsResponse, Error>;
   readonly selectedSegment: UseQueryResult<RecordingSegment, Error>;
   readonly streamOptions: readonly string[];
@@ -88,6 +89,7 @@ export function RecordingSegmentsPanel(props: RecordingSegmentsPanelProps) {
                     selected={props.selectedSegmentId === segment.id}
                     armedDeleteId={props.armedDeleteId}
                     deletePending={props.deletePending}
+                    readOnly={props.readOnly}
                     onSelectSegment={props.onSelectSegment}
                     onDeleteSegment={props.onDeleteSegment}
                     onCancelDelete={props.onCancelDelete}
@@ -116,7 +118,7 @@ export function RecordingSegmentsPanel(props: RecordingSegmentsPanelProps) {
           {!props.selectedSegmentId && <div className="text-sm text-slate-500">세그먼트를 선택하면 상세 정보와 재생/다운로드 작업이 표시됩니다.</div>}
           {props.selectedSegment.isLoading && <div className="text-sm text-slate-400">상세 정보를 불러오는 중입니다.</div>}
           {props.selectedSegment.error && <div className="text-sm text-red-300">상세 정보를 불러오지 못했습니다: {props.selectedSegment.error.message}</div>}
-          {detail && <SegmentDetail segment={detail} />}
+          {detail && <SegmentDetail segment={detail} readOnly={props.readOnly} />}
         </PanelBody>
       </Panel>
     </div>
@@ -160,11 +162,12 @@ function SegmentFilters(props: RecordingSegmentsPanelProps) {
   );
 }
 
-function SegmentRow({ segment, selected, armedDeleteId, deletePending, onSelectSegment, onDeleteSegment, onCancelDelete }: {
+function SegmentRow({ segment, selected, armedDeleteId, deletePending, readOnly, onSelectSegment, onDeleteSegment, onCancelDelete }: {
   readonly segment: RecordingSegment;
   readonly selected: boolean;
   readonly armedDeleteId: number | null;
   readonly deletePending: boolean;
+  readonly readOnly?: boolean;
   readonly onSelectSegment: (id: number) => void;
   readonly onDeleteSegment: (id: number) => void;
   readonly onCancelDelete: () => void;
@@ -183,33 +186,33 @@ function SegmentRow({ segment, selected, armedDeleteId, deletePending, onSelectS
       <td className="max-w-72 truncate px-3 py-3 font-mono text-xs text-slate-500" data-label="파일">{segment.filename}</td>
       <td className="min-w-[21rem] px-3 py-3" data-label="작업">
         <div className="flex flex-nowrap gap-2">
-          <Button variant="secondary" size="sm" onClick={() => onSelectSegment(segment.id)}><Eye size={14} />상세</Button>
-          {playHref ? (
+          <Button variant="secondary" size="sm" onClick={() => onSelectSegment(segment.id)}><Eye size={14} />{readOnly ? "재생" : "상세"}</Button>
+          {!readOnly && (playHref ? (
             <Button asChild variant="secondary" size="sm">
               <a href={playHref} target="_blank" rel="noreferrer"><Eye size={14} />재생</a>
             </Button>
           ) : (
             <Button variant="secondary" size="sm" disabled><Eye size={14} />재생</Button>
-          )}
-          {downloadHref ? (
+          ))}
+          {!readOnly && (downloadHref ? (
             <Button asChild variant="secondary" size="sm">
               <a href={downloadHref} download><Download size={14} />다운로드</a>
             </Button>
           ) : (
             <Button variant="secondary" size="sm" disabled><Download size={14} />다운로드</Button>
-          )}
-          <Button variant={armed ? "danger" : "secondary"} size="sm" disabled={deletePending} onClick={() => onDeleteSegment(segment.id)}>
+          ))}
+          {!readOnly && <Button variant={armed ? "danger" : "secondary"} size="sm" disabled={deletePending} onClick={() => onDeleteSegment(segment.id)}>
             {deletePending && armed ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
             {armed ? "삭제 확인" : "삭제"}
-          </Button>
-          {armed && <Button variant="ghost" size="sm" disabled={deletePending} onClick={onCancelDelete}>취소</Button>}
+          </Button>}
+          {!readOnly && armed && <Button variant="ghost" size="sm" disabled={deletePending} onClick={onCancelDelete}>취소</Button>}
         </div>
       </td>
     </tr>
   );
 }
 
-function SegmentDetail({ segment }: { readonly segment: RecordingSegment }) {
+function SegmentDetail({ segment, readOnly }: { readonly segment: RecordingSegment; readonly readOnly?: boolean }) {
   const playHref = safeSegmentUrl(segment.playUrl, segment.id, "play");
   const downloadHref = safeSegmentUrl(segment.downloadUrl, segment.id, "download");
   return (
@@ -224,7 +227,7 @@ function SegmentDetail({ segment }: { readonly segment: RecordingSegment }) {
         <DetailItem label="종료" value={formatSegmentTime(segment.ts_end)} />
         <DetailItem label="크기" value={formatBytes(segment.file_size)} />
       </div>
-      <div className="flex flex-wrap gap-2">
+      {!readOnly && <div className="flex flex-wrap gap-2">
         {playHref ? (
           <Button asChild variant="primary">
             <a href={playHref} target="_blank" rel="noreferrer"><Eye size={16} />재생 열기</a>
@@ -239,7 +242,7 @@ function SegmentDetail({ segment }: { readonly segment: RecordingSegment }) {
         ) : (
           <Button variant="secondary" disabled><Download size={16} />다운로드</Button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

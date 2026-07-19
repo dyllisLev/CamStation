@@ -53,6 +53,15 @@ type serviceConnection struct {
 	writerDone chan struct{}
 }
 
+type deferredConnectionValidator struct{}
+
+func (deferredConnectionValidator) Validate(context.Context, ConfigDraft, string) error {
+	// The control loop owns bounded server connectivity and registration checks
+	// after persistence.  A first-run configuration must therefore not be
+	// rejected merely because no synchronous validator was injected.
+	return nil
+}
+
 type queuedCommand struct {
 	token    LeaseToken
 	response Response
@@ -146,7 +155,7 @@ func (service *Service) server() *Server {
 	if service.Server != nil {
 		return service.Server
 	}
-	manager := ConfigManager{Store: service.Store, NewID: newLeaseID}
+	manager := ConfigManager{Store: service.Store, Validator: deferredConnectionValidator{}, NewID: newLeaseID}
 	var logError func(context.Context, error) string
 	if service.Logs != nil {
 		logError = service.Logs.ErrorLogger

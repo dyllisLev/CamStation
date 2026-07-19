@@ -33,6 +33,24 @@ func TestServiceRunsWithoutConfigurationOrViewer(t *testing.T) {
 	}
 }
 
+func TestDefaultRuntimeServerAcceptsInteractiveConfiguration(t *testing.T) {
+	store := &memoryConfigStore{}
+	runtime := Service{Store: store}
+	payload, err := json.Marshal(ConfigDraft{ServerURL: "http://viewer-test.example", DisplayName: "Windows Viewer", AutoStart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runtime.server().Handle(t.Context(), "console-connection", Peer{PID: 12, SessionID: 1, Interactive: true, UserSID: "S-1-5-21-test"}, Request{
+		Version: PipeProtocolVersion, RequestID: "configure", Type: "configure", Payload: payload,
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if store.saves != 1 {
+		t.Fatalf("configuration saves=%d", store.saves)
+	}
+}
+
 func TestServiceCancellationClosesClientsAndWaitsForHandlers(t *testing.T) {
 	listener := newFakePipeListener()
 	connection := newBlockingPipeConnection(Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"})

@@ -15,9 +15,24 @@ export const packageIgnorePatterns = [
   /^\/package-lock\.json$/,
 ];
 
+const forbiddenRuntimePatterns = [
+  /CamStationViewerAgent\.exe/i,
+  /CamStationViewerBootstrap\.exe/i,
+  /CamStationViewerHost\.exe/i,
+  /current\.json/i,
+  /release\.zip/i,
+  /schtasks\.exe/i,
+  /CamStationViewerRecovery/i,
+  /--agent-(generation|nonce|session)/i,
+];
+
 export function ignoredPackagePath(value) {
   const normalized = value.replaceAll("\\", "/");
   return packageIgnorePatterns.some((pattern) => pattern.test(normalized));
+}
+
+export function forbiddenRuntimeArtifact(value) {
+  return forbiddenRuntimePatterns.some((pattern) => pattern.test(value));
 }
 
 function assertPackageContents(appPath) {
@@ -34,6 +49,10 @@ function assertPackageContents(appPath) {
   const leaked = entries.find(ignoredPackagePath);
   if (leaked) {
     throw new Error(`packaged Viewer contains excluded development file ${leaked}`);
+  }
+  const forbidden = entries.find(forbiddenRuntimeArtifact);
+  if (forbidden) {
+    throw new Error(`packaged Viewer contains rejected Agent-era runtime artifact ${forbidden}`);
   }
 }
 

@@ -24,6 +24,8 @@ export type ViewerCommand = { readonly type: "resubscribe_stream"; readonly stre
 export type CamStationViewerBridge = {
   reportStream(telemetry: ViewerStreamTelemetry): void;
   onCommand(handler: (command: unknown) => void): void | (() => void);
+  setFullscreen?(fullscreen: boolean): Promise<unknown> | void;
+  onFullscreenChange?(handler: (fullscreen: boolean) => void): void | (() => void);
 };
 
 declare global {
@@ -60,6 +62,38 @@ export function subscribeViewerCommands(
             unsubscribe();
           } catch {
             // Agent IPC health must not affect React cleanup.
+          }
+        }
+      : () => undefined;
+  } catch {
+    return () => undefined;
+  }
+}
+
+export function hasViewerFullscreenBridge(bridge = preloadBridge()): boolean {
+  return typeof bridge?.setFullscreen === "function" && typeof bridge.onFullscreenChange === "function";
+}
+
+export async function requestViewerFullscreen(fullscreen: boolean, bridge = preloadBridge()): Promise<boolean> {
+  if (typeof bridge?.setFullscreen !== "function") return false;
+  try {
+    await bridge.setFullscreen(fullscreen);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function subscribeViewerFullscreen(handler: (fullscreen: boolean) => void, bridge = preloadBridge()): () => void {
+  if (typeof bridge?.onFullscreenChange !== "function") return () => undefined;
+  try {
+    const unsubscribe = bridge.onFullscreenChange(handler);
+    return typeof unsubscribe === "function"
+      ? () => {
+          try {
+            unsubscribe();
+          } catch {
+            // Native fullscreen IPC cleanup must not affect the live workspace.
           }
         }
       : () => undefined;

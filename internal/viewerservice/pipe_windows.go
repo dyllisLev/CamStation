@@ -182,11 +182,31 @@ func (connection *windowsPipeConnection) Peer() (Peer, error) {
 	if err != nil || user.User.Sid == nil {
 		return Peer{}, fmt.Errorf("%w: read client user SID: %v", ErrPeerIdentity, err)
 	}
-	interactive, err := tokenHasInteractiveGroup(token)
+	tokenInteractive, err := tokenHasInteractiveGroup(token)
 	if err != nil {
 		return Peer{}, fmt.Errorf("%w: read client token groups: %v", ErrPeerIdentity, err)
 	}
+	sessionActive, err := activeUserSession(tokenSession)
+	if err != nil {
+		return Peer{}, fmt.Errorf("%w: query client session: %v", ErrPeerIdentity, err)
+	}
+	interactive := isInteractivePeer(tokenSession, tokenInteractive, sessionActive)
 	return Peer{PID: pid, SessionID: tokenSession, UserSID: user.User.Sid.String(), Interactive: interactive}, nil
+}
+
+func activeUserSession(sessionID uint32) (bool, error) {
+	var sessions *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &sessions, &count); err != nil {
+		return false, err
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
+	for _, session := range unsafe.Slice(sessions, count) {
+		if session.SessionID == sessionID {
+			return session.State == windows.WTSActive, nil
+		}
+	}
+	return false, nil
 }
 
 func namedPipeClientSessionID(handle windows.Handle) (uint32, error) {

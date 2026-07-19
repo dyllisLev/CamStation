@@ -16,7 +16,7 @@ export function viewerURL(serverURL: string): string {
 export function browserWindowOptions(preload: string, packaged: boolean): BrowserWindowConstructorOptions {
   return {
     show: false,
-    autoHideMenuBar: true,
+    autoHideMenuBar: false,
     webPreferences: {
       preload,
       nodeIntegration: false,
@@ -30,7 +30,12 @@ export function browserWindowOptions(preload: string, packaged: boolean): Browse
 
 export function isNavigationAllowed(candidate: string, liveURL: string): boolean {
   try {
-    return new URL(candidate).href === new URL(liveURL).href;
+    const live = new URL(liveURL);
+    const next = new URL(candidate);
+    return next.origin === live.origin && (
+      next.href === live.href ||
+      (next.pathname === "/recordings" && next.search === "?viewer=1")
+    );
   } catch {
     return false;
   }
