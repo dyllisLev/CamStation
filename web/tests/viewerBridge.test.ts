@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  requestViewerFullscreen,
   reportViewerStream,
+  subscribeViewerFullscreen,
   subscribeViewerCommands,
   type CamStationViewerBridge,
 } from "../src/components/live/viewerBridge.ts";
@@ -137,4 +139,31 @@ test("a failed preload IPC bridge cannot break video playback", () => {
 
   assert.doesNotThrow(() => reportViewerStream({ streamName: "yard-live", transport: "webrtc", phase: "playing" }, bridge));
   assert.doesNotThrow(() => subscribeViewerCommands(() => undefined, bridge)());
+});
+
+test("uses a narrow native fullscreen bridge when present", async () => {
+  const requested: boolean[] = [];
+  let listener: ((fullscreen: boolean) => void) | undefined;
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined,
+    onCommand: () => undefined,
+    setFullscreen: async (fullscreen) => {
+      requested.push(fullscreen);
+    },
+    onFullscreenChange: (handler) => {
+      listener = handler;
+      return () => {
+        listener = undefined;
+      };
+    },
+  };
+
+  const observed: boolean[] = [];
+  const unsubscribe = subscribeViewerFullscreen((fullscreen) => observed.push(fullscreen), bridge);
+  await requestViewerFullscreen(true, bridge);
+  listener?.(true);
+  assert.deepEqual(requested, [true]);
+  assert.deepEqual(observed, [true]);
+  unsubscribe();
+  assert.equal(listener, undefined);
 });

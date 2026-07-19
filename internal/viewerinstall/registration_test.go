@@ -88,6 +88,184 @@ func TestDisableAndStopKeepsRunningBootRecoveryProcessAlive(t *testing.T) {
 	}
 }
 
+func TestMissingSafeStopScriptsExitSuccessfullyButKeepMutationsTerminating(t *testing.T) {
+	for name, test := range map[string]struct {
+		script    string
+		probes    []string
+		mutations []string
+	}{
+		"disable and stop": {
+			script: disableAndStopScript(),
+			probes: []string{
+				"Get-ScheduledTask -TaskName '" + ViewerTaskName + "' -ErrorAction SilentlyContinue",
+				"Get-Service -Name '" + ServiceName + "' -ErrorAction SilentlyContinue",
+			},
+			mutations: []string{
+				"Disable-ScheduledTask -InputObject $viewer -ErrorAction Stop",
+				"Stop-ScheduledTask -InputObject $viewer -ErrorAction Stop",
+				"Set-Service -Name '" + ServiceName + "' -StartupType Disabled -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))",
+			},
+		},
+		"stop": {
+			script: stopRegisteredScript(),
+			probes: []string{
+				"Get-ScheduledTask -TaskName '" + ViewerTaskName + "' -ErrorAction SilentlyContinue",
+				"Get-Service -Name '" + ServiceName + "' -ErrorAction SilentlyContinue",
+			},
+			mutations: []string{
+				"Stop-ScheduledTask -InputObject $t -ErrorAction Stop",
+				"Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))",
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.HasPrefix(test.script, `$ErrorActionPreference='Stop'; `) {
+				t.Fatalf("missing-safe script does not start in strict error mode: %s", test.script)
+			}
+			if !strings.HasSuffix(strings.TrimSpace(test.script), "exit 0") {
+				t.Fatalf("missing-safe script does not explicitly exit successfully: %s", test.script)
+			}
+			for _, probe := range test.probes {
+				if !strings.Contains(test.script, probe) {
+					t.Fatalf("missing-safe script omitted missing-safe probe %q: %s", probe, test.script)
+				}
+			}
+			for _, mutation := range test.mutations {
+				if !strings.Contains(test.script, mutation) {
+					t.Fatalf("missing-safe script omitted terminating mutation %q: %s", mutation, test.script)
+				}
+			}
+		})
+	}
+}
+
+func TestScheduledTaskRemovalUsesExactRootTaskOwnershipWithoutLocalizedErrors(t *testing.T) {
+	script := unregisterScheduledTasksScript()
+	for _, required := range []string{
+		`Get-ScheduledTask -TaskPath '\' -ErrorAction Stop`,
+		`$_.TaskName -eq '` + ViewerTaskName + `'`,
+		`$_.TaskName -eq '` + RecoveryTaskName + `'`,
+		`Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop`,
+		"exit 0",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("scheduled-task removal script missing %q: %s", required, script)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
+		t.Fatalf("scheduled-task removal script does not explicitly exit successfully: %s", script)
+	}
+	for _, forbidden := range []string{"*", "-like", "SilentlyContinue", "cannot find", "not exist", "schtasks.exe"} {
+		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
+			t.Fatalf("scheduled-task removal script contains %q: %s", forbidden, script)
+		}
+	}
+}
+
+func TestUninstallRegistryRemovalUsesOnlyExactLiteralPathWithoutLocalizedErrors(t *testing.T) {
+	script := unregisterUninstallRegistryScript()
+	path := `Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`
+	for _, required := range []string{
+		`$path='` + path + `'`,
+		`Test-Path -LiteralPath $path -ErrorAction Stop`,
+		`Remove-Item -LiteralPath $path -Force -ErrorAction Stop`,
+		"exit 0",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("uninstall registry removal script missing %q: %s", required, script)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
+		t.Fatalf("uninstall registry removal script does not explicitly exit successfully: %s", script)
+	}
+	if strings.Count(script, path) != 1 {
+		t.Fatalf("uninstall registry removal script does not own exactly one literal path: %s", script)
+	}
+	for _, forbidden := range []string{"*", "SilentlyContinue", "cannot find", "not exist", "reg.exe"} {
+		if strings.Contains(strings.ToLower(script), strings.ToLower(forbidden)) {
+			t.Fatalf("uninstall registry removal script contains %q: %s", forbidden, script)
+		}
+	}
+}
+
+func TestInteractiveShellSIDUsesShellProcessOwner(t *testing.T) {
+	var selectedPID uint32
+	sid, err := interactiveShellSID(77, func(pid uint32) (string, error) {
+		selectedPID = pid
+		return "S-1-5-21-1000", nil
+	})
+	if err != nil || sid != "S-1-5-21-1000" || selectedPID != 77 {
+		t.Fatalf("sid=%q selectedPID=%d err=%v", sid, selectedPID, err)
+	}
+}
+
+func TestInteractiveShellSIDRejectsMissingShellAndInvalidOwner(t *testing.T) {
+	if _, err := interactiveShellSID(0, func(uint32) (string, error) {
+		return "S-1-5-21-1000", nil
+	}); err == nil || !strings.Contains(err.Error(), "interactive desktop session") {
+		t.Fatalf("missing shell err=%v", err)
+	}
+	if _, err := interactiveShellSID(77, func(uint32) (string, error) {
+		return "not-a-sid", nil
+	}); err == nil || !strings.Contains(err.Error(), "SID is invalid") {
+		t.Fatalf("invalid SID err=%v", err)
+	}
+}
+
+func TestNumericSIDACLGrantUsesLiteralSID(t *testing.T) {
+	const sid = "S-1-5-21-1972825288-2833176235-1431433953-1002"
+	if got, want := numericSIDACLGrant(sid), `*S-1-5-21-1972825288-2833176235-1431433953-1002:(OI)(CI)RX`; got != want {
+		t.Fatalf("numeric SID ACL grant=%q want=%q", got, want)
+	}
+}
+
+func TestParseServiceSIDAcceptsLocalizedLabelsAndNoise(t *testing.T) {
+	want := "S-1-5-80-996217163-872380615-1856343041-12470791-3549172787"
+	for name, output := range map[string]string{
+		"English label": "NAME: CamStationViewerAgent\r\nSERVICE SID: " + want + "\r\n",
+		"Korean label":  "이름: CamStationViewerAgent\r\n서비스 SID: " + want + "\r\n",
+		"noise":         "[SC] OpenService SUCCESS 0\nignored=1060\ncandidate=(" + want + ")\ncompleted",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseServiceSID(output)
+			if err != nil || got != want {
+				t.Fatalf("parseServiceSID()=%q, %v; want %q", got, err, want)
+			}
+		})
+	}
+}
+
+func TestParseServiceSIDRejectsInvalidNamespaceShapeRangeAndMultiplicity(t *testing.T) {
+	valid := "S-1-5-80-996217163-872380615-1856343041-12470791-3549172787"
+	for name, output := range map[string]string{
+		"missing":         "SERVICE SID: unavailable",
+		"invalid":         "SERVICE SID: S-1-5-80-1-2-three-4-5",
+		"wrong namespace": "SERVICE SID: S-1-5-21-1-2-3-4-5",
+		"too few":         "SERVICE SID: S-1-5-80-1-2-3-4",
+		"too many":        "SERVICE SID: S-1-5-80-1-2-3-4-5-6",
+		"uint32 overflow": "SERVICE SID: S-1-5-80-1-2-3-4-4294967296",
+		"embedded token":  "SERVICE SID: prefix" + valid + "suffix",
+		"multiple":        valid + "\nS-1-5-80-1-2-3-4-5",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if sid, err := parseServiceSID(output); err == nil {
+				t.Fatalf("parseServiceSID()=%q accepted unsafe output %q", sid, output)
+			}
+		})
+	}
+}
+
+func TestResolveServiceSIDDistinguishesExecutionAndParseFailures(t *testing.T) {
+	commandErr := errors.New("sc showsid failed")
+	if _, err := resolveServiceSID("", commandErr); !errors.Is(err, commandErr) || !strings.Contains(err.Error(), "lookup failed") {
+		t.Fatalf("execution error=%v, want preserved lookup failure", err)
+	}
+	if _, err := resolveServiceSID("SERVICE SID: invalid", nil); !errors.Is(err, errInvalidServiceSIDOutput) || !strings.Contains(err.Error(), "parse failed") {
+		t.Fatalf("parse error=%v, want preserved parse failure", err)
+	}
+}
+
 func TestWindowsRegistrationPolicyIsBounded(t *testing.T) {
 	wantActions := []RecoveryAction{{Type: "restart", DelayMS: 5000}, {Type: "restart", DelayMS: 30000}, {Type: "restart", DelayMS: 120000}, {Type: "none", DelayMS: 0}}
 	if got := SCMRecoveryActions(); !reflect.DeepEqual(got, wantActions) {
@@ -131,6 +309,154 @@ func TestViewerLogonTaskUsesConfiguredSIDAndIgnoreNew(t *testing.T) {
 	}
 	if task.Triggers.LogonTrigger.UserID != "S-1-5-21-123" || task.Principals.Principal.UserID != "S-1-5-21-123" {
 		t.Fatalf("SID trigger=%q principal=%q", task.Triggers.LogonTrigger.UserID, task.Principals.Principal.UserID)
+	}
+}
+
+func TestTaskXMLUsesSchedulerPrincipalLogonTypes(t *testing.T) {
+	viewer, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := RecoveryTaskXML(`C:\ProgramData\CamStation\Viewer\updater\CamStationViewerUpdater.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name          string
+		document      string
+		wantLogonType string
+		wantPrincipal string
+	}{
+		{"Viewer", viewer, "InteractiveToken", `<UserId>S-1-5-21-123</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>`},
+		{"Recovery", recovery, "", `<UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel>`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var task struct {
+				Principals struct {
+					Principal struct {
+						LogonType string `xml:"LogonType"`
+					} `xml:"Principal"`
+				} `xml:"Principals"`
+			}
+			if err := xml.Unmarshal([]byte(test.document), &task); err != nil {
+				t.Fatalf("task XML is not parseable: %v", err)
+			}
+			if task.Principals.Principal.LogonType != test.wantLogonType {
+				t.Fatalf("LogonType=%q want=%q", task.Principals.Principal.LogonType, test.wantLogonType)
+			}
+			if !strings.Contains(test.document, test.wantPrincipal) {
+				t.Fatalf("task XML missing principal %q: %s", test.wantPrincipal, test.document)
+			}
+			if test.wantLogonType == "" && strings.Contains(test.document, "<LogonType>") {
+				t.Fatalf("SYSTEM task XML declares LogonType: %s", test.document)
+			}
+		})
+	}
+}
+
+func TestTaskXMLUsesSchedulerCompatibleProlog(t *testing.T) {
+	viewer, err := ViewerTaskXML(`C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, `C:\Program Files\CamStation Viewer`, "S-1-5-21-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := RecoveryTaskXML(`C:\ProgramData\CamStation\Viewer\updater\CamStationViewerUpdater.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, document := range map[string]string{"Viewer": viewer, "Recovery": recovery} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.HasPrefix(document, `<?xml version="1.0"?><Task`) {
+				t.Fatalf("task XML has incompatible prolog: %s", document)
+			}
+			if strings.Contains(document, "encoding=") {
+				t.Fatalf("task XML declares an encoding: %s", document)
+			}
+			var task any
+			if err := xml.Unmarshal([]byte(document), &task); err != nil {
+				t.Fatalf("task XML is not parseable: %v", err)
+			}
+		})
+	}
+}
+
+func TestPublicDesktopShortcutTargetsStableViewerTask(t *testing.T) {
+	bootstrapPath := `C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`
+	installDir := `C:\Program Files\CamStation Viewer`
+	script, environment, err := publicDesktopShortcutScript(bootstrapPath, installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEnvironment := []string{
+		`CAMSTATION_VIEWER_SHORTCUT_ICON=C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`,
+		`CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY=C:\Program Files\CamStation Viewer`,
+	}
+	if !reflect.DeepEqual(environment, wantEnvironment) {
+		t.Fatalf("shortcut environment=%q want=%q", environment, wantEnvironment)
+	}
+	if !strings.HasPrefix(script, `$ErrorActionPreference='Stop'; `) {
+		t.Fatalf("shortcut script does not start in strict error mode: %s", script)
+	}
+	for _, required := range []string{
+		"CommonDesktopDirectory",
+		"CamStation Viewer.lnk",
+		"schtasks.exe",
+		`/Run /TN "CamStationViewer"`,
+		"CreateShortcut",
+		`$link.IconLocation=$env:CAMSTATION_VIEWER_SHORTCUT_ICON+',0'`,
+		`$link.WorkingDirectory=$env:CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY`,
+		`$link.Save(); if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'shortcut was not created'}; $saved=(New-Object -ComObject WScript.Shell).CreateShortcut($path)`,
+		`if($saved.TargetPath -ne [IO.Path]::Combine($env:SystemRoot,'System32','schtasks.exe')){throw 'shortcut target verification failed'}`,
+		`if($saved.Arguments -ne '/Run /TN "CamStationViewer"'){throw 'shortcut arguments verification failed'}`,
+		`if($saved.IconLocation -ne $env:CAMSTATION_VIEWER_SHORTCUT_ICON+',0'){throw 'shortcut icon verification failed'}`,
+		`if($saved.WorkingDirectory -ne $env:CAMSTATION_VIEWER_SHORTCUT_WORKING_DIRECTORY){throw 'shortcut working directory verification failed'}`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("shortcut script missing %q: %s", required, script)
+		}
+	}
+	for _, forbidden := range []string{"$args", bootstrapPath, installDir} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("shortcut script embeds %q: %s", forbidden, script)
+		}
+	}
+	if strings.Count(script, "CreateShortcut($path)") != 2 {
+		t.Fatalf("shortcut script does not reload the saved link exactly once: %s", script)
+	}
+}
+
+func TestPublicDesktopShortcutRejectsRelativeEnvironmentSources(t *testing.T) {
+	for _, test := range []struct {
+		bootstrapPath string
+		installDir    string
+	}{
+		{bootstrapPath: `viewer\CamStationViewerBootstrap.exe`, installDir: `C:\Program Files\CamStation Viewer`},
+		{bootstrapPath: `C:\Program Files\CamStation Viewer\CamStationViewerBootstrap.exe`, installDir: `viewer`},
+	} {
+		_, environment, err := publicDesktopShortcutScript(test.bootstrapPath, test.installDir)
+		if err == nil || environment != nil {
+			t.Fatalf("bootstrap=%q installDir=%q environment=%q err=%v", test.bootstrapPath, test.installDir, environment, err)
+		}
+	}
+}
+
+func TestPublicDesktopShortcutRemovalOwnsOnlyExactLink(t *testing.T) {
+	script := removePublicDesktopShortcutScript()
+	for _, required := range []string{
+		"CommonDesktopDirectory",
+		"CamStation Viewer.lnk",
+		"throw 'public desktop is unavailable'",
+		"Test-Path -LiteralPath $path -ErrorAction Stop",
+		"Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop",
+		"Remove-Item -LiteralPath $path -Force -ErrorAction Stop",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("removal script missing %q: %s", required, script)
+		}
+	}
+	for _, forbidden := range []string{"*.lnk", "SilentlyContinue"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("removal script contains %q: %s", forbidden, script)
+		}
 	}
 }
 

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ViewerExecutableComponent" Guid="{4D19D9B1-57E2-4C91-98D7-55F923A8A324}">
+        <File Id="CamStationViewerExe" Source="$(var.ViewerPayloadDir)\CamStationViewer.exe" KeyPath="yes">
+          <Shortcut Id="PublicDesktopShortcut" Directory="DesktopFolder" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" />
+          <Shortcut Id="StartMenuShortcut" Directory="CamStationStartMenu" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" />
+        </File>
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="CamStationViewer" Type="string" Value="&quot;[INSTALLFOLDER]CamStationViewer.exe&quot; --autostart" />
+      </Component>
+      <Component Id="ViewerServiceComponent" Guid="{F11DFBA0-C26A-4A6E-A1C2-5C2976E9E2E5}">
+        <File Id="CamStationViewerServiceExe" Source="$(var.ServicePayloadPath)" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\CamStation\ViewerInstaller" Name="InstallMarker" Type="integer" Value="1" />
+        <ServiceInstall Id="CamStationViewerServiceInstall" Name="CamStationViewerService" DisplayName="CamStation Viewer Service" Description="CamStation Viewer management service" Account="LocalSystem" Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart" RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="CamStationViewerServiceControl" Name="CamStationViewerService" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ViewerLogs">
+      <Component Id="ViewerLogsComponent" Guid="{B41465D1-C8AA-4865-8697-2F4A0DC53729}">
+        <CreateFolder />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ViewerUpdates">
+      <Component Id="ViewerUpdatesComponent" Guid="{74B7FCAC-FFEA-430C-92BE-20C7F7BFD4D9}">
+        <CreateFolder />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="ViewerRuntime">
+      <ComponentRef Id="ViewerExecutableComponent" />
+      <ComponentRef Id="ViewerServiceComponent" />
+      <ComponentRef Id="ViewerLogsComponent" />
+      <ComponentRef Id="ViewerUpdatesComponent" />
+      <ComponentGroupRef Id="GeneratedViewerPayload" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "build",
@@ -13,5 +13,5 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["src/agentPipe.ts", "src/main.ts", "src/navigation.ts", "src/viewerLifecycle.ts"]
+  "include": ["src/main.ts", "src/managementPipe.ts", "src/navigation.ts", "src/setupModel.ts", "src/setupRenderer.ts", "src/viewerLifecycle.ts"]
 }

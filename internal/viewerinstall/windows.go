@@ -123,7 +123,7 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 	if _, err := runWindows(ctx, "sc.exe", "sidtype", ServiceName, "unrestricted"); err != nil {
 		return "", err
 	}
-	serviceSID, err := accountSID(ctx, `NT SERVICE\`+ServiceName)
+	serviceSID, err := accountSID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -149,8 +149,15 @@ func RegisterRuntime(ctx context.Context, layout Layout, options RegistrationOpt
 	if _, err := runWindows(ctx, "schtasks.exe", "/Create", "/TN", RecoveryTaskName, "/XML", recoveryTaskFile, "/F"); err != nil {
 		return "", err
 	}
+	shortcutScript, shortcutEnvironment, err := publicDesktopShortcutScript(stableBootstrapPath(layout), layout.InstallDir)
+	if err != nil {
+		return "", err
+	}
+	if _, err := runWindowsEnv(ctx, shortcutEnvironment, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", shortcutScript); err != nil {
+		return "", fmt.Errorf("register public desktop shortcut: %w", err)
+	}
 	for _, dir := range []string{layout.InstallDir, layout.StateDir} {
-		if _, err := runWindows(ctx, "icacls.exe", dir, "/inheritance:r", "/grant:r", `SYSTEM:(OI)(CI)F`, `BUILTIN\Administrators:(OI)(CI)F`, options.MonitoringUserSID+`:(OI)(CI)RX`); err != nil {
+		if _, err := runWindows(ctx, "icacls.exe", dir, "/inheritance:r", "/grant:r", `SYSTEM:(OI)(CI)F`, `BUILTIN\Administrators:(OI)(CI)F`, numericSIDACLGrant(options.MonitoringUserSID)); err != nil {
 			return "", err
 		}
 	}
@@ -211,27 +218,26 @@ func windowsRecoveryActions() ([]mgr.RecoveryAction, error) {
 }
 
 func UnregisterAll(ctx context.Context, layout Layout) error {
-	commands := [][]string{
-		{"schtasks.exe", "/Delete", "/TN", ViewerTaskName, "/F"},
-		{"schtasks.exe", "/Delete", "/TN", RecoveryTaskName, "/F"},
-		{"sc.exe", "delete", ServiceName},
-		{"reg.exe", "delete", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\CamStationViewer`, "/f"},
-	}
-	deletes := make([]func(context.Context) error, 0, len(commands))
-	for _, command := range commands {
-		command := command
-		deletes = append(deletes, func(ctx context.Context) error {
-			_, err := runWindows(ctx, command[0], command[1:]...)
-			if err == nil {
-				return nil
-			}
-			// Missing registrations are already in the desired uninstall state.
-			lower := strings.ToLower(err.Error())
-			if strings.Contains(lower, "1060") || strings.Contains(lower, "cannot find") || strings.Contains(lower, "not exist") {
-				return nil
-			}
+	deletes := []func(context.Context) error{
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", unregisterScheduledTasksScript())
 			return err
-		})
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "sc.exe", "delete", ServiceName)
+			if err != nil && !strings.Contains(err.Error(), "1060") {
+				return err
+			}
+			return nil
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", unregisterUninstallRegistryScript())
+			return err
+		},
+		func(ctx context.Context) error {
+			_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", removePublicDesktopShortcutScript())
+			return err
+		},
 	}
 	return unregisterSequence(ctx, func(ctx context.Context) error {
 		return disableAndStopRegistered(ctx, layout)
@@ -239,36 +245,46 @@ func UnregisterAll(ctx context.Context, layout Layout) error {
 }
 
 func ActiveConsoleUserSID(ctx context.Context) (string, error) {
-	script := `$u=(Get-CimInstance Win32_ComputerSystem).UserName; if(!$u){exit 2}; (New-Object Security.Principal.NTAccount($u)).Translate([Security.Principal.SecurityIdentifier]).Value`
-	output, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	if err != nil {
-		return "", errors.New("active console user is required")
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	sid := strings.TrimSpace(output)
-	if !validTaskSID(sid) {
-		return "", errors.New("active console user SID is invalid")
+	shell := windows.GetShellWindow()
+	if shell == 0 {
+		return "", errors.New("interactive desktop session is required")
 	}
-	return sid, nil
+	var processID uint32
+	if _, err := windows.GetWindowThreadProcessId(shell, &processID); err != nil {
+		return "", fmt.Errorf("interactive shell process lookup failed: %w", err)
+	}
+	return interactiveShellSID(processID, shellProcessUserSID)
 }
 
-func accountSID(ctx context.Context, account string) (string, error) {
-	script := `(New-Object Security.Principal.NTAccount($args[0])).Translate([Security.Principal.SecurityIdentifier]).Value`
-	output, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, account)
+func shellProcessUserSID(processID uint32) (string, error) {
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, processID)
 	if err != nil {
-		return "", errors.New("service SID lookup failed")
+		return "", err
 	}
-	sid := strings.TrimSpace(output)
-	if !validTaskSID(sid) {
-		return "", errors.New("service SID is invalid")
+	defer windows.CloseHandle(process)
+	var token windows.Token
+	if err := windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
+		return "", err
 	}
-	return sid, nil
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
+}
+
+func accountSID(ctx context.Context) (string, error) {
+	output, err := runWindows(ctx, "sc.exe", "showsid", ServiceName)
+	return resolveServiceSID(output, err)
 }
 
 func stopRegistered(ctx context.Context, _ Layout) error {
 	// Ending the task terminates the bootstrap; closing its Job handle kills the full Electron tree.
-	script := `$t=Get-ScheduledTask -TaskName '` + ViewerTaskName + `' -ErrorAction SilentlyContinue; if($t){Stop-ScheduledTask -InputObject $t -ErrorAction Stop}; ` +
-		`$s=Get-Service -Name '` + ServiceName + `' -ErrorAction SilentlyContinue; if($s -and $s.Status -ne 'Stopped'){Stop-Service -InputObject $s -ErrorAction Stop; $s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(25))}`
-	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	_, err := runWindows(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", stopRegisteredScript())
 	return err
 }
 
@@ -316,7 +332,12 @@ func validateRegistered(ctx context.Context, _ Layout) error {
 }
 
 func runWindows(ctx context.Context, name string, args ...string) (string, error) {
+	return runWindowsEnv(ctx, nil, name, args...)
+}
+
+func runWindowsEnv(ctx context.Context, environment []string, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
+	command.Env = append(command.Environ(), environment...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", name, err, strings.TrimSpace(string(output)))

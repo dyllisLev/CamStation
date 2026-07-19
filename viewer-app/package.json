@@ -8,7 +8,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "rm -rf build build-preload && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && mv build-preload/preload.js build/preload.cjs && rm -rf build-preload",
     "package:win": "npm run build && node scripts/package-win.mjs",
-    "build:installer": "node scripts/build-installer.mjs"
+    "generate:msi-files": "node ../scripts/generate-viewer-msi-files.mjs"
   },
   "devDependencies": {
     "@electron/packager": "20.0.2",

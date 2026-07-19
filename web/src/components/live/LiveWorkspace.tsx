@@ -6,6 +6,7 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import type { Camera, TimelineData } from "../../app/api";
 import { withAppBase } from "../../app/basePath";
+import { isViewerMode, viewerRoute } from "../../app/viewerMode";
 import {
   useCameras,
   useCreateLayout,
@@ -28,7 +29,7 @@ import {
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
 import { playbackStreamCandidates, shouldRenderLiveTile } from "./streamSelection";
-import { reportViewerStream, subscribeViewerCommands } from "./viewerBridge";
+import { hasViewerFullscreenBridge, reportViewerStream, requestViewerFullscreen, subscribeViewerCommands, subscribeViewerFullscreen } from "./viewerBridge";
 import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
 
 const GRID_MARGIN: [number, number] = [4, 4];
@@ -57,6 +58,8 @@ export function LiveWorkspace() {
   const [fullscreen, setFullscreen] = useState(false);
   const [zoomedStream, setZoomedStream] = useState<string | null>(null);
   const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
+  const viewerMode = isViewerMode(window.location.search);
+  const nativeFullscreen = hasViewerFullscreenBridge();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
   const selectedCamera = rows.find((camera) => camera.streamName === selectedStream);
   const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
@@ -145,10 +148,11 @@ export function LiveWorkspace() {
   );
 
   useEffect(() => {
+    if (nativeFullscreen) return subscribeViewerFullscreen(setFullscreen);
     const handler = () => setFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
+  }, [nativeFullscreen]);
 
   useEffect(() => {
     if (!zoomedStream) return;
@@ -271,6 +275,10 @@ export function LiveWorkspace() {
   }
 
   async function toggleFullscreen() {
+    if (nativeFullscreen) {
+      await requestViewerFullscreen(!fullscreen);
+      return;
+    }
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen();
       return;
@@ -280,7 +288,7 @@ export function LiveWorkspace() {
 
   return (
     <div className="new-app new-live-app">
-      <MonitorHeader>
+      <MonitorHeader viewerMode={viewerMode}>
         <select
           className="new-select"
           value={currentId}
@@ -466,7 +474,7 @@ export function LiveWorkspace() {
   );
 }
 
-function MonitorHeader({ children }: { children: ReactNode }) {
+function MonitorHeader({ children, viewerMode }: { readonly children: ReactNode; readonly viewerMode: boolean }) {
   return (
     <header className="new-command">
       <a className="new-brand" href={withAppBase("/")} aria-label="CamStation 모니터링">
@@ -478,8 +486,8 @@ function MonitorHeader({ children }: { children: ReactNode }) {
       </a>
       <nav className="new-nav" aria-label="주요 화면">
         <a className="new-active" href={withAppBase("/live")}>라이브</a>
-        <a href={withAppBase("/recordings")}>녹화</a>
-        <a href={withAppBase("/settings")}>설정</a>
+        <a href={withAppBase(viewerMode ? viewerRoute("/recordings") : "/recordings")}>녹화</a>
+        {!viewerMode && <a href={withAppBase("/settings")}>설정</a>}
       </nav>
       {children}
     </header>

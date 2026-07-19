@@ -15,6 +15,11 @@ import (
 
 const MaxStateFileBytes int64 = 1024 * 1024
 
+const (
+	stateFileOpenAttempts   = 9
+	stateFileOpenRetryDelay = 50 * time.Millisecond
+)
+
 type MachinePaths struct {
 	Config   string
 	State    string
@@ -237,7 +242,7 @@ func SaveUpdateJournal(path string, journal UpdateJournal) error {
 }
 
 func readBoundedJSON(path string, target any) error {
-	file, err := os.Open(path)
+	file, err := openStateFile(path)
 	if err != nil {
 		return err
 	}
@@ -258,6 +263,24 @@ func readBoundedJSON(path string, target any) error {
 		return errors.New("state file contains trailing data")
 	}
 	return nil
+}
+
+func openStateFileWithRetry(openFile func() (*os.File, error), retryable func(error) bool, sleep func(time.Duration)) (*os.File, error) {
+	var lastErr error
+	for attempt := 1; attempt <= stateFileOpenAttempts; attempt++ {
+		file, err := openFile()
+		if err == nil {
+			return file, nil
+		}
+		if !retryable(err) {
+			return nil, err
+		}
+		lastErr = err
+		if attempt < stateFileOpenAttempts {
+			sleep(stateFileOpenRetryDelay)
+		}
+	}
+	return nil, fmt.Errorf("open state file after %d attempts: %w", stateFileOpenAttempts, lastErr)
 }
 
 func atomicWriteJSON(path string, value any) error {

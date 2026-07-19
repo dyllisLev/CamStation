@@ -162,6 +162,8 @@ This document records the current implementation state so the next session can c
   - Electron opens only the CamStation 2.0 `/live?viewer=1` route, emits renderer-context liveness pulses, and uses finite WebRTC-primary/MSE-fallback playback recovery whose 30-second budget begins at failure detection
   - the Agent supervises Viewer IPC and renderer liveness independently of server/control health, persists the automatic restart budget, and serializes Viewer restart, Agent restart, and update side effects
   - the installer registers the automatic Agent service, SCM recovery actions, configured-user logon task, and boot recovery task in one unattended installation flow
+  - initial install binds the Viewer task to the actual shell user in the current local or RDP session, independent of UAC elevation credentials
+  - install and repair create `CamStation Viewer.lnk` on the public desktop; it launches the stable scheduled task and uninstall or rollback removes it
   - update activation, durable retry budgets, exact artifact verification, ownership, rollback, quarantine, and restart recovery are transactional
   - `scripts/publish-viewer-release.sh` serializes publishers with `flock`, fsyncs immutable `releases/<version>-<sha>` directories, and atomically replaces stable `current/active` and `previous/active` pointers
   - legacy `current` files remain readable during one-time migration, and the release loader pins the selected immutable directory through an `os.Root` boundary so concurrent pointer changes cannot escape the release root or invalidate an in-flight download

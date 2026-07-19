@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPreloadBridge, startRendererHeartbeat } from "../src/preload.ts";
 
-test("preload exposes only the three narrow Viewer methods", () => {
+test("preload exposes only narrow Viewer methods including native fullscreen", () => {
   const sent: unknown[][] = [];
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const bridge = createPreloadBridge({
@@ -11,7 +11,7 @@ test("preload exposes only the three narrow Viewer methods", () => {
     removeListener: (channel) => listeners.delete(channel),
   });
 
-  assert.deepEqual(Object.keys(bridge).sort(), ["onCommand", "reportRenderer", "reportStream"]);
+  assert.deepEqual(Object.keys(bridge).sort(), ["getSetupState", "onCommand", "onFullscreenChange", "reportRenderer", "reportStream", "retryConnection", "saveConfiguration", "setFullscreen"]);
   bridge.reportRenderer({ state: "ready" });
   bridge.reportStream({ streamName: "yard-live", transport: "webrtc", phase: "playing" });
   assert.deepEqual(sent.map((entry) => entry[0]), ["viewer:renderer", "viewer:stream"]);
@@ -22,6 +22,13 @@ test("preload exposes only the three narrow Viewer methods", () => {
   assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "yard-live" }]);
   unsubscribe();
   assert.equal(listeners.has("viewer:command"), false);
+
+  const fullscreen: boolean[] = [];
+  const unsubscribeFullscreen = bridge.onFullscreenChange((value) => fullscreen.push(value));
+  listeners.get("viewer:fullscreen-changed")?.({}, true);
+  assert.deepEqual(fullscreen, [true]);
+  unsubscribeFullscreen();
+  assert.equal(listeners.has("viewer:fullscreen-changed"), false);
 });
 
 test("preload emits a genuine renderer-context liveness pulse periodically", (t) => {
