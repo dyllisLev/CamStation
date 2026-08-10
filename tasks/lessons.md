@@ -440,3 +440,19 @@
   upstream tests, and remove duplicate or superseded source and plans.
 - Embedded frontend assets are derived from resolved source. Rebuild them after conflict resolution
   and confirm the expected content hashes before the final full-suite verification.
+
+## 2026-08-10 — Preserve remote GUI knowledge as a repository skill
+
+- A proven remote GUI evidence path should not remain only in chat history or an operator's memory.
+  Register a repository-scoped skill under `.agents/skills` so later project sessions discover the
+  same procedure from the repository.
+- Keep operational code canonical in the reviewed project scripts and make the skill a narrow
+  decision/runbook layer. Copying PowerShell into skill resources creates two implementations that
+  can silently diverge.
+- GUI verification instructions must require direct image inspection plus bounded UIA evidence;
+  installation, service state, process existence, and nonempty screenshot files are not substitutes
+  for seeing the rendered window.
+- Put Korean and English task phrases in the skill description when the project's operator language
+  is Korean. Protect the trigger metadata, exact-window boundary, artifact integrity, and cleanup
+  rules with a source-policy test that also rejects embedded environment IPs, key fingerprints, and
+  private-key material.

@@ -1292,3 +1292,57 @@
   known-host files, and operational evidence remain uncommitted. `work/` was preserved locally.
 - Final pre-review status was clean and `origin/camstation2-initial...HEAD` was `0 9`; no push was
   performed.
+
+---
+
+# 2026-08-10 project skill for Windows GUI verification
+
+## Specification
+
+- Register a repository-scoped Codex skill under `.agents/skills` so future CamStation sessions can
+  discover the proven Windows Viewer GUI evidence workflow without relying on chat history.
+- Reuse the reviewed scripts in `scripts/windows` as the only executable implementation. Keep the
+  skill itself instructional and do not copy credentials, host keys, camera/server addresses, or
+  environment-specific evidence into source control.
+- Cover the complete verification loop: confirm an authorized active desktop session, launch or
+  recapture the exact Viewer window, retrieve PNG/UIA/completion artifacts through the existing
+  SSH boundary, verify hashes, inspect the image directly, and prove one-shot task cleanup.
+- Preserve the established safety boundary: no full-desktop capture, text-field value collection,
+  stored password, new listener/firewall rule, remote-control software, or Viewer ACL weakening.
+
+## Plan
+
+- [x] Initialize the repository skill with the supported skill-creator scaffold and Codex UI metadata.
+- [x] Write concise triggering instructions and a deterministic runbook referencing the canonical
+      project scripts, including settled-render recapture and cleanup/failure handling.
+- [x] Add a source-policy test that protects discovery metadata, canonical script references, and
+      the security/evidence invariants from accidental regression.
+- [x] Validate the skill package, run the Viewer tests and repository whitespace checks, then record
+      exact results and repository state.
+
+## Acceptance criteria
+
+- [x] The skill passes the official skill validator and lives at
+      `.agents/skills/verify-windows-viewer-gui` with valid `SKILL.md` and `agents/openai.yaml`.
+- [x] Its description reliably triggers for CamStation Windows GUI capture, focus, rendering, and
+      interactive-session verification requests.
+- [x] A future agent can follow it without asking the operator to manually capture the screen and
+      without learning any secret or weakening remote-access controls.
+- [x] Automated checks prove that exact-window capture, bounded UIA, artifact integrity, visual
+      inspection, task cleanup, and prohibited access expansions remain documented.
+
+## Review
+
+- Added the repository-scoped `verify-windows-viewer-gui` skill with English and Korean trigger
+  phrases plus Codex UI metadata. The runbook references the two reviewed PowerShell scripts instead
+  of creating a second executable implementation.
+- The workflow requires active-session preflight, local/remote source hash parity, one-shot
+  `LaunchAndCapture` or `Capture`, exact three-file retrieval, SHA-256 verification, direct
+  `view_image` inspection, bounded UIA correlation, settled-render recapture, and zero-task/worker
+  cleanup proof.
+- The skill package passed `quick_validate.py`. All Viewer tests passed `37/37`, including two new
+  source-policy cases for trigger discovery and the GUI security/evidence contract; `git diff
+  --check` also passed.
+- A secret/environment scan found no concrete host IP, desktop username, host-key fingerprint, or
+  private-key material in the skill. No Windows host, Viewer installation, camera configuration, or
+  runtime evidence was changed while registering it.
