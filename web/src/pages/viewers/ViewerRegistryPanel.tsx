@@ -5,12 +5,14 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../../components/ui/panel";
 import {
+  canDeleteViewer,
   displayViewer,
   errorMessage,
   formatDate,
   viewerAgentState,
   viewerBadgeState,
   viewerControlState,
+  viewerDeleteBlockedMessage,
 } from "./viewerFormat";
 
 type Props = {
@@ -31,6 +33,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
   );
   const viewerRows = viewers.data ?? [];
   const registryLoading = viewers.isLoading || (viewers.data === undefined && !viewers.error);
+  const selectedViewerCanDelete = selectedViewer !== undefined && canDeleteViewer(selectedViewer.status);
 
   useEffect(() => {
     if (!selectedViewer) {
@@ -50,7 +53,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
   }
 
   function deleteSelectedViewer() {
-    if (!selectedViewerId) {
+    if (!selectedViewerId || !selectedViewerCanDelete) {
       return;
     }
     if (!confirmDelete) {
@@ -131,7 +134,7 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
               {!registryLoading && viewerRows.length === 0 && (
                 <tr>
                   <td className="px-3 py-8 text-center text-sm text-slate-500" colSpan={9}>
-                    등록된 Viewer가 없습니다. 하트비트 전송으로 등록할 수 있습니다.
+                    등록된 Viewer가 없습니다. Viewer 앱을 설치하고 서버에 연결하면 자동으로 등록됩니다.
                   </td>
                 </tr>
               )}
@@ -147,12 +150,16 @@ export function ViewerRegistryPanel({ selectedViewerId, onSelectViewer }: Props)
               {updateViewer.isPending ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
               저장
             </Button>
-            <Button disabled={!selectedViewerId || deleteViewer.isPending} type="button" variant="danger" onClick={deleteSelectedViewer}>
+            <Button disabled={!selectedViewerCanDelete || deleteViewer.isPending} type="button" variant="danger" onClick={deleteSelectedViewer}>
               <Trash2 size={16} />
               {confirmDelete ? "삭제 확인" : "오프라인 Viewer 삭제"}
             </Button>
           </div>
         </form>
+
+        {selectedViewer && !selectedViewerCanDelete && (
+          <div className="text-xs text-slate-500" role="status">{viewerDeleteBlockedMessage()}</div>
+        )}
 
         {viewers.error && <div className="text-xs text-red-300">{errorMessage(viewers.error)}</div>}
         {updateViewer.error && <div className="text-xs text-red-300">{errorMessage(updateViewer.error)}</div>}

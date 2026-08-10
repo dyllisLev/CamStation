@@ -4,7 +4,6 @@ import {
   type MaintenanceInput,
   type ViewerCommandInput,
   type ViewerCommandUpdate,
-  type ViewerHeartbeat,
   type ViewerUpdate,
 } from "./api";
 
@@ -34,10 +33,6 @@ export function useProbeStream() {
 
 export function useRejectStreamDelete() {
   return useMutation({ mutationFn: (streamName: string) => api.rejectStreamDelete(streamName) });
-}
-
-export function useViewerHeartbeat() {
-  return useViewerMutation((heartbeat: ViewerHeartbeat) => api.viewerHeartbeat(heartbeat));
 }
 
 export function useViewers() {

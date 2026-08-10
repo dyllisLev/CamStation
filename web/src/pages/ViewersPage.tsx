@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ViewerCommandPanel } from "./viewers/ViewerCommandPanel";
-import { ViewerHeartbeatPanel } from "./viewers/ViewerHeartbeatPanel";
 import { ViewerRegistryPanel } from "./viewers/ViewerRegistryPanel";
 
 export function ViewersPage() {
@@ -8,10 +7,7 @@ export function ViewersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <ViewerRegistryPanel selectedViewerId={selectedViewerId} onSelectViewer={setSelectedViewerId} />
-        <ViewerHeartbeatPanel onRegistered={setSelectedViewerId} />
-      </div>
+      <ViewerRegistryPanel selectedViewerId={selectedViewerId} onSelectViewer={setSelectedViewerId} />
       <ViewerCommandPanel selectedViewerId={selectedViewerId} onSelectViewer={setSelectedViewerId} />
     </div>
   );

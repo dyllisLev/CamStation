@@ -28,6 +28,15 @@ type viewerDeleteResponse struct {
 	ID      string `json:"id"`
 }
 
+type viewerDeleteConflictResponse struct {
+	OK                  bool   `json:"ok"`
+	Error               string `json:"error"`
+	Code                string `json:"code"`
+	ID                  string `json:"id"`
+	Status              string `json:"status"`
+	OfflineAfterSeconds int    `json:"offlineAfterSeconds"`
+}
+
 type viewerHeartbeatResponse struct {
 	Viewer         store.Viewer                  `json:"viewer"`
 	DesiredRelease *viewerDesiredReleaseResponse `json:"desiredRelease"`
@@ -112,8 +121,15 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 			writeViewerError(w, err)
 			return
 		}
-		if viewer.Status != "stale" && viewer.Status != "offline" {
-			writeError(w, http.StatusConflict, store.ErrValidation)
+		if !viewerCanDelete(viewer.Status) {
+			writeJSON(w, http.StatusConflict, viewerDeleteConflictResponse{
+				OK:                  false,
+				Error:               "Viewer가 오프라인으로 확인된 뒤 삭제할 수 있습니다. 클라이언트를 종료하고 최대 30초 후 다시 시도하세요.",
+				Code:                "viewer_not_offline",
+				ID:                  viewer.ID,
+				Status:              viewer.Status,
+				OfflineAfterSeconds: int(viewerHeartbeatTTL / time.Second),
+			})
 			return
 		}
 		if err := d.db.DeleteViewer(r.Context(), id); err != nil {
@@ -209,6 +225,10 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, http.StatusOK, command)
 	})
+}
+
+func viewerCanDelete(status string) bool {
+	return status == "offline" || status == "stale"
 }
 
 func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerHeartbeat, viewer store.Viewer) (*viewerDesiredReleaseResponse, error) {

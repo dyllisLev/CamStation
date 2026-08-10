@@ -129,6 +129,14 @@ func TestViewersAPI_HeartbeatRegistryUpdateDeleteAndCommandLifecycle(t *testing.
 	if onlineDeleteStatus != http.StatusConflict {
 		t.Fatalf("online delete status/body = %d/%#v, want conflict", onlineDeleteStatus, onlineDeleteBody)
 	}
+	if onlineDeleteBody["code"] != "viewer_not_offline" || onlineDeleteBody["status"] != "online" ||
+		onlineDeleteBody["id"] != "viewer-01" || onlineDeleteBody["offlineAfterSeconds"] != float64(30) {
+		t.Fatalf("online delete conflict contract = %#v", onlineDeleteBody)
+	}
+	if onlineDeleteBody["ok"] != false ||
+		onlineDeleteBody["error"] != "Viewer가 오프라인으로 확인된 뒤 삭제할 수 있습니다. 클라이언트를 종료하고 최대 30초 후 다시 시도하세요." {
+		t.Fatalf("online delete conflict message = %#v", onlineDeleteBody)
+	}
 	if stalePatchStatus != http.StatusOK || stalePatchBody["status"] != "stale" {
 		t.Fatalf("stale patch status/body = %d/%#v", stalePatchStatus, stalePatchBody)
 	}

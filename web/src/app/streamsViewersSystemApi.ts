@@ -102,23 +102,6 @@ export type Viewer = ViewerHeartbeat & {
   readonly updatedAt: string;
 };
 
-export type ViewerDesiredRelease = {
-  readonly version: string;
-  readonly filename: string;
-  readonly sizeBytes: number;
-  readonly sha256: string;
-  readonly publishedAt: string;
-  readonly developmentUnsigned: boolean;
-  readonly downloadUrl: string;
-  readonly generation: number;
-};
-
-export type ViewerHeartbeatResponse = {
-  readonly viewer: Viewer;
-  readonly desiredRelease: ViewerDesiredRelease | null;
-  readonly commitToken?: string;
-};
-
 export type ViewerCommandState =
   | "pending"
   | "delivered"
@@ -214,8 +197,6 @@ export const streamsViewersSystemApi = {
     request<{ readonly error: string; readonly streamName: string }>(`/api/streams/${encodeURIComponent(streamName)}`, {
       method: "DELETE",
     }),
-  viewerHeartbeat: (heartbeat: ViewerHeartbeat) =>
-    request<ViewerHeartbeatResponse>("/api/viewers/heartbeat", { method: "POST", body: JSON.stringify(heartbeat) }),
   viewers: () => request<readonly Viewer[]>("/api/viewers"),
   updateViewer: (id: string, viewer: ViewerUpdate) =>
     request<Viewer>(`/api/viewers/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(viewer) }),

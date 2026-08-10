@@ -78,6 +78,14 @@ export function canCancelViewerCommand(state?: string): boolean {
   return state === "pending" || state === "delivered";
 }
 
+export function canDeleteViewer(status?: string): boolean {
+  return status === "offline" || status === "stale";
+}
+
+export function viewerDeleteBlockedMessage(): string {
+  return "Viewer가 오프라인으로 확인된 뒤 삭제할 수 있습니다. 클라이언트를 종료하고 최대 30초 후 새로고침하세요.";
+}
+
 export function displayViewer(viewer: Viewer): string {
   return viewer.label || viewer.displayName || viewer.id;
 }
