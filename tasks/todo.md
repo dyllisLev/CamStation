@@ -1734,21 +1734,36 @@
       each conflict against both parents rather than choosing one side wholesale.
 - [x] Rebuild Web/Viewer/daemon derived output as required and run `./scripts/check-dev.sh` from the
       merged 2.0 worktree.
-- [ ] Inspect merge ancestry, worktree status, diff summary, whitespace, and added-line secret
+- [x] Inspect merge ancestry, worktree status, diff summary, whitespace, and added-line secret
       patterns; document the exact merge and verification result.
 
 ## Acceptance criteria
 
-- [ ] `camstation2-initial` contains the verified Viewer command implementation and all five commits
+- [x] `camstation2-initial` contains the verified Viewer command implementation and all five commits
       that preceded the merge.
-- [ ] The merged branch exposes the five fixed operator commands while retaining current MSI release
+- [x] The merged branch exposes the five fixed operator commands while retaining current MSI release
       download and Viewer registry behavior.
-- [ ] Full Go/Web/Viewer tests, lint, builds, embedded Web output, and daemon build pass on the merged
+- [x] Full Go/Web/Viewer tests, lint, builds, embedded Web output, and daemon build pass on the merged
       branch.
-- [ ] The feature branch and 2.0 parent are both visible in merge ancestry, with no force update or
+- [x] The feature branch and 2.0 parent are both visible in merge ancestry, with no force update or
       history rewrite.
-- [ ] No remote push, release publication, WinPC reinstall, or runtime-state mutation occurs.
+- [x] No remote push, release publication, WinPC reinstall, or runtime-state mutation occurs.
 
 ## Review
 
-- Pending.
+- Feature commit `1d87081` contains the reviewed Viewer control restoration and no runtime/WinPC
+  evidence. Merge commit `326fbab` has exact parents `4504212` (the pre-merge 2.0 tip) and `1d87081`;
+  both histories are ancestors and no force update or rewrite was used.
+- Resolved the server route by retaining 2.0's offline-only Viewer deletion and MSI
+  `SupportsAgentUpdate` gate together with the strict command decoder and operator allowlist.
+  Retained the read-only registry and Settings MSI download surface while adding the five functional
+  Viewer controls and separate monitoring telemetry.
+- Rebuilt embedded Web output from the combined source. The merged hashes are
+  `index-BOMrEqyB.css` and `index-fM96zdPZ.js`; no parent-side hashed asset was selected manually.
+- `./scripts/check-dev.sh` passed on the merged 2.0 worktree: all Go packages, 60 Web tests, 38 Viewer
+  tests, Web lint/build, Viewer build, embedded Web regeneration, and daemon build.
+- Final ancestry showed `camstation2-initial` ahead of `origin/camstation2-initial` by seven commits:
+  the existing five 2.0 commits, the feature commit, and the merge commit. The worktree was clean
+  immediately after the merge commit.
+- No push, release publication, installer deployment, WinPC access, server configuration change, or
+  runtime mutation was performed during the merge.
