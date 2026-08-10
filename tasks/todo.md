@@ -49,3 +49,17 @@ Slim 공유 검토:
 - Slim tunnel의 첫 방문 경고를 통과한 뒤 미인증 요청은 401, 인증된 `/viewer`와 `/api/health`는 200을 반환했다.
 - public Origin을 사용한 `/player/api/ws` 요청이 origin 검사를 통과하고 등록되지 않은 stream 단계에서 거부됨을 확인했다.
 - 터널은 2026-08-09 15:12:48 KST에 자동 만료되며 `slim stop cold-fin`으로 조기 종료할 수 있다.
+
+## 2.0 브랜치 반영
+
+- [x] 반영 대상이 원격 `camstation2-initial`인지 확인한다.
+- [x] `/viewer` 기능 브랜치가 대상 브랜치의 직계 후속인지 확인한다.
+- [x] 미커밋 변경이 있는 2.0 로컬 worktree는 건드리지 않는 전략을 선택한다.
+- [x] `viewer-mobile-page`를 원격 `camstation2-initial`에 fast-forward 반영한다.
+- [x] 원격 2.0 브랜치가 `/viewer` 기능 커밋을 포함하는지 SHA로 검증한다.
+
+2.0 브랜치 반영 검토:
+
+- 원격 `camstation2-initial`을 `1215d05`에서 `/viewer` 기능 커밋 `bbe1cbf`로 fast-forward했다.
+- 원격 대상과 기능 브랜치의 SHA가 일치하고 두 원격 브랜치 모두 기능 커밋을 포함함을 확인했다.
+- 별도 2.0 로컬 worktree의 미커밋 변경은 수정·스테이징·정리하지 않았다.
