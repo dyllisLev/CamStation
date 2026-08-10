@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,8 +8,12 @@ import test from "node:test";
 import { ManagementConnection } from "../src/managementPipe.ts";
 
 test("management IPC connects without Agent launch identity and acquires a lease", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "camstation-viewer-management-"));
-  const socketPath = path.join(directory, "service.sock");
+  const directory = process.platform === "win32"
+    ? null
+    : await mkdtemp(path.join(tmpdir(), "camstation-viewer-management-"));
+  const socketPath = directory === null
+    ? String.raw`\\.\pipe\camstation-viewer-management-${process.pid}-${randomUUID()}`
+    : path.join(directory, "service.sock");
   const server = createServer((socket) => {
     socket.on("data", (chunk) => {
       const request = JSON.parse(chunk.toString("utf8")) as { requestId: string; type: string };
@@ -21,7 +26,7 @@ test("management IPC connects without Agent launch identity and acquires a lease
   await new Promise<void>((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
   t.after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(directory, { recursive: true, force: true });
+    if (directory !== null) await rm(directory, { recursive: true, force: true });
   });
 
   const connection = await ManagementConnection.connect(socketPath);

@@ -26,9 +26,13 @@ const forbiddenRuntimePatterns = [
   /--agent-(generation|nonce|session)/i,
 ];
 
-export function ignoredPackagePath(value) {
+export function normalizePackageEntry(value) {
   const normalized = value.replaceAll("\\", "/");
-  return packageIgnorePatterns.some((pattern) => pattern.test(normalized));
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+}
+
+export function ignoredPackagePath(value) {
+  return packageIgnorePatterns.some((pattern) => pattern.test(normalizePackageEntry(value)));
 }
 
 export function forbiddenRuntimeArtifact(value) {
@@ -40,7 +44,7 @@ function assertPackageContents(appPath) {
   if (!fs.statSync(archive).isFile()) {
     throw new Error("packaged Viewer app.asar is missing");
   }
-  const entries = listPackage(archive, { isPack: false });
+  const entries = listPackage(archive, { isPack: false }).map(normalizePackageEntry);
   for (const required of ["/build/main.js", "/build/preload.cjs", "/package.json"]) {
     if (!entries.includes(required)) {
       throw new Error(`packaged Viewer is missing ${required}`);

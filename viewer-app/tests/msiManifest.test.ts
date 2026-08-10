@@ -64,6 +64,8 @@ test("WiX source owns the direct Viewer service, shortcuts, and auto-start", asy
   assert.match(componentSource, /<util:ServiceConfig[^>]*FirstFailureActionType="restart"[^>]*SecondFailureActionType="restart"[^>]*ThirdFailureActionType="restart"[^>]*RestartServiceDelayInSeconds="60"[^>]*ResetPeriodInDays="1"/u);
   assert.match(componentSource, /<File Id="CamStationViewerExe"[^>]*>[\s\S]*<Shortcut[^>]*Directory="DesktopFolder"/u);
   assert.match(componentSource, /<File Id="CamStationViewerExe"[^>]*>[\s\S]*<Shortcut[^>]*Directory="CamStationStartMenu"/u);
+  assert.equal(componentSource.match(/<Shortcut[^>]*Advertise="yes"/gu)?.length, 2);
+  assert.match(componentSource, /<RemoveFolder Id="RemoveCamStationStartMenu" Directory="CamStationStartMenu" On="uninstall"\s*\/>/u);
   assert.doesNotMatch(componentSource, /<Shortcut[^>]*Target=/u);
   assert.match(componentSource, /Value="&quot;\[INSTALLFOLDER\]CamStationViewer\.exe&quot; --autostart"/u);
   assert.doesNotMatch(`${packageSource}\n${componentSource}`, /CamStationViewerAgent|CamStationViewerBootstrap|CamStationViewerHost|schtasks\.exe|release\.zip/u);

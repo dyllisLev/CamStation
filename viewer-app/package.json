@@ -6,7 +6,7 @@
   "main": "build/main.js",
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "build": "rm -rf build build-preload && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && mv build-preload/preload.js build/preload.cjs && rm -rf build-preload",
+    "build": "node scripts/build-files.mjs prepare && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && node scripts/build-files.mjs finalize",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "generate:msi-files": "node ../scripts/generate-viewer-msi-files.mjs"
   },

@@ -4,9 +4,10 @@
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="ViewerExecutableComponent" Guid="{4D19D9B1-57E2-4C91-98D7-55F923A8A324}">
         <File Id="CamStationViewerExe" Source="$(var.ViewerPayloadDir)\CamStationViewer.exe" KeyPath="yes">
-          <Shortcut Id="PublicDesktopShortcut" Directory="DesktopFolder" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" />
-          <Shortcut Id="StartMenuShortcut" Directory="CamStationStartMenu" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" />
+          <Shortcut Id="PublicDesktopShortcut" Directory="DesktopFolder" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
+          <Shortcut Id="StartMenuShortcut" Directory="CamStationStartMenu" Name="CamStation Viewer" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
         </File>
+        <RemoveFolder Id="RemoveCamStationStartMenu" Directory="CamStationStartMenu" On="uninstall" />
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="CamStationViewer" Type="string" Value="&quot;[INSTALLFOLDER]CamStationViewer.exe&quot; --autostart" />
       </Component>
       <Component Id="ViewerServiceComponent" Guid="{F11DFBA0-C26A-4A6E-A1C2-5C2976E9E2E5}">
