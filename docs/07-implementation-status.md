@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-17
+Last updated: 2026-08-09
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -13,6 +13,84 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://10.0.0.29:18080/live`
 
 ## Implemented
+
+### 2026-08-09 Windows-local Viewer MSI build entry point
+
+- `scripts/build-viewer-msi.ps1` is the repository-owned one-command entry point for a dedicated
+  x64 Windows developer machine or VM. It verifies Windows/x64, Node.js 22+, Go 1.25+, .NET SDK
+  8.x, Git, and the explicit `-UnsignedDevelopment` policy before doing build work.
+- The pipeline uses an ignored, unique workspace; runs Viewer and service tests; packages Electron
+  for Windows; embeds the requested Viewer-service version; generates a fresh WiX fragment; uses
+  locked WiX restore; and checks MSI identity, fixed UpgradeCode, File-table count, SHA-256, and
+  unsigned status before publishing versioned artifacts and secret-free metadata.
+- Linux-side source validation passes: 29 Viewer tests, TypeScript build, Windows Electron package,
+  Viewer-service Go tests, PowerShell 7.5 parser, non-Windows fail-closed gate, temporary x64 service
+  cross-build, fresh-fragment generation, and tracked-input hash preservation.
+- No new MSI has been produced on this Linux host. A dedicated Windows x64 host must still run the
+  documented command and prove the resulting MSI database and artifact set. The NUC monitor PC is
+  strictly an install/repair/uninstall target and must not receive build tools or source caches.
+- Build command, prerequisites, outputs, and troubleshooting are in
+  [the installer guide](../installer/README.md).
+
+### 2026-08-09 Docker home-camera canary and dedicated Viewer
+
+- A hardened all-in-one 2.0 image now runs as `camstation2-canary` on production host
+  `10.0.0.26`, publishing only HTTP `18081/tcp`. The current immutable image is
+  `camstation:2.0.0-rc.20260809.7-canary` with image ID
+  `sha256:628da2dbd0a7bbe94280d45284fe975617e3b8a56e02f8389db4ca84d68202e9`.
+- The canary DB was created only from the active 1.0 go2rtc YAML through a strict `집-` allowlist.
+  It contains `집-마당`, `집-창고1`, and `집-창고2`; every fire-station camera and `염소장`
+  are absent. The original YAML hash and all five legacy service PID/restart baselines remained
+  unchanged.
+- The new top-level `/viewer` is a chrome-free read-only surface matching the operator-designated
+  1.0 Viewer contract. At 393×852 it played all three streams through same-origin MSE, had no
+  page overflow, supported single-camera focus/return, and survived direct-route reload.
+- The container task limit is now 1024, sized for the final eight-camera fleet rather than the
+  three-camera subset. The prior 256 limit had reached peak 256 with 343 rejected task creations.
+  After recreation, three simultaneous Viewer pages sustained all nine MSE videos for about
+  160 seconds at exactly three viewers per live stream; peak PID was 230 with zero new limit hits,
+  OOMs, or CPU throttling. This capacity change did not enable any additional camera.
+- All three camera states and recorder workers are healthy. Browser, live ffprobe, finalized
+  60-second MP4, secret-safe generated-config, log, port, resource, and 1.0 continuity gates passed.
+  The canary intentionally has `restart: "no"` and must be started manually after a server reboot.
+- On 2026-08-10 KST, the operator-requested test-recording cleanup removed 1,632 finalized canary
+  MP4 files totaling 9,245,386,547 bytes through the checked recording DELETE API. The zero-file
+  checkpoint retained three growing active temp segments, three running recorder workers, three
+  streaming home cameras, container restart 0, and unchanged legacy 1.0 unit PIDs/restart counts.
+  The deleted rows are pending-backup tombstones and are not recoverable through CamStation.
+  Recording remains enabled, so new one-minute files continue after that checkpoint.
+- Exact access, status, log redaction, start/stop, state backup, image update, rollback, and
+  troubleshooting instructions are in the
+  [Docker canary operations document](2026-08-09_camstation2-docker-canary-operations.md).
+
+### 2026-08-09 production cutover preparation
+
+- Exact transitional compatibility route: `GET /new?viewer=1` returns a non-cacheable `302`
+  to `/live?viewer=1`; broader queries, methods, and subpaths have negative tests.
+- Shared stable camera-key validation admits bounded Unicode/Hangul identifiers while rejecting
+  path, URL, whitespace, control, invalid UTF-8, boundary-hyphen, and oversized values at both
+  HTTP persistence and store boundaries.
+- `camstation-migrate` supports online `snapshot`, `inspect`, `dry-run`, fresh atomic `import`,
+  repeat-safe `already-current`, and read-only `verify` for the 1.x SQLite schema.
+- Migration manifests expose camera/layout/settings invariants and URL fingerprints without raw
+  stream or ONVIF credentials. Synthetic tests prove `9/8/1`, nine sub streams, one/eight layout,
+  30/30/700 settings, three outputs, pending policies, mode 0600, no overwrite, and no secret output.
+- Fresh 2.0 settings no longer contain a development backup remote. Disabled backup accepts an
+  empty target with `protectUnbacked=true`; enabling backup still requires an explicit target.
+- Production packaging now includes a hardened `camstationd-2x.service`, daemon environment
+  template, legacy/maintenance/2.0 nginx locations, immutable bundle builder, release staging,
+  online state preparation, legacy-preserving nginx preparation, preflight, exact single-active
+  switch, and exact server rollback helpers.
+- Actual production inspection found three legacy sub values that are local go2rtc ffmpeg
+  recipes. The importer maps the exact loopback/self-key H.264 form to a recording-backed live
+  output rather than creating a recursive input; all other producer expressions are rejected.
+- Release `2.0.0-rc.20260809.5` is installed on the production server with a verified online
+  snapshot and inactive 2.0 DB (`9/8/1`, layout 1/8, 30/30/700, blocker 0). Nginx is prepared
+  with its active link still on legacy, all 1.x services remain active, and full preflight passes.
+  The 2.0 unit remains inactive/disabled and switch approval remains `NO`; switch/rollback also
+  transfer boot enablement between the exact generations. Real 2.0 camera,
+  recorder, backup, Viewer, and rollback gates remain in the
+  [readiness report](2026-08-09_cctv-2x-cutover-readiness-report.md).
 
 - Go backend skeleton under `cmd/camstationd`
 - Embedded React/Vite frontend served by the Go daemon
