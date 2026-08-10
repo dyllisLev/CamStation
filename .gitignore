@@ -1,8 +1,11 @@
 data/
 dist/
 node_modules/
+.tools/
 /viewer-app/build/
 /viewer-app/dist/
+/artifacts/
+/work/
 /cmd/camstation-viewer-installer/payload/release.zip
 .worktrees/
 /camstationd
