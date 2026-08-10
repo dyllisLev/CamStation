@@ -1,10 +1,10 @@
 # CamStation 2.0 Docker 카나리 운영 문서
 
-최종 확인: 2026-08-10 11:18 KST
+최종 확인: 2026-08-10 11:44 KST
 
 > 화면 캡처와 런타임 검증 원본은 민감한 운영 증거이므로 Git에 넣지 않고, 유지보수
 > 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/`와
-> `work/20260810-viewer-download/` 아래에만 보존한다.
+> `work/20260810-viewer-download/`, `work/20260810-viewer-registry/` 아래에만 보존한다.
 
 ## 바로 접속
 
@@ -27,8 +27,8 @@
 |---|---|
 | 서버 | `cctv` / `10.0.0.26` |
 | 컨테이너 | `camstation2-canary` — running, healthy, restart 0 |
-| 이미지 | `camstation:2.0.0-rc.20260810.8-canary` |
-| 이미지 ID | `sha256:719c6eea290f64251fc8858b8d327dc08296bfc52a746cefeec72b4dfbc69220` |
+| 이미지 | `camstation:2.0.0-rc.20260810.9-canary` |
+| 이미지 ID | `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4` |
 | 공개 포트 | `10.0.0.26:18081/tcp` 한 개만 공개 |
 | 내부 HTTP | `18080/tcp` |
 | go2rtc | API `1984`, RTSP `8554`, WebRTC `8555` 모두 컨테이너 내부 전용 |
@@ -78,6 +78,25 @@ WIN11-DELL의 기존 2.0.21 설치는 11:18 KST에 MSI 종료코드 0, 재부팅
 
 증거·결론·수동 수락 경로를 한 문서에서 인계하려면
 [Viewer 설정 다운로드 보고서](2026-08-10_viewer-settings-download-report.md)를 사용한다.
+
+## Viewer 등록과 삭제
+
+`/viewers`의 Viewer 레코드는 설치된 Viewer Agent가 주기적으로 보내는 하트비트로 자동
+등록된다. 운영 화면에는 수동 등록 폼이 없다. 과거 화면의 `QA Viewer`/`viewer-qa-01`은
+미리 채워진 시험 폼이 만든 합성 레코드였으며 Windows 설치나 연결 증거가 아니었다. 이 행은
+2026-08-10 11:33 KST에 삭제됐고 실제 Viewer 행은 유지됐다.
+
+Viewer를 정리할 때는 다음 순서를 사용한다.
+
+1. Windows에서 해당 Viewer를 정상 종료하고 필요하면 Viewer 서비스를 중지한다.
+2. 마지막 하트비트 후 최대 30초를 기다린 다음 `/viewers`에서 `새로고침`을 선택한다.
+3. Agent가 `오프라인`인 정확한 Viewer를 선택한다. 온라인 상태에서는 삭제 버튼이 비활성이다.
+4. `오프라인 Viewer 삭제`와 `삭제 확인`을 차례로 선택한다.
+5. 목록을 다시 새로고침해 정확한 ID만 사라졌는지 확인한다.
+
+선택 이후 하트비트가 다시 들어오는 경합에서는 서버가 HTTP 409와
+`viewer_not_offline`을 반환한다. 이때 강제로 DB를 지우지 말고 Viewer 프로세스·서비스가
+실제로 종료됐는지 확인한 뒤 다시 기다린다. Viewer ID가 아닌 표시명만 보고 삭제하지 않는다.
 
 2.0 카나리에 들어 있는 카메라는 다음 세 대뿐이다.
 
@@ -226,8 +245,10 @@ docker compose ps
 ```
 
 문제가 생기면 `.env`의 이미지 태그를 직전 값으로 되돌린 뒤 같은 `up` 명령을 실행한다.
-이번 MSI 다운로드 변경의 직전 이미지는 `camstation:2.0.0-rc.20260809.7-canary`이고,
-root 전용 이미지 포인터 백업은 배포 디렉터리의
+현재 Viewer 레지스트리 변경의 직전 이미지는
+`camstation:2.0.0-rc.20260810.8-canary`이고, root 전용 이미지 포인터 백업은 배포
+디렉터리의 `.env.pre-viewer-registry-20260810-024232.bak`이다. MSI 다운로드 변경의
+직전 이미지는 `camstation:2.0.0-rc.20260809.7-canary`이고 당시 백업은
 `.env.pre-msi-download-20260810-111413.bak`이다. 더 이전 Viewer 추가 전 이미지는
 `camstation:2.0.0-rc.20260809.6-canary`이며 당시 백업은
 `.env.pre-viewer-20260809-2118.bak`이다.
@@ -341,6 +362,22 @@ docker compose up -d
 - linked_workitem: eight-camera PID capacity correction
 - supersedes: none
 
+### E-005 — Viewer 합성 등록 제거와 삭제 상태 정합성
+
+- observed_at: 2026-08-10 11:27-11:44 KST
+- source_type: browser, public API, Docker/systemd inspection, automated tests
+- source_ref: `/viewers`, `/api/viewers`, immutable image labels, ignored
+  `work/20260810-viewer-registry/` screenshots
+- content_hash: 수정 전 충돌 화면
+  `31559b85d4a321f8d57767610d79fe67bda7bc86a0f50a5439a6e79079afacdd`, 수정 후 화면
+  `ddf77e131e6eb6e8c096918751460470372d8cbb1e12aca9163efd4eaf3d590f`
+- raw_excerpt: 수정 전 정확한 `DELETE /api/viewers/viewer-qa-01`은 최근 하트비트 동안 409였고
+  화면은 `validation`을 표시했다. 수정 후 목록은 실제 Viewer 1대만 포함하고 QA 폼·행은
+  없으며, 온라인 Viewer 삭제 버튼은 비활성이고 30초 안내가 표시됐다.
+- continuity: `.9` image healthy/restart 0, enabled cameras 3, running recorders 3, legacy 1.0
+  five-unit PID/restart baseline unchanged
+- finding: 합성 QA 행을 실제 설치로 오인하게 한 등록 경로와 서버/UI 삭제 조건 불일치가 제거됨
+
 ### F-001 — 전용 `/viewer`가 필요함
 
 - severity: operational
@@ -362,6 +399,20 @@ docker compose up -d
 - repro_steps: 3페이지 부하에서 브라우저 재생 상태와 cgroup PID counter를 같은 시각에 비교
 - resolution: 최종 8대와 focus/reconnect 여유를 반영해 1024로 증설하고 3페이지 부하로 재검증함
 
+### F-003 — 수동 하트비트 폼이 가짜 Viewer와 삭제 오류를 만듦
+
+- severity: operational
+- category: state-management
+- status: resolved
+- evidence_ids: E-005
+- location: `/viewers` 등록·삭제 UI와 `DELETE /api/viewers/{id}`
+- finding: 수동 시험 폼이 최근 하트비트 상태의 가짜 행을 만들고, UI는 이를 삭제 가능하게
+  표시한 반면 서버는 409로 거절해 원시 `validation`만 노출했다.
+- impact: 설치 성공 오판, 불필요한 레지스트리 행, 유지보수 삭제 혼선
+- confidence: high
+- resolution: 시험 폼 제거, 실제 Agent 자동 등록만 유지, `offline`/`stale` 삭제 조건 공유,
+  구조화된 한국어 409와 회귀 테스트 추가
+
 ### P-001 — 모바일 영상 경로
 
 - title: 모바일 Viewer 요청부터 집 카메라 MSE 재생까지
@@ -375,6 +426,21 @@ docker compose up -d
   4. 컨테이너 내부 go2rtc가 `집-*-live` 출력 세 개만 제공한다. — evidence: E-003, E-004
   5. grid 타일 선택 시 grid 구독을 내리고 해당 카메라 focus 출력 하나만 재생한다. — evidence: E-002
 - residual_risks: HTTP-only 접근, 수동 재시작, 집 카메라 3대에 한정된 실제 부하 검증
+
+### P-002 — 오프라인 Viewer 정리 경로
+
+- title: 실제 Viewer 종료부터 레지스트리 안전 삭제까지
+- path_type: maintenance
+- start: Windows Viewer/서비스 정상 종료
+- goal: 실행 중인 Viewer를 건드리지 않고 정확한 오프라인 ID만 삭제
+- steps:
+  1. 설치된 Viewer Agent의 하트비트가 중단된다. — evidence: E-005 — finding: F-003
+  2. 서버가 30초 TTL 뒤 상태를 `offline`으로 계산한다. — evidence: E-005 — finding: F-003
+  3. 운영자가 `/viewers`를 새로고침하고 정확한 ID를 선택한다. — evidence: E-005
+  4. 두 단계 삭제 확인 후 서버가 상태를 다시 검사하고 행을 삭제한다. — evidence: E-005
+  5. 경합 하트비트가 있으면 `viewer_not_offline` 409로 중단하고 삭제하지 않는다. — evidence: E-005 — finding: F-003
+- residual_risks: 목록 자동 갱신 주기는 15초이므로 30초 뒤에도 화면이 오래됐으면 수동
+  새로고침이 필요함
 
 잔여 위험은 HTTP-only 접근, 수동 재시작, 집 카메라에 한정된 검증이다. PID 용량은 8대
 기준으로 준비했지만 실제 8대 동시 영상 검증을 대신하지 않는다. 이 조건을 해소하기 전에는

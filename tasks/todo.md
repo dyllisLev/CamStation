@@ -1415,3 +1415,65 @@
 - Rollback is the previous immutable image `camstation:2.0.0-rc.20260809.7-canary` and root-only
   `.env.pre-msi-download-20260810-111413.bak`; persistent DB, media, and release storage were not
   deleted or replaced.
+
+---
+
+# 2026-08-10 Viewer 시험 레코드 삭제 및 운영 UI 정리
+
+## Specification
+
+- `QA Viewer`/`viewer-qa-01`은 실제 설치 클라이언트가 아니라 `/viewers`의 수동 하트비트
+  시험 폼이 생성한 합성 레코드로 취급한다. 다른 Viewer 레코드는 변경하거나 삭제하지 않는다.
+- 운영자 화면에서는 Viewer가 자체적으로 보내야 하는 하트비트를 임의 생성할 수 없게 하고,
+  빈 목록 안내도 실제 Viewer 설치·연결 절차를 설명하도록 바꾼다.
+- 삭제 가능 여부는 서버의 현재 상태 규칙(`offline` 또는 `stale`)과 동일하게 표시한다.
+  최근 하트비트가 있는 Viewer에는 삭제 버튼을 비활성화하고 이유를 한국어로 안내한다.
+- 서버가 삭제를 거절할 때 내부 오류 문자열 `validation`을 그대로 노출하지 않고, 현재 상태와
+  재시도 조건이 포함된 구조화된 한국어 오류를 반환한다.
+- 수정된 빌드는 새 불변 canary 이미지로만 배포한다. 기존 1.0 서비스, 카메라 3대,
+  녹화·DB·배포 파일은 그대로 유지한다.
+
+## Plan
+
+- [x] 현재 canary에서 `viewer-qa-01`의 상태와 삭제 실패 HTTP 응답을 브라우저/API/로그로 재현한다.
+- [x] 운영 페이지의 수동 하트비트 폼을 제거하고 Viewer 목록·삭제 UX를 서버 규칙과 일치시킨다.
+- [x] 서버 삭제 충돌 응답을 구조화하고 route 및 웹 회귀 테스트를 추가한다.
+- [x] Go·web 테스트, lint/build, daemon build와 diff 검사를 통과시킨다.
+- [x] 새 불변 Docker 이미지를 배포하고 2.0/1.0 연속성 및 3대 카메라 상태를 검증한다.
+- [x] 이미 TTL 만료 후 삭제된 정확한 `viewer-qa-01`의 부재와 다른 Viewer 보존을 배포 후
+      재조회·새로고침·스크린샷으로 다시 증명한다.
+
+## Acceptance criteria
+
+- [x] `/viewers`에 QA용 하트비트 입력 폼과 미리 채워진 `QA Viewer`가 더 이상 노출되지 않는다.
+- [x] 온라인 Viewer는 삭제할 수 없고, 오프라인 Viewer는 2단계 확인 후 삭제되며 원시
+      `validation` 오류가 UI에 나타나지 않는다.
+- [x] `viewer-qa-01`은 canary DB와 목록에서 제거되고 다른 Viewer 레코드 수·ID는 보존된다.
+- [x] canary는 새 이미지로 healthy/restart 0이며 홈 카메라 3대가 유지되고, 1.0 다섯 서비스의
+      PID와 재시작 횟수는 작업 전 기준과 동일하다.
+
+## Review
+
+- 수정 전 실제 브라우저에서 합성 레코드의 하트비트를 갱신하고 2단계 삭제를 수행해 정확한
+  `DELETE /api/viewers/viewer-qa-01` 409와 원시 `validation` 표시를 재현했다. 30초 TTL이
+  지난 뒤 같은 정확한 ID만 200으로 삭제됐고, 실제 Viewer ID는 보존됐다.
+- 커밋 `00005dd`는 운영 UI의 수동 하트비트 폼과 웹 heartbeat mutation을 제거했다. 실제
+  Viewer Agent용 서버 endpoint는 유지했다. UI/서버 모두 `offline`/`stale`만 삭제하며,
+  온라인 경합은 `viewer_not_offline`, 현재 상태, 30초 조건이 있는 한국어 409를 반환한다.
+- `./scripts/check-dev.sh`는 모든 Go 패키지, 57개 web 테스트·lint/build, 37개 Viewer
+  테스트·build와 daemon build를 통과했다. production policy, focused route tests,
+  embedded synthetic-string 검사와 `git diff --check`도 통과했다.
+- 새 불변 이미지 `camstation:2.0.0-rc.20260810.9-canary`의 로컬/서버 ID는 모두
+  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`이고 revision은
+  `00005dd37760db1ec5c0e6afc06d1c4c60987d03`이다. 직전 `.8` 이미지는 보존했으며 root 전용
+  롤백 포인터는 `.env.pre-viewer-registry-20260810-024232.bak`이다.
+- 첫 이미지 포인터 치환 시도는 잘못된 `sed` 표현식으로 변경·재생성 전에 중단됐다. 즉시
+  재확인한 `.env`, `.8` container, health는 그대로였고, 정확한 키 교체와 Compose 검증 후
+  canary 하나만 재생성했다.
+- 배포 후 canary는 healthy/restart 0, bind mount 2개와 `10.0.0.26:18081`을 유지한다.
+  카메라 3/3, recorder 3/3, MSI 2.0.21/124,350,464 bytes가 유지되고 로그의 error/panic/fatal은
+  0이다. 1.0 다섯 unit은 PID `248/326/247/396/246`, NRestarts 0으로 전후 동일하다.
+- 실제 `/viewers` 화면은 Viewer 1대만 표시하고 QA 폼·행이 없으며 온라인 삭제 버튼과
+  30초 안내가 정확히 렌더링됐다. 최종 화면 SHA-256은
+  `ddf77e131e6eb6e8c096918751460470372d8cbb1e12aca9163efd4eaf3d590f`이고 브라우저
+  page/console 오류는 0이다.

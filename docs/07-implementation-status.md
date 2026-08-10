@@ -9,10 +9,30 @@ This document records the current implementation state so the next session can c
 - Repository: `https://github.com/dyllisLev/CamStation.git`
 - Active branch used for this work: `camstation2-initial`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
-- Runtime test URL on the camera-reachable server: `http://10.0.0.29:18080/`
-- Main monitoring page: `http://10.0.0.29:18080/live`
+- Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
+- Runtime test URL on the camera-reachable server: `http://10.0.0.26:18081/`
+- Main monitoring page: `http://10.0.0.26:18081/live`
 
 ## Implemented
+
+### 2026-08-10 Viewer registry cleanup
+
+- `QA Viewer`/`viewer-qa-01` was a synthetic row created by a prefilled browser heartbeat form,
+  not evidence that the Windows client had been installed. The row was removed after its 30-second
+  heartbeat TTL elapsed, while the actual Viewer row remained unchanged.
+- `/viewers` no longer exposes a manual heartbeat form. Installed Viewer Agents remain the only
+  registration path through `POST /api/viewers/heartbeat`.
+- The delete action is disabled unless the server reports `offline` or `stale`, explains the
+  30-second offline transition, and retains two-step confirmation. A heartbeat/delete race now
+  returns structured `409 viewer_not_offline` with actionable Korean copy instead of raw
+  `validation`.
+- All Go packages, 57 web tests plus lint/build, 37 Viewer tests plus build, the daemon build, and
+  production policy checks pass. Browser verification proved the QA form/row absent, the actual
+  Viewer preserved, and online deletion disabled.
+- The canary runs immutable image `camstation:2.0.0-rc.20260810.9-canary`, image ID
+  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`, built from
+  `00005dd37760db1ec5c0e6afc06d1c4c60987d03`. It is healthy with restart 0, three enabled cameras,
+  three running recorder workers, and unchanged 1.0 service PIDs/restart counts.
 
 ### 2026-08-10 standard Viewer MSI publication boundary
 
@@ -25,12 +45,12 @@ This document records the current implementation state so the next session can c
 - The MSI is a manual standard-installation artifact. Publishing it does not enqueue an update for
   the superseded EXE-specific Agent flow. The operator journey is settings download, MSI install,
   launch of the installed `CamStationViewer.exe`, server connection, and monitoring confirmation.
-- Publisher, focused release/API/update-boundary tests, the full Go suite, 55 web tests plus
+- Publisher, focused release/API/update-boundary tests, the full Go suite, 57 web tests plus
   lint/build, and 37 Viewer tests plus TypeScript build pass. Docker publication and the clean-host
   manual-install handoff passed runtime verification.
-- The canary now runs immutable image `camstation:2.0.0-rc.20260810.8-canary`, image ID
-  `sha256:719c6eea290f64251fc8858b8d327dc08296bfc52a746cefeec72b4dfbc69220`, built from
-  `ed6c7df487d57a0b743db341f80327dd8f2f0126`. `/settings` visibly exposes the MSI, and both
+- The canary now runs immutable image `camstation:2.0.0-rc.20260810.9-canary`, image ID
+  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`, built from
+  `00005dd37760db1ec5c0e6afc06d1c4c60987d03`. `/settings` visibly exposes the MSI, and both
   browser-button and direct HTTP downloads match the source size and SHA-256 after container
   recreation.
 - WIN11-DELL was returned to a manual clean-install state: Viewer product/service/process/task,
@@ -63,8 +83,8 @@ This document records the current implementation state so the next session can c
 
 - A hardened all-in-one 2.0 image now runs as `camstation2-canary` on production host
   `10.0.0.26`, publishing only HTTP `18081/tcp`. The current immutable image is
-  `camstation:2.0.0-rc.20260809.7-canary` with image ID
-  `sha256:628da2dbd0a7bbe94280d45284fe975617e3b8a56e02f8389db4ca84d68202e9`.
+  `camstation:2.0.0-rc.20260810.9-canary` with image ID
+  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`.
 - The canary DB was created only from the active 1.0 go2rtc YAML through a strict `집-` allowlist.
   It contains `집-마당`, `집-창고1`, and `집-창고2`; every fire-station camera and `염소장`
   are absent. The original YAML hash and all five legacy service PID/restart baselines remained
@@ -267,6 +287,8 @@ This document records the current implementation state so the next session can c
   - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified exact `CamStationViewer.msi` or legacy `CamStationViewerSetup.exe`
   - MSI publication is manual-download-only and does not enter the legacy EXE-specific automatic-update command path
   - the Viewer registry stores independent Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
+  - the operator registry is read-only for registration: installed Viewer Agents register through their heartbeat API, while the console never exposes a prefilled synthetic heartbeat form
+  - Viewer deletion is enabled only for server-reported `offline`/`stale` entries, uses two-step confirmation, and returns an actionable structured conflict if a heartbeat races the delete
   - durable idempotent commands, bounded SSE/long-poll recovery, force restart, and server-directed `update_app` control are implemented
   - the Viewer command selector exposes only `ping`, `reload_live`, `restart_viewer`, `restart_agent`, and `resubscribe_stream`; the Agent additionally accepts server-directed `update_app`
   - `restart_stream` remains the existing Streams-page server control and `capture_diagnostics` is not implemented or advertised as a Viewer command
