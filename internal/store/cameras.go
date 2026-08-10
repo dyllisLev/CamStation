@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"camstation/internal/streamkey"
 )
 
 func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
@@ -17,6 +20,9 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 	}
 	if camera.StreamName == "" {
 		camera.StreamName = "camera-1"
+	}
+	if !streamkey.Valid(camera.StreamName) {
+		return Camera{}, fmt.Errorf("invalid camera stream name")
 	}
 	if camera.LayoutKey == "" {
 		camera.LayoutKey = camera.StreamName

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"camstation/internal/streamkey"
 )
 
 var ErrDesiredRevisionMismatch = errors.New("camera desired revision mismatch")
@@ -33,8 +35,8 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	if camera.State == "" {
 		camera.State = "unknown"
 	}
-	if camera.StreamName == "" {
-		return Camera{}, fmt.Errorf("camera stream name is required")
+	if !streamkey.Valid(camera.StreamName) {
+		return Camera{}, fmt.Errorf("invalid camera stream name")
 	}
 	if camera.LayoutKey == "" {
 		camera.LayoutKey = camera.StreamName

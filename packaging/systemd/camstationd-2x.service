@@ -1,0 +1,28 @@
+[Unit]
+Description=CamStation 2.x CCTV daemon
+Documentation=file:/opt/camstation2/current/docs/production-cutover.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=camstation
+Group=camstation
+WorkingDirectory=/var/lib/camstation2
+EnvironmentFile=/etc/camstation2/camstationd.env
+ExecStart=/opt/camstation2/current/bin/camstationd
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/camstation2 /mnt/hdd/camstation2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

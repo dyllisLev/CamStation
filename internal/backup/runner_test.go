@@ -161,6 +161,9 @@ func TestRunner_Start_whenAnotherBackupActive_rejectsDeterministically(t *testin
 
 	// Given
 	db := newBackupTestDB(t)
+	if err := db.UpdateBackupSettings(t.Context(), store.BackupSettings{Enabled: true, Target: "gdrive:/cctvTest", RetentionDays: 7}); err != nil {
+		t.Fatalf("update backup settings: %v", err)
+	}
 	source := t.TempDir()
 	exec := &fakeCommandRunner{block: make(chan struct{}), done: make(chan struct{})}
 	runner := NewRunner(db, WithCommandRunner(exec))
@@ -187,6 +190,9 @@ func TestRunner_CancelAndRetry_whenJobFailed_transitionsThroughSharedJobs(t *tes
 
 	// Given
 	db := newBackupTestDB(t)
+	if err := db.UpdateBackupSettings(t.Context(), store.BackupSettings{Enabled: true, Target: "gdrive:/cctvTest", RetentionDays: 7}); err != nil {
+		t.Fatalf("update backup settings: %v", err)
+	}
 	source := t.TempDir()
 	blockingExec := &fakeCommandRunner{block: make(chan struct{}), done: make(chan struct{})}
 	runner := NewRunner(db, WithCommandRunner(blockingExec))

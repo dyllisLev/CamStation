@@ -14,7 +14,6 @@ import (
 const (
 	JobKind          = "backup"
 	singleFlightKey  = "backup:rclone"
-	defaultTarget    = "gdrive:/cctvTest"
 	defaultTimeout   = 30 * time.Minute
 	validationFailed = "backup request validation failed"
 )

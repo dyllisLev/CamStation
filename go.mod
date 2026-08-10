@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	golang.org/x/sys v0.44.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
 )
 

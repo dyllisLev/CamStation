@@ -9,6 +9,7 @@ import (
 	"camstation/internal/camera"
 	"camstation/internal/cameraprofile"
 	"camstation/internal/store"
+	"camstation/internal/streamkey"
 )
 
 type cameraStreamSelection struct {
@@ -112,7 +113,7 @@ func persistCameraProfile(ctx context.Context, db *store.DB, prober camera.Probe
 	}
 	if req.Stream == "" {
 		req.Stream = streamName(req.Name, 1)
-	} else if req.Stream != streamName(req.Stream, 1) {
+	} else if !streamkey.Valid(req.Stream) {
 		return store.Camera{}, camera.ProbeResult{}, nil, fmt.Errorf("%w: invalid stream name", errBadCameraProfileRequest)
 	}
 	if err := validatePublicOutputSourceKeys(req.StreamOutputs); err != nil {

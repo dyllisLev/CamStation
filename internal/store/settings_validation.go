@@ -25,7 +25,7 @@ func validateRecordingSettings(settings RecordingSettings) error {
 }
 
 func validateBackupSettings(settings BackupSettings) error {
-	if strings.TrimSpace(settings.Target) == "" {
+	if settings.Enabled && strings.TrimSpace(settings.Target) == "" {
 		return fmt.Errorf("%w: backup target is required", ErrValidation)
 	}
 	if settings.RetentionDays < 0 {

@@ -161,6 +161,13 @@ func TestBackupAPI_CancelActiveJob(t *testing.T) {
 		return ctx.Err()
 	}))
 	server := newTestRouteServer(t)
+	if err := server.db.UpdateBackupSettings(t.Context(), store.BackupSettings{
+		Enabled:       true,
+		Target:        "gdrive:/cctvTest",
+		RetentionDays: 7,
+	}); err != nil {
+		t.Fatalf("update backup settings: %v", err)
+	}
 	source := t.TempDir()
 	createStatus, created := requestJSON(t, server.handler, http.MethodPost, "/api/backup/jobs", `{"source":"`+source+`","prefix":"qa/cancel"}`)
 	if createStatus != http.StatusCreated {

@@ -137,10 +137,11 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 	}
 
 	var buf bytes.Buffer
+	candidates := localCandidates(8555)
 	buf.WriteString("api:\n  listen: 127.0.0.1:1984\n")
 	buf.WriteString("rtsp:\n  listen: 127.0.0.1:8554\n")
 	buf.WriteString("webrtc:\n  listen: 0.0.0.0:8555\n")
-	if candidates := localCandidates(8555); len(candidates) > 0 {
+	if len(candidates) > 0 {
 		buf.WriteString("  candidates:\n")
 		for _, candidate := range candidates {
 			fmt.Fprintf(&buf, "    - %s\n", quoteYAML(candidate))

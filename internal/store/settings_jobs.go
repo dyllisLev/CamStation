@@ -82,7 +82,7 @@ func defaultSettingsPayload() settingsPayload {
 		},
 		Backup: BackupSettings{
 			Enabled:         false,
-			Target:          "gdrive:/cctvTest",
+			Target:          "",
 			RetentionDays:   30,
 			ScheduleEnabled: false,
 			ScheduleCron:    "0 3 * * *",

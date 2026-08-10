@@ -6,6 +6,47 @@ import (
 	"time"
 )
 
+func TestSettings_BackupDefaultsAreProductionSafe(t *testing.T) {
+	t.Parallel()
+
+	db := newSettingsJobTestDB(t)
+	settings, err := db.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("get settings: %v", err)
+	}
+	if settings.Backup.Enabled || settings.Backup.ScheduleEnabled {
+		t.Fatalf("fresh backup unexpectedly enabled: %#v", settings.Backup)
+	}
+	if settings.Backup.Target != "" {
+		t.Fatalf("fresh backup target = %q, want empty", settings.Backup.Target)
+	}
+	if !settings.Backup.ProtectUnbacked {
+		t.Fatalf("fresh backup must protect unbacked recordings")
+	}
+
+	_, err = db.UpdateSettings(t.Context(), SettingsUpdate{Backup: &BackupSettings{
+		Enabled:         false,
+		RetentionDays:   30,
+		ScheduleEnabled: false,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: true,
+	}})
+	if err != nil {
+		t.Fatalf("persist disabled backup with no target: %v", err)
+	}
+
+	_, err = db.UpdateSettings(t.Context(), SettingsUpdate{Backup: &BackupSettings{
+		Enabled:         true,
+		RetentionDays:   30,
+		ScheduleEnabled: false,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: true,
+	}})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("enabled backup without target error = %v, want ErrValidation", err)
+	}
+}
+
 func TestSettings_BackupCronScheduleAndProtectDefaultsPersist(t *testing.T) {
 	t.Parallel()
 

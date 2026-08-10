@@ -35,6 +35,13 @@ func TestRunner_Cancel_whenActiveRunnerOwnsTerminalState_waitsForRunnerFinalizer
 
 	// Given
 	db := newBackupTestDB(t)
+	if err := db.UpdateBackupSettings(t.Context(), store.BackupSettings{
+		Enabled:       true,
+		Target:        "gdrive:/cctvTest",
+		RetentionDays: 7,
+	}); err != nil {
+		t.Fatalf("update backup settings: %v", err)
+	}
 	source := t.TempDir()
 	command := newHeldCancelCommand()
 	runner := NewRunner(db, WithCommandRunner(command))
