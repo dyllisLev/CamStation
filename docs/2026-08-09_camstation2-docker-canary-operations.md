@@ -1,6 +1,6 @@
 # CamStation 2.0 Docker 카나리 운영 문서
 
-최종 확인: 2026-08-10 11:44 KST
+최종 확인: 2026-08-10 16:47 KST
 
 > 화면 캡처와 런타임 검증 원본은 민감한 운영 증거이므로 Git에 넣지 않고, 유지보수
 > 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/`와
@@ -27,8 +27,9 @@
 |---|---|
 | 서버 | `cctv` / `10.0.0.26` |
 | 컨테이너 | `camstation2-canary` — running, healthy, restart 0 |
-| 이미지 | `camstation:2.0.0-rc.20260810.9-canary` |
-| 이미지 ID | `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4` |
+| 이미지 | `camstation:2.0.0-rc.20260810.10-canary` |
+| 이미지 ID | `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9` |
+| 소스 revision | `f9f43b7bafa6157b8d3fd32562f378f060689c26` |
 | 공개 포트 | `10.0.0.26:18081/tcp` 한 개만 공개 |
 | 내부 HTTP | `18080/tcp` |
 | go2rtc | API `1984`, RTSP `8554`, WebRTC `8555` 모두 컨테이너 내부 전용 |
@@ -46,9 +47,9 @@
 | 항목 | 확인값 |
 |---|---|
 | 설치파일 | `CamStationViewer.msi` |
-| 제품 버전 | `2.0.21` |
-| 파일 크기 | `124350464` bytes (`118.6 MB` 표시) |
-| SHA-256 | `9a1d9f853a19c7f6e46cc8d392915a1fe38e2bfef61115627e0ba1ad0506753e` |
+| 제품 버전 | `2.0.24` |
+| 파일 크기 | `124436480` bytes (`118.7 MB` 표시) |
+| SHA-256 | `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160` |
 | 서명 정책 | 내부 시험용 미서명 개발 빌드 |
 | 서버 주소 입력값 | `http://10.0.0.26:18081` |
 
@@ -59,22 +60,24 @@
 3. 설치된 `CamStation Viewer`를 실행한다. 서버 주소에는 위 표의 HTTP 주소를 입력하고,
    Viewer 이름에는 해당 모니터링 PC를 식별할 이름을 입력한다.
 4. 연결 후 카나리에 허용된 집 카메라 3대의 화면과 영상 진행을 확인한다.
-5. 시험 실패 시 Windows의 `설치된 앱`에서 `CamStation Viewer 2.0.21`만 제거한다. 서버
+5. 시험 실패 시 Windows의 `설치된 앱`에서 `CamStation Viewer 2.0.24`만 제거한다. 서버
    Docker나 카메라 설정을 함께 롤백하지 않는다.
 
 이 MSI는 아직 Authenticode 서명이 없는 내부 개발 빌드다. 운영 배포로 표현하거나 외부에
 배포하지 않는다. 설치 전 Windows가 알 수 없는 게시자 경고를 보일 수 있으며, 승인된 시험
 PC에서만 사용한다.
 
-2026-08-10 11:15 KST 검증에서 설정 카드에 버전·파일명·크기·해시 접두사·다운로드 버튼이
-표시됐다. 버튼 클릭 다운로드와 독립 HTTP 다운로드 모두 위 크기와 SHA-256에 일치했고,
-컨테이너 재생성 뒤에도 동일했다. 증거는 Git에서 제외된
-`work/20260810-viewer-download/`에 보존한다.
+2.0.24는 2026-08-10 16:39 KST에 이전 2.0.21을 보존한 채 원자적으로 게시했다. 16:45 KST
+실제 설정 카드에 버전·파일명·크기·해시 접두사·다운로드 버튼이 표시됐고, 독립 HTTP
+다운로드는 위 크기와 SHA-256에 일치했다. `.10-canary` 컨테이너 재생성 뒤에도 같은
+metadata와 artifact를 다시 검증했다. 2.0.21 당시 증거는 Git에서 제외된
+`work/20260810-viewer-download/`에 보존하며, 현재 게시 기준은 이 문서의 2.0.24 값이다.
 
-WIN11-DELL의 기존 2.0.21 설치는 11:18 KST에 MSI 종료코드 0, 재부팅 요구 없음으로 제거했다.
-제품·서비스·프로세스·작업·설치 경로·바로가기·Viewer 레지스트리/Run 값·사용자 프로필
-잔여물은 모두 0이다. 개발 소스·도구·원본 MSI와 SSH/대화형 데스크톱은 다음 수동 설치
-시험을 위해 보존했다.
+WIN11-DELL은 2.0.21 clean-host 시험을 마친 뒤, 원격 제어 수락용 2.0.24를 설치했다.
+현재 2.0.24 제품과 자동 시작 `CamStationViewerService`는 유지하되 Viewer 앱은 닫혀 있고
+서버 설정은 비운 상태다. 따라서 서버에 남은 Viewer 행은 현재 `오프라인`이며, 다시 연결해
+명령을 시험하려면 운영자가 승인한 canary 주소를 Viewer에 설정해야 한다. 개발 소스·도구와
+해시가 일치하는 2.0.24 원본 MSI는 그대로 보존했다.
 
 증거·결론·수동 수락 경로를 한 문서에서 인계하려면
 [Viewer 설정 다운로드 보고서](2026-08-10_viewer-settings-download-report.md)를 사용한다.
@@ -98,6 +101,34 @@ Viewer를 정리할 때는 다음 순서를 사용한다.
 `viewer_not_offline`을 반환한다. 이때 강제로 DB를 지우지 말고 Viewer 프로세스·서비스가
 실제로 종료됐는지 확인한 뒤 다시 기다린다. Viewer ID가 아닌 표시명만 보고 삭제하지 않는다.
 
+## Viewer 원격 제어
+
+`/viewers`는 상태를 받는 모니터링 계층과 명령을 실행하는 제어 계층을 나눠 보여준다.
+Agent/Viewer/Renderer 상태가 과거 값으로 남아 있더라도 Agent 하트비트와 제어 연결이
+오프라인이면 새 명령은 보낼 수 없다. 전달만으로 성공 처리하지 않고, Viewer Service가
+실행 결과를 서버에 되돌려 최종 상태가 된 경우에만 성공으로 표시한다.
+
+사용 순서는 다음과 같다.
+
+1. `Viewer 레지스트리`에서 실제 Viewer 행의 `선택`을 누른다.
+2. `Viewer 원격 제어`의 대상이 선택한 Viewer인지 확인한다.
+3. 아래 고정 기능 중 하나를 고르고, 카메라 재연결이면 대상 카메라도 선택한다.
+4. 파괴적 재시작 기능은 화면의 추가 확인을 거친 뒤 `기능 실행`을 누른다.
+5. 명령 표에서 `대기 → 전달 → 확인 → 실행 → 성공/실패` 시각과 결과를 확인한다.
+
+| 화면 기능 | 명령 | 사용 목적 |
+|---|---|---|
+| 제어 연결 확인 | `ping` | Viewer Service가 서버 명령을 실제 처리하는지 확인 |
+| 라이브 화면 새로고침 | `reload_live` | 승인된 Viewer 라이브 화면만 다시 로드 |
+| 카메라 영상 다시 연결 | `resubscribe_stream` | 선택한 카메라의 재생 구독만 다시 생성 |
+| Viewer 앱 시작 또는 다시 시작 | `restart_viewer` | Viewer 프로세스와 새 renderer 준비 상태까지 복구 |
+| Viewer 관리 서비스 다시 시작 | `restart_service` | Windows Service와 서버 제어 연결을 다시 수립 |
+
+2026-08-10 WinPC 수락에서는 다섯 명령 모두 실제로 `succeeded`까지 확인했다. 이번 Docker
+배포 후에는 동일한 다섯 옵션과 명령 이력·상태 표시를 실제 `/viewers`에서 다시 확인했다.
+다만 정리된 WinPC가 현재 서버 미설정 상태이므로 실행 버튼이 비활성인 것이 정상이며, 배포
+검증을 위해 오프라인 Viewer에 새 명령을 억지로 만들지 않았다.
+
 2.0 카나리에 들어 있는 카메라는 다음 세 대뿐이다.
 
 - `집-마당`
@@ -120,6 +151,8 @@ Viewer를 정리할 때는 다음 순서를 사용한다.
 | 연결 회수 | 시험 페이지 종료 직후 세 live stream 모두 Viewer/consumer 0으로 회수 |
 | 카메라 API | 정확히 3대, 모두 `streaming` |
 | 녹화 워커 | 정확히 3개, 모두 `running` |
+| Viewer 원격 제어 | 실제 Viewer 선택, 고정 기능 5개 표시, 오프라인 대상 실행 차단 |
+| Viewer 설치파일 | 2.0.24 metadata/크기/SHA-256 및 컨테이너 재생성 후 다운로드 일치 |
 | 60초 녹화 재생성 | 세 카메라 H.264 MP4를 ffprobe로 확인 |
 | 컨테이너 로그 | URL 인증정보 패턴 0, error/fatal/panic 행 0 |
 | PID 원인·조치 | 종전 상한 256 도달·거부 343회 확인 후 1024로 증설; 재시험 peak 230, 거부 0 |
@@ -245,9 +278,11 @@ docker compose ps
 ```
 
 문제가 생기면 `.env`의 이미지 태그를 직전 값으로 되돌린 뒤 같은 `up` 명령을 실행한다.
-현재 Viewer 레지스트리 변경의 직전 이미지는
-`camstation:2.0.0-rc.20260810.8-canary`이고, root 전용 이미지 포인터 백업은 배포
-디렉터리의 `.env.pre-viewer-registry-20260810-024232.bak`이다. MSI 다운로드 변경의
+현재 Viewer 원격 제어 배포의 직전 이미지는
+`camstation:2.0.0-rc.20260810.9-canary`이고, root 전용 이미지 포인터 백업은 배포
+디렉터리의 `.env.pre-viewer-controls-20260810-074056.bak`이다. Viewer 레지스트리 변경의
+직전 이미지는 `camstation:2.0.0-rc.20260810.8-canary`이고 당시 백업은
+`.env.pre-viewer-registry-20260810-024232.bak`이다. MSI 다운로드 변경의
 직전 이미지는 `camstation:2.0.0-rc.20260809.7-canary`이고 당시 백업은
 `.env.pre-msi-download-20260810-111413.bak`이다. 더 이전 Viewer 추가 전 이미지는
 `camstation:2.0.0-rc.20260809.6-canary`이며 당시 백업은
@@ -313,7 +348,8 @@ docker compose up -d
 - PID 1024는 전체 8대 운용을 위한 용량 설정이지, 카나리에서 8대를 활성화했다는 뜻이 아니다.
 - 외부 진입은 HTTP 한 개뿐이며 direct WebRTC는 공개·검증하지 않았다.
 - 백업 원격지, 알림, ONVIF/PTZ와 Windows Viewer 운영 전환은 아직 완료되지 않았다. Viewer
-  2.0.21 설치파일 게시와 clean-host 수동 설치 준비까지만 완료됐다.
+  2.0.24 설치파일과 원격 제어 코드는 게시됐지만, 현재 WinPC는 서버 미설정 상태이므로 상시
+  운영 연결·장기 soak는 별도 수락 작업이다.
 - 자동 부팅은 의도적으로 꺼져 있다. 정식 전환 때 boot ownership과 안정 주소를 별도로 결정한다.
 
 ## 증거 → 결론 → 경로
@@ -378,6 +414,26 @@ docker compose up -d
   five-unit PID/restart baseline unchanged
 - finding: 합성 QA 행을 실제 설치로 오인하게 한 등록 경로와 서버/UI 삭제 조건 불일치가 제거됨
 
+### E-006 — Viewer 원격 제어 Docker 배포
+
+- observed_at: 2026-08-10 16:39-16:47 KST
+- source_type: immutable image, public API, browser, Docker/systemd inspection
+- source_ref: `/viewers`, `/settings`, `/viewer`, image labels, release catalog
+- content_hash: n/a — 민감한 transient 화면은 직접 검사 후 삭제
+- image: `camstation:2.0.0-rc.20260810.10-canary`,
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`
+- source_revision: `f9f43b7bafa6157b8d3fd32562f378f060689c26`
+- raw_excerpt: Viewer 1대 선택, 명령 옵션 5개, 합성 등록 UI 없음, 오프라인 실행 차단;
+  `/settings` 2.0.24 표시와 124,436,480-byte artifact SHA-256 일치; `/viewer` 3/3 MSE
+  `playing`, `readyState=4`.
+- continuity: container healthy/restart 0, mount/port/security fingerprint 불변, camera 3/3
+  streaming, recorder 3/3 running, 새 로그 error/fatal/panic/credential 패턴 0, legacy 1.0
+  five-unit PID/restart baseline unchanged
+- rollback: `.9-canary` 이미지와 root 전용
+  `.env.pre-viewer-controls-20260810-074056.bak` 보존
+- finding: 병합된 Viewer 제어와 최신 검증 MSI가 기존 canary 격리·녹화·1.0 연속성을
+  바꾸지 않고 실제 운영 화면에 반영됨
+
 ### F-001 — 전용 `/viewer`가 필요함
 
 - severity: operational
@@ -441,6 +497,21 @@ docker compose up -d
   5. 경합 하트비트가 있으면 `viewer_not_offline` 409로 중단하고 삭제하지 않는다. — evidence: E-005 — finding: F-003
 - residual_risks: 목록 자동 갱신 주기는 15초이므로 30초 뒤에도 화면이 오래됐으면 수동
   새로고침이 필요함
+
+### P-003 — Viewer 선택부터 원격 명령 결과까지
+
+- title: 운영자 선택에서 Viewer Service 실행 결과까지
+- path_type: callflow
+- start: `/viewers`의 실제 Viewer 행 선택
+- goal: PC 직접 조작 없이 고정된 복구 기능을 실행하고 결과를 확인
+- steps:
+  1. 운영자가 Viewer와 고정 기능 하나를 선택한다. — evidence: E-006
+  2. 서버가 대상 상태·명령 type·필수 입력을 검증하고 durable command를 만든다. — evidence: E-006
+  3. 독립 제어 연결이 명령을 받아 Service 또는 renderer의 좁은 adapter로 전달한다.
+  4. Viewer/Service 재시작은 새 process·lease·boot generation이 확인된 뒤 결과를 확정한다.
+  5. `/viewers`가 전달·확인·실행·최종 결과 시각을 자동 갱신한다. — evidence: E-006
+- residual_risks: 현재 게시 Viewer는 오프라인이며, 상시 연결 상태의 장기 soak와 정식 서명
+  MSI 검증은 남아 있음
 
 잔여 위험은 HTTP-only 접근, 수동 재시작, 집 카메라에 한정된 검증이다. PID 용량은 8대
 기준으로 준비했지만 실제 8대 동시 영상 검증을 대신하지 않는다. 이 조건을 해소하기 전에는

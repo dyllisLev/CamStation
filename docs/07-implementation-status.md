@@ -10,10 +10,34 @@ This document records the current implementation state so the next session can c
 - Active branch used for this work: `camstation2-initial`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
+- Current deployed 2.0 source revision: `f9f43b7bafa6157b8d3fd32562f378f060689c26`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.26:18081/`
 - Main monitoring page: `http://10.0.0.26:18081/live`
 
 ## Implemented
+
+### 2026-08-10 Viewer remote control Docker deployment
+
+- The merged monitoring/control restoration is deployed as immutable image
+  `camstation:2.0.0-rc.20260810.10-canary`, image ID
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`, built from exact
+  revision `f9f43b7bafa6157b8d3fd32562f378f060689c26`.
+- The real `/viewers` page preserves automatic Viewer registration, allows selecting the actual
+  Viewer, and exposes exactly `ping`, `reload_live`, `resubscribe_stream`, `restart_viewer`, and
+  `restart_service`. An offline Viewer remains selectable for inspection but command submission is
+  disabled instead of creating a command that cannot be delivered.
+- The release catalog now serves the independently verified unsigned development MSI `2.0.24`:
+  124,436,480 bytes, SHA-256
+  `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160`. Metadata, settings-page
+  display, content length, and a complete HTTP download remained identical after recreation.
+- Post-deployment browser verification showed all five controls, no synthetic registration form,
+  and three `/viewer` MSE videos at `playing`/`readyState=4`. Public APIs reported three streaming
+  cameras and three running recorders; the new container remained healthy with restart 0 and no
+  error/fatal/panic/credential-pattern log matches.
+- Port, mount, read-only-root, non-root user, capability, PID, and restart-policy boundaries are
+  unchanged. All five legacy 1.0 services retained their exact main PIDs and restart count 0. The
+  previous `.9-canary` image and root-only `.env.pre-viewer-controls-20260810-074056.bak` remain the
+  immediate rollback pair.
 
 ### 2026-08-10 Viewer registry cleanup
 
@@ -29,16 +53,18 @@ This document records the current implementation state so the next session can c
 - All Go packages, 57 web tests plus lint/build, 37 Viewer tests plus build, the daemon build, and
   production policy checks pass. Browser verification proved the QA form/row absent, the actual
   Viewer preserved, and online deletion disabled.
-- The canary runs immutable image `camstation:2.0.0-rc.20260810.9-canary`, image ID
-  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`, built from
-  `00005dd37760db1ec5c0e6afc06d1c4c60987d03`. It is healthy with restart 0, three enabled cameras,
+- The canary currently includes this fix in immutable image
+  `camstation:2.0.0-rc.20260810.10-canary`, image ID
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`. It is healthy with
+  restart 0, three enabled cameras,
   three running recorder workers, and unchanged 1.0 service PIDs/restart counts.
 
 ### 2026-08-10 standard Viewer MSI publication boundary
 
-- The dedicated Windows build PC produced and independently validated the unsigned development
-  `CamStationViewer.msi` version `2.0.21`: 124,350,464 bytes, SHA-256
-  `9a1d9f853a19c7f6e46cc8d392915a1fe38e2bfef61115627e0ba1ad0506753e`.
+- The dedicated Windows build PC first produced and independently validated unsigned development
+  `CamStationViewer.msi` version `2.0.21`. The current catalog supersedes it with the separately
+  verified remote-control build `2.0.24`: 124,436,480 bytes, SHA-256
+  `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160`.
 - The release catalog and atomic publisher accept only the exact current MSI name and the exact
   legacy EXE name. The settings page shows the actual installer filename and a fixed same-origin
   download action; arbitrary executable/package names remain rejected.
@@ -48,15 +74,15 @@ This document records the current implementation state so the next session can c
 - Publisher, focused release/API/update-boundary tests, the full Go suite, 57 web tests plus
   lint/build, and 37 Viewer tests plus TypeScript build pass. Docker publication and the clean-host
   manual-install handoff passed runtime verification.
-- The canary now runs immutable image `camstation:2.0.0-rc.20260810.9-canary`, image ID
-  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`, built from
-  `00005dd37760db1ec5c0e6afc06d1c4c60987d03`. `/settings` visibly exposes the MSI, and both
+- The canary now runs immutable image `camstation:2.0.0-rc.20260810.10-canary`, image ID
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`, built from
+  `f9f43b7bafa6157b8d3fd32562f378f060689c26`. `/settings` visibly exposes the MSI, and both
   browser-button and direct HTTP downloads match the source size and SHA-256 after container
   recreation.
-- WIN11-DELL was returned to a manual clean-install state: Viewer product/service/process/task,
-  owned paths, profile data, registry keys, shortcuts, and Run value are absent. MSI uninstall exit
-  was 0 with no reboot. SSH, the interactive desktop session, development source/toolchain, and the
-  source MSI remain intact.
+- WIN11-DELL was returned to a manual clean-install state after the 2.0.21 download test, then used
+  for the 2.0.24 command acceptance. It now retains the verified 2.0.24 product and automatic
+  Service while the Viewer is closed and its server configuration is empty. SSH, the interactive
+  desktop session, development source/toolchain, and both verified MSI artifacts remain intact.
 - The operator procedure, immutable evidence hashes, findings, acceptance path, and rollback boundary
   are consolidated in
   [the Viewer settings download report](2026-08-10_viewer-settings-download-report.md).
@@ -83,8 +109,8 @@ This document records the current implementation state so the next session can c
 
 - A hardened all-in-one 2.0 image now runs as `camstation2-canary` on production host
   `10.0.0.26`, publishing only HTTP `18081/tcp`. The current immutable image is
-  `camstation:2.0.0-rc.20260810.9-canary` with image ID
-  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4`.
+  `camstation:2.0.0-rc.20260810.10-canary` with image ID
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`.
 - The canary DB was created only from the active 1.0 go2rtc YAML through a strict `집-` allowlist.
   It contains `집-마당`, `집-창고1`, and `집-창고2`; every fire-station camera and `염소장`
   are absent. The original YAML hash and all five legacy service PID/restart baselines remained

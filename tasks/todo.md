@@ -1767,3 +1767,93 @@
   immediately after the merge commit.
 - No push, release publication, installer deployment, WinPC access, server configuration change, or
   runtime mutation was performed during the merge.
+
+---
+
+# 2026-08-10 Deploy merged Viewer controls to Docker canary
+
+## Scope and deployment specification
+
+- Deploy the exact local `camstation2-initial` HEAD containing the merged Viewer monitoring and
+  remote-control restoration to the existing isolated CamStation 2.0 Docker canary.
+- Build a new immutable image tag and retain the currently running image as the immediate rollback
+  target. Never overwrite an existing tag, remove images, prune Docker state, or delete volumes.
+- Recreate only the canary `camstation` service. Preserve its state, media, Viewer-release mounts,
+  management-network-only HTTP publication, PID limit, restart policy, and three-camera allowlist.
+- Keep the legacy 1.0 services, nginx ownership, databases, recordings, camera configuration, and
+  client routing untouched. This deployment is not authorization for the 1.0-to-2.0 cutover.
+- Publish Viewer MSI `2.0.24` only if the previously verified artifact can be recovered and its exact
+  size and SHA-256 match the recorded build. Otherwise retain the current catalog entry and report
+  that limitation instead of substituting or rebuilding an unverified installer.
+- On any image/config/health acceptance failure, restore the backed-up image pointer and recreate
+  the prior canary service before continuing analysis.
+
+## Plan
+
+- [x] Record the exact Git revision, current image/ref/ID, Compose deployment directory, container
+      isolation settings, three-camera/recorder state, Viewer release metadata, and legacy service
+      PID/restart baseline without mutating runtime state.
+- [x] Build and inspect a new immutable Docker image from the exact merged HEAD, including OCI
+      revision/version labels, non-root runtime contract, entry point, health check, and embedded UI.
+- [x] Transfer the image without deleting the prior image; verify the remote image ID matches the
+      locally built image before changing Compose configuration.
+- [x] Create a root-only `.env` rollback copy, replace exactly one `CAMSTATION_IMAGE` key atomically,
+      validate rendered Compose configuration, and force-recreate only `camstation`.
+- [x] Prove health, zero restart count, unchanged port/mount/resource boundaries, three streaming
+      home cameras, three running recorders, clean bounded logs, and unchanged legacy services.
+- [x] Verify the real `/viewers` operator surface exposes the five supported controls and no
+      synthetic Viewer registration form; close the browser automation session afterward.
+- [x] If the exact verified MSI is available, publish it through the persistent release catalog and
+      verify version/size/hash through API and `/settings`; otherwise leave the catalog unchanged.
+- [x] Update the Docker canary runbook, this review, and lessons; run repository whitespace/link/
+      secret-scope checks and commit only the deployment record changes.
+
+## Acceptance criteria
+
+- [x] The running canary image label points to the exact merged Git revision and a new immutable tag;
+      the previous image and an exact rollback configuration backup remain available.
+- [x] The container is healthy with restart count zero and the same host publication, bind mounts,
+      PID limit, restart policy, and positive three-camera scope as before deployment.
+- [x] Public APIs report exactly three streaming home cameras and exactly three running recorders;
+      recent container logs contain no panic/fatal/credential leakage indicators.
+- [x] All legacy 1.0 continuity services retain their pre-deployment active state, main PID, and
+      restart count.
+- [x] `/viewers` renders a selectable Viewer and the five fixed commands (`ping`, `reload_live`,
+      `resubscribe_stream`, `restart_viewer`, `restart_service`) with Korean operator guidance.
+- [x] The Viewer release catalog either serves the exact verified `2.0.24` MSI or remains unchanged
+      with the missing-artifact reason explicitly recorded; no unverified installer is published.
+- [x] The deployment record contains enough evidence for deterministic rollback without recording
+      credentials, camera URLs, private runtime paths, or sensitive screenshots.
+
+## Review
+
+- Built exact HEAD `f9f43b7bafa6157b8d3fd32562f378f060689c26` as immutable
+  `camstation:2.0.0-rc.20260810.10-canary`. Local and server image IDs both equal
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`; labels, non-root
+  user, entry point, health check, and all five embedded control types/labels passed inspection.
+- Recovered the previously proven WinPC MSI rather than rebuilding it. Its 124,436,480-byte size
+  and SHA-256 `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160`
+  matched the acceptance record before atomic 2.0.24 publication. Metadata and a complete HTTP
+  download matched again after container recreation; all bounded staging files were removed.
+- Changed exactly one `CAMSTATION_IMAGE` line after a validated root-only backup. Compose rendered
+  the intended image and recreated only `camstation`; the service became healthy without rollback.
+  The immediate rollback pair is retained `.9-canary` image ID
+  `sha256:178b101f02488bf317ea8c447cb619adb4e151a0d943a634f35ea089ee5f28e4` and
+  `.env.pre-viewer-controls-20260810-074056.bak`.
+- The new container is healthy with restart 0. Its management-only port, two bind mounts and mount
+  fingerprint, read-only root, UID/GID, dropped capabilities, PID 1024, and restart `no` settings
+  exactly match the baseline. APIs report three enabled/streaming home cameras and three running
+  recorder workers; startup logs contain zero error/fatal/panic or credential-pattern matches.
+- Browser acceptance selected the real Viewer and found exactly five command choices with no
+  synthetic registration form. Because that Viewer is currently offline, command execution is
+  correctly disabled. `/settings` displays 2.0.24 and the matching artifact identity, while all
+  three `/viewer` videos reached MSE `playing`, `readyState=4`. The browser and screenshot were
+  closed and removed without issuing a command.
+- All five legacy 1.0 services retained their exact baseline PIDs (`248`, `326`, `247`, `246`,
+  `396`) and restart count 0 before and after deployment. A final delayed check again returned
+  canary healthy/restart 0, cameras 3/3, recorders 3/3, and legacy continuity 5/5.
+- One publication assertion initially expected `application/x-msi`; the implemented and tested
+  route deliberately serves MSI as `application/octet-stream`. Work stopped before Docker mutation,
+  then metadata, length, disposition, complete content hash, and source contract proved publication
+  correct. A later `docker top -eo comm` portability assumption was replaced by a read-only in-
+  container process-name check; neither diagnostic mismatch changed runtime state.

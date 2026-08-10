@@ -1,5 +1,21 @@
 # Lessons
 
+## 2026-08-10 — 최신 Docker 코드와 Viewer 설치파일 포인터를 함께 검증한다
+
+- Viewer 기능을 서버에 배포할 때 Docker 이미지 revision과 Windows MSI release catalog는
+  서로 다른 포인터다. 새 서버 UI만 올리고 이전 MSI를 계속 게시하면 사용자는 기능을 보지만
+  실행할 수 없는 클라이언트를 다시 설치하게 된다. 두 포인터를 각각 immutable identity와
+  전체 다운로드 SHA-256으로 검증하고, 하나의 배포 결과에서 현재 조합을 명시한다.
+- 후속 assertion이 실패했다고 이미 성공한 원자 게시를 곧바로 되돌리지 않는다. 다음 mutation을
+  멈춘 뒤 metadata, headers, length, complete content hash와 현재 코드의 실제 계약을 분리해서
+  확인한다. 이번에는 artifact가 아니라 검사기가 지원되는 MSI MIME을 잘못 가정했다.
+- 컨테이너 검증 명령도 이식성을 가정하지 않는다. 공개 포트는 `127.0.0.1`이라고 추정하지 말고
+  Docker binding의 `HostIp`에서 파생하고, `docker top`의 임의 `ps` format 대신 대상 daemon이
+  지원하는 형식을 먼저 확인하거나 컨테이너 내부의 read-only `ps` 결과를 안전하게 집계한다.
+- 실제 UI 수락에서는 Viewer를 선택했을 때 다섯 고정 기능이 보이는 것뿐 아니라, Agent가
+  오프라인이면 실행이 비활성인지 함께 확인한다. 서버 제어 기능이 있다는 사실은 전달 불가능한
+  대상에 명령을 쌓아도 된다는 뜻이 아니다.
+
 ## 2026-08-10 — 시험용 Viewer 등록 기능을 운영 화면과 분리한다
 
 - Viewer 하트비트는 설치된 클라이언트의 생존·상태 증거이지 운영자가 임의로 만드는 등록

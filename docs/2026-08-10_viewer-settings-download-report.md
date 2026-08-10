@@ -1,5 +1,9 @@
 # Viewer 설정 페이지 다운로드 및 clean-host 인계 보고서
 
+> 이 문서는 최초 2.0.21 게시·제거 시험의 역사적 증거다. 현재 canary는 Viewer 원격 제어가
+> 포함된 2.0.24를 게시하며, 최신 크기·SHA-256·설치 상태·롤백 정보는
+> [Docker 카나리 운영 문서](2026-08-09_camstation2-docker-canary-operations.md)를 따른다.
+
 > 주의: `CamStationViewer.msi` 2.0.21은 Authenticode 서명이 없는 내부 개발 빌드다.
 > 승인된 시험 PC와 `10.0.0.0/24` 접근 환경에서만 사용하며 운영용 또는 외부 배포본으로
 > 취급하지 않는다.
