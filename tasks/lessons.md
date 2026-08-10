@@ -470,3 +470,10 @@
   the distributable installer. The current standard package is the MSI and must install the Viewer
   EXE, service, shortcuts, and uninstall registration as one lifecycle-owned product; reviving the
   rejected custom Setup EXE or publishing a bare application EXE would not satisfy that journey.
+- For an optional Windows registry value, read the parent key and inspect
+  `PSObject.Properties[name]`. `Get-ItemPropertyValue -ErrorAction SilentlyContinue` can still emit a
+  localized missing-property diagnostic even when absence is the expected success state, making a
+  successful cleanup appear failed.
+- In nested SSH shell validation, avoid `$1`-based `awk` snippets under a remote `set -u` unless the
+  quoting boundary is proven. Prefer shell parameter trimming or a local parser so validation does
+  not fail after the underlying publication already succeeded.

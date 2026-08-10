@@ -1376,25 +1376,42 @@
 
 - [x] Inventory the existing release endpoint/container mounts, candidate installer artifacts, and
       exact Windows installed product footprint without mutation.
-- [ ] Select and verify the canonical installer, stage it into persistent 2.0 release storage, and
+- [x] Select and verify the canonical installer, stage it into persistent 2.0 release storage, and
       make the Docker settings page/download endpoint serve it with matching metadata.
-- [ ] Download the artifact independently through the `10.x` service URL and prove filename, size,
+- [x] Download the artifact independently through the `10.x` service URL and prove filename, size,
       content type, and SHA-256.
-- [ ] Uninstall the exact Windows Viewer product, then remove only confirmed Viewer-owned remnants.
-- [ ] Audit Windows product/service/process/task/file/registry state plus preserved SSH/build access;
+- [x] Uninstall the exact Windows Viewer product, then remove only confirmed Viewer-owned remnants.
+- [x] Audit Windows product/service/process/task/file/registry state plus preserved SSH/build access;
       record the download URL, hash, rollback boundary, and verification results.
 
 ## Acceptance criteria
 
-- [ ] The published filename and extension match the real installer format and its version/hash are
+- [x] The published filename and extension match the real installer format and its version/hash are
       fixed in release metadata.
-- [ ] The installer appears as a download action on the CamStation 2.0 `/settings` page, remains
+- [x] The installer appears as a download action on the CamStation 2.0 `/settings` page, remains
       downloadable after a container restart, and a downloaded copy matches the published SHA-256.
-- [ ] WIN11-DELL contains no installed CamStation Viewer product, Viewer service/process/task,
+- [x] WIN11-DELL contains no installed CamStation Viewer product, Viewer service/process/task,
       auto-start entry, application directory, protected Viewer state, or product-created shortcut.
-- [ ] SSH maintenance access, the interactive Windows account/RDP session, source tree, and MSI build
+- [x] SSH maintenance access, the interactive Windows account/RDP session, source tree, and MSI build
       toolchain are preserved for subsequent development and the user's manual clean-install test.
 
 ## Review
 
-- Pending inventory, publication, uninstall, and verification.
+- Commit `ed6c7df` adds exact-name MSI publication, filename-specific download headers, the visible
+  settings filename/action, and an explicit guard that keeps MSI out of the legacy EXE Agent update
+  path. The full Go suite, publisher contract, 55 web tests/lint/build, 37 Viewer tests/build, daemon
+  build, and `git diff --check` pass.
+- The dedicated Windows artifact and both server downloads are 124,350,464 bytes with SHA-256
+  `9a1d9f853a19c7f6e46cc8d392915a1fe38e2bfef61115627e0ba1ad0506753e`.
+  The live browser snapshot shows version 2.0.21, `CamStationViewer.msi`, 118.6 MB, hash prefix, and an
+  enabled download button; the browser click produced the same hash with no page/console error.
+- The canary runs image `camstation:2.0.0-rc.20260810.8-canary` at image ID
+  `sha256:719c6eea290f64251fc8858b8d327dc08296bfc52a746cefeec72b4dfbc69220`, healthy with restart 0,
+  the same two bind mounts and port, exactly three streaming home cameras, and three running recorder
+  workers. All five legacy 1.0 units retain their baseline PIDs and restart count 0.
+- WIN11-DELL MSI uninstall returned 0 with no reboot. Product/service/process/task, five exact owned
+  paths, Viewer/installer registry, Run value, and every user-profile Viewer residue are absent.
+  SSH, Explorer session 1, development source/tools, and the original hash-matching MSI remain.
+- Rollback is the previous immutable image `camstation:2.0.0-rc.20260809.7-canary` and root-only
+  `.env.pre-msi-download-20260810-111413.bak`; persistent DB, media, and release storage were not
+  deleted or replaced.

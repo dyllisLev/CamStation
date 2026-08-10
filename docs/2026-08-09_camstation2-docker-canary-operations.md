@@ -1,14 +1,16 @@
 # CamStation 2.0 Docker 카나리 운영 문서
 
-최종 확인: 2026-08-10 06:03 KST
+최종 확인: 2026-08-10 11:18 KST
 
 > 화면 캡처와 런타임 검증 원본은 민감한 운영 증거이므로 Git에 넣지 않고, 유지보수
-> 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/` 아래에만 보존한다.
+> 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/`와
+> `work/20260810-viewer-download/` 아래에만 보존한다.
 
 ## 바로 접속
 
 - 모바일·무인 뷰어: [http://10.0.0.26:18081/viewer](http://10.0.0.26:18081/viewer)
 - 2.0 운영 화면: [http://10.0.0.26:18081/live](http://10.0.0.26:18081/live)
+- 설정·Windows 설치파일: [http://10.0.0.26:18081/settings](http://10.0.0.26:18081/settings)
 - 상태 API: [http://10.0.0.26:18081/api/health](http://10.0.0.26:18081/api/health)
 
 `/viewer`가 1.0의 `https://cctv2.nuc.hmini.me/viewer`에 대응하는 전용 화면이다.
@@ -25,8 +27,8 @@
 |---|---|
 | 서버 | `cctv` / `10.0.0.26` |
 | 컨테이너 | `camstation2-canary` — running, healthy, restart 0 |
-| 이미지 | `camstation:2.0.0-rc.20260809.7-canary` |
-| 이미지 ID | `sha256:628da2dbd0a7bbe94280d45284fe975617e3b8a56e02f8389db4ca84d68202e9` |
+| 이미지 | `camstation:2.0.0-rc.20260810.8-canary` |
+| 이미지 ID | `sha256:719c6eea290f64251fc8858b8d327dc08296bfc52a746cefeec72b4dfbc69220` |
 | 공개 포트 | `10.0.0.26:18081/tcp` 한 개만 공개 |
 | 내부 HTTP | `18080/tcp` |
 | go2rtc | API `1984`, RTSP `8554`, WebRTC `8555` 모두 컨테이너 내부 전용 |
@@ -36,6 +38,46 @@
 | 상태 저장소 | root 전용 `.env`가 지정하는 canary 전용 bind mount |
 | 녹화 저장소 | root 전용 `.env`가 지정하는 canary 전용 media bind mount |
 | 녹화 정리 기준점 | 2026-08-10 06:03 KST 완료 파일 0, 작성 중 3; 녹화 계속 활성 |
+
+## Windows Viewer 수동 설치 시험
+
+설정 페이지의 `Windows 모니터링 클라이언트` 카드가 현재 수동 설치의 단일 진입점이다.
+
+| 항목 | 확인값 |
+|---|---|
+| 설치파일 | `CamStationViewer.msi` |
+| 제품 버전 | `2.0.21` |
+| 파일 크기 | `124350464` bytes (`118.6 MB` 표시) |
+| SHA-256 | `9a1d9f853a19c7f6e46cc8d392915a1fe38e2bfef61115627e0ba1ad0506753e` |
+| 서명 정책 | 내부 시험용 미서명 개발 빌드 |
+| 서버 주소 입력값 | `http://10.0.0.26:18081` |
+
+운영자가 수행할 수락 순서는 다음과 같다.
+
+1. `http://10.0.0.26:18081/settings`를 열고 `Windows 설치 파일 다운로드`를 선택한다.
+2. 내려받은 파일명이 `CamStationViewer.msi`인지 확인하고 Windows Installer로 설치한다.
+3. 설치된 `CamStation Viewer`를 실행한다. 서버 주소에는 위 표의 HTTP 주소를 입력하고,
+   Viewer 이름에는 해당 모니터링 PC를 식별할 이름을 입력한다.
+4. 연결 후 카나리에 허용된 집 카메라 3대의 화면과 영상 진행을 확인한다.
+5. 시험 실패 시 Windows의 `설치된 앱`에서 `CamStation Viewer 2.0.21`만 제거한다. 서버
+   Docker나 카메라 설정을 함께 롤백하지 않는다.
+
+이 MSI는 아직 Authenticode 서명이 없는 내부 개발 빌드다. 운영 배포로 표현하거나 외부에
+배포하지 않는다. 설치 전 Windows가 알 수 없는 게시자 경고를 보일 수 있으며, 승인된 시험
+PC에서만 사용한다.
+
+2026-08-10 11:15 KST 검증에서 설정 카드에 버전·파일명·크기·해시 접두사·다운로드 버튼이
+표시됐다. 버튼 클릭 다운로드와 독립 HTTP 다운로드 모두 위 크기와 SHA-256에 일치했고,
+컨테이너 재생성 뒤에도 동일했다. 증거는 Git에서 제외된
+`work/20260810-viewer-download/`에 보존한다.
+
+WIN11-DELL의 기존 2.0.21 설치는 11:18 KST에 MSI 종료코드 0, 재부팅 요구 없음으로 제거했다.
+제품·서비스·프로세스·작업·설치 경로·바로가기·Viewer 레지스트리/Run 값·사용자 프로필
+잔여물은 모두 0이다. 개발 소스·도구·원본 MSI와 SSH/대화형 데스크톱은 다음 수동 설치
+시험을 위해 보존했다.
+
+증거·결론·수동 수락 경로를 한 문서에서 인계하려면
+[Viewer 설정 다운로드 보고서](2026-08-10_viewer-settings-download-report.md)를 사용한다.
 
 2.0 카나리에 들어 있는 카메라는 다음 세 대뿐이다.
 
@@ -184,8 +226,11 @@ docker compose ps
 ```
 
 문제가 생기면 `.env`의 이미지 태그를 직전 값으로 되돌린 뒤 같은 `up` 명령을 실행한다.
-현재 Viewer 추가 전 이미지는 `camstation:2.0.0-rc.20260809.6-canary`이며, Viewer 추가 시점의
-root 전용 백업은 배포 디렉터리의 `.env.pre-viewer-20260809-2118.bak`이다.
+이번 MSI 다운로드 변경의 직전 이미지는 `camstation:2.0.0-rc.20260809.7-canary`이고,
+root 전용 이미지 포인터 백업은 배포 디렉터리의
+`.env.pre-msi-download-20260810-111413.bak`이다. 더 이전 Viewer 추가 전 이미지는
+`camstation:2.0.0-rc.20260809.6-canary`이며 당시 백업은
+`.env.pre-viewer-20260809-2118.bak`이다.
 PID 상한 변경 전 Compose 백업은 `compose.yaml.pre-pids-20260809-2134.bak`이며, 현재 운영
 정의와 저장소 정의는 모두 `pids_limit: 1024`다.
 
@@ -246,7 +291,8 @@ docker compose up -d
 - 소방서와 염소장은 한 번도 2.0 카나리 검증 대상으로 포함하지 않았다.
 - PID 1024는 전체 8대 운용을 위한 용량 설정이지, 카나리에서 8대를 활성화했다는 뜻이 아니다.
 - 외부 진입은 HTTP 한 개뿐이며 direct WebRTC는 공개·검증하지 않았다.
-- 백업 원격지, 알림, ONVIF/PTZ, Windows Viewer 2.0 전환은 이번 모바일 Viewer 합격 범위가 아니다.
+- 백업 원격지, 알림, ONVIF/PTZ와 Windows Viewer 운영 전환은 아직 완료되지 않았다. Viewer
+  2.0.21 설치파일 게시와 clean-host 수동 설치 준비까지만 완료됐다.
 - 자동 부팅은 의도적으로 꺼져 있다. 정식 전환 때 boot ownership과 안정 주소를 별도로 결정한다.
 
 ## 증거 → 결론 → 경로

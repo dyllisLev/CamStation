@@ -27,7 +27,19 @@ This document records the current implementation state so the next session can c
   launch of the installed `CamStationViewer.exe`, server connection, and monitoring confirmation.
 - Publisher, focused release/API/update-boundary tests, the full Go suite, 55 web tests plus
   lint/build, and 37 Viewer tests plus TypeScript build pass. Docker publication and the clean-host
-  manual-install handoff are recorded separately after runtime verification.
+  manual-install handoff passed runtime verification.
+- The canary now runs immutable image `camstation:2.0.0-rc.20260810.8-canary`, image ID
+  `sha256:719c6eea290f64251fc8858b8d327dc08296bfc52a746cefeec72b4dfbc69220`, built from
+  `ed6c7df487d57a0b743db341f80327dd8f2f0126`. `/settings` visibly exposes the MSI, and both
+  browser-button and direct HTTP downloads match the source size and SHA-256 after container
+  recreation.
+- WIN11-DELL was returned to a manual clean-install state: Viewer product/service/process/task,
+  owned paths, profile data, registry keys, shortcuts, and Run value are absent. MSI uninstall exit
+  was 0 with no reboot. SSH, the interactive desktop session, development source/toolchain, and the
+  source MSI remain intact.
+- The operator procedure, immutable evidence hashes, findings, acceptance path, and rollback boundary
+  are consolidated in
+  [the Viewer settings download report](2026-08-10_viewer-settings-download-report.md).
 
 ### 2026-08-09 Windows-local Viewer MSI build entry point
 
