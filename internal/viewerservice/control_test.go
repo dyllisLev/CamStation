@@ -90,10 +90,25 @@ func TestHeartbeatUsesLeaseTelemetryFromServer(t *testing.T) {
 			t.Fatalf("telemetry=%+v err=%v", response, err)
 		}
 	}
+	progressAt := time.Now().Add(-time.Second).UTC()
+	streamPayload, _ := json.Marshal(map[string]any{
+		"leaseId": grant.LeaseID, "streamName": "yard-live", "transport": "mse", "phase": "retrying",
+		"lastProgressAt": progressAt.UnixMilli(),
+	})
+	streamResponse, err := statusServer.Handle(t.Context(), "connection-1", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "stream", Type: "stream_telemetry", Payload: streamPayload,
+	})
+	if err != nil || !streamResponse.OK {
+		t.Fatalf("stream telemetry=%+v err=%v", streamResponse, err)
+	}
 	loop := HTTPControlLoop{HTTPClient: control.Client(), HeartbeatRequestDeadline: time.Second}
 	config := MachineConfig{SchemaVersion: ConfigSchemaVersion, ServerURL: control.URL, DisplayName: "Wall", ClientID: "client-1"}
 	loop.sendHeartbeat(t.Context(), config, statusServer, commandSinkFunc{})
-	if payload.Agent.State != "online" || payload.Viewer.State != "running" || payload.Renderer.State != "ready" {
+	if payload.Agent.State != "online" || payload.Viewer.State != "running" || payload.Renderer.State != "ready" ||
+		payload.Viewer.LastHeartbeatAt == nil || payload.Renderer.LastHeartbeatAt == nil ||
+		payload.Renderer.LastProgressAt == nil || len(payload.Streams) != 1 ||
+		payload.Streams[0].StreamName != "yard-live" || payload.Streams[0].State != "retrying" ||
+		payload.Streams[0].Transport != "mse" {
 		t.Fatalf("heartbeat=%+v", payload)
 	}
 }
@@ -143,6 +158,28 @@ func TestViewerCommandSinkOnlyDeliversToActiveLease(t *testing.T) {
 	}
 }
 
+func TestControlClientReportsExactCommandResult(t *testing.T) {
+	var method, path string
+	var result CommandResult
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := ControlClient{HTTPClient: server.Client(), ServerURL: server.URL, ClientID: "viewer-1"}
+	command := Command{ID: 19, Type: "ping", PayloadHash: "hash", TTLSeconds: 300}
+	want := CommandResult{State: "running", OperationKey: "command-19"}
+	if err := client.Report(t.Context(), command, want); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPatch || path != "/api/viewers/viewer-1/commands/19" || result != want {
+		t.Fatalf("method=%s path=%s result=%#v", method, path, result)
+	}
+}
+
 func TestServiceViewerCommandUsesOnlyCurrentLeaseConnection(t *testing.T) {
 	listener := newFakePipeListener()
 	runtime := Service{Store: missingConfigStore{}, Listener: listener}
@@ -157,6 +194,10 @@ func TestServiceViewerCommandUsesOnlyCurrentLeaseConnection(t *testing.T) {
 	if !grantResponse.OK {
 		t.Fatalf("grant=%+v", grantResponse)
 	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
 	command := Command{ID: 7, Type: "reload_live", PayloadHash: strings.Repeat("a", 64), TTLSeconds: 300}
 	resultDone := make(chan error, 1)
 	go func() { resultDone <- runtime.DeliverViewerCommand(command) }()
@@ -164,9 +205,14 @@ func TestServiceViewerCommandUsesOnlyCurrentLeaseConnection(t *testing.T) {
 	if err := <-resultDone; err != nil {
 		t.Fatal(err)
 	}
-	var delivered Command
-	if err := json.Unmarshal(commandResponse.Payload, &delivered); err != nil || delivered.ID != command.ID {
+	var delivered viewerCommandEvent
+	if err := json.Unmarshal(commandResponse.Payload, &delivered); err != nil || delivered.Type != command.Type || delivered.OperationKey != "command-7" {
 		t.Fatalf("response=%+v delivered=%+v err=%v", commandResponse, delivered, err)
+	}
+	resultPayload, _ := json.Marshal(LocalCommandResult{LeaseID: grant.LeaseID, OperationKey: delivered.OperationKey, Succeeded: true})
+	writeRequest(t, client, Request{Version: PipeProtocolVersion, RequestID: "result", Type: "command_result", Payload: resultPayload})
+	if response := readResponse(t, client); !response.OK {
+		t.Fatalf("command result response=%#v", response)
 	}
 	_ = client.Close()
 	cancel()

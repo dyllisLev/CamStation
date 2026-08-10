@@ -503,6 +503,74 @@ func TestViewerAdminListDoesNotDeliverAndDeliveryTimestampIsStable(t *testing.T)
 	}
 }
 
+func TestPrepareOperatorViewerCommandAcceptsOnlyNarrowSchemas(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     ViewerCommandCreate
+		wantType  string
+		wantError bool
+	}{
+		{name: "ping", input: ViewerCommandCreate{Type: "ping"}, wantType: "ping"},
+		{name: "reload", input: ViewerCommandCreate{Type: "reload_live"}, wantType: "reload_live"},
+		{name: "stream", input: ViewerCommandCreate{Type: "resubscribe_stream", StreamName: "마당 카메라"}, wantType: "resubscribe_stream"},
+		{name: "viewer restart reason", input: ViewerCommandCreate{Type: "restart_viewer", Message: "renderer recovery"}, wantType: "restart_viewer"},
+		{name: "service restart", input: ViewerCommandCreate{Type: "restart_service"}, wantType: "restart_service"},
+		{name: "agent alias", input: ViewerCommandCreate{Type: "restart_agent"}, wantType: "restart_service"},
+		{name: "unknown", input: ViewerCommandCreate{Type: "shell"}, wantError: true},
+		{name: "url stream", input: ViewerCommandCreate{Type: "resubscribe_stream", StreamName: "rtsp://camera/live"}, wantError: true},
+		{name: "missing stream", input: ViewerCommandCreate{Type: "resubscribe_stream"}, wantError: true},
+		{name: "route injection", input: ViewerCommandCreate{Type: "reload_live", Route: "https://example.test"}, wantError: true},
+		{name: "irrelevant message", input: ViewerCommandCreate{Type: "ping", Message: "hello"}, wantError: true},
+		{name: "update metadata", input: ViewerCommandCreate{Type: "restart_viewer", DesiredVersion: "9.9.9"}, wantError: true},
+		{name: "short ttl", input: ViewerCommandCreate{Type: "ping", TTLSeconds: MinViewerCommandTTL - 1}, wantError: true},
+		{name: "long ttl", input: ViewerCommandCreate{Type: "ping", TTLSeconds: MaxViewerCommandTTL + 1}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := PrepareOperatorViewerCommand(test.input)
+			if test.wantError {
+				if !errors.Is(err, ErrValidation) {
+					t.Fatalf("error=%v, want validation", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("prepare command: %v", err)
+			}
+			if got.Type != test.wantType || got.TTLSeconds != DefaultViewerCommandTTL {
+				t.Fatalf("prepared=%#v", got)
+			}
+		})
+	}
+}
+
+func TestViewerCommandCannotBeCancelledOrDeletedAfterDelivery(t *testing.T) {
+	db := openMigratedStore(t)
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-no-recall", DisplayName: "No recall", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+	command, err := db.CreateOperatorViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{Type: "ping"})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	if _, ok, err := db.DeliverNextViewerCommand(t.Context(), viewer.ID); err != nil || !ok {
+		t.Fatalf("deliver command: ok=%v err=%v", ok, err)
+	}
+	if _, err := db.CancelViewerCommand(t.Context(), viewer.ID, command.ID, "too late"); !errors.Is(err, ErrViewerCommandNotFound) {
+		t.Fatalf("cancel delivered error=%v", err)
+	}
+	if _, err := db.DeleteViewerCommand(t.Context(), viewer.ID, command.ID); !errors.Is(err, ErrViewerCommandNotFound) {
+		t.Fatalf("delete delivered error=%v", err)
+	}
+	stored, err := db.GetViewerCommand(t.Context(), viewer.ID, command.ID)
+	if err != nil || stored.State != ViewerCommandDelivered {
+		t.Fatalf("stored=%#v err=%v", stored, err)
+	}
+}
+
 func TestViewerHeartbeatPersistsIndependentControlHealth(t *testing.T) {
 	db := openMigratedStore(t)
 	controlAt := time.Now().UTC().Add(-2 * time.Second).Truncate(time.Millisecond)

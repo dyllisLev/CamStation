@@ -14,6 +14,14 @@ import (
 
 var ErrViewerCommandNotFound = errors.New("viewer command not found")
 
+const (
+	DefaultViewerCommandTTL = 300
+	MinViewerCommandTTL     = 30
+	MaxViewerCommandTTL     = 900
+	MaxViewerCommandReason  = 256
+	MaxViewerStreamName     = 128
+)
+
 type ViewerCommandState string
 
 const (
@@ -93,6 +101,41 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 	if err != nil {
 		return ViewerCommand{}, err
 	}
+	return d.createPreparedViewerCommand(ctx, viewerID, req, payloadHash)
+}
+
+// CreateOperatorViewerCommand validates the deliberately small remote-control
+// surface. Internal update orchestration uses CreateViewerCommand or
+// EnsureViewerUpdateCommand and is not exposed through this boundary.
+func (d *DB) CreateOperatorViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate) (ViewerCommand, error) {
+	viewer, err := d.GetViewer(ctx, viewerID, 90*time.Second)
+	if err != nil {
+		return ViewerCommand{}, err
+	}
+	req, err = PrepareOperatorViewerCommand(req)
+	if err != nil {
+		return ViewerCommand{}, err
+	}
+	if req.Type == "resubscribe_stream" {
+		registered := false
+		for _, stream := range viewer.Streams {
+			if stream.StreamName == req.StreamName {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			return ViewerCommand{}, fmt.Errorf("stream is not registered for this Viewer: %w", ErrValidation)
+		}
+	}
+	req, payloadHash, err := prepareViewerCommand(req)
+	if err != nil {
+		return ViewerCommand{}, err
+	}
+	return d.createPreparedViewerCommand(ctx, viewerID, req, payloadHash)
+}
+
+func (d *DB) createPreparedViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate, payloadHash string) (ViewerCommand, error) {
 	now := time.Now().UTC()
 	res, err := d.db.ExecContext(ctx,
 		`INSERT INTO viewer_commands(viewer_id, type, message, route, mode, stream_name, desired_version,
@@ -110,6 +153,82 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 		return ViewerCommand{}, fmt.Errorf("created viewer command id: %w", err)
 	}
 	return d.GetViewerCommand(ctx, viewerID, id)
+}
+
+// PrepareOperatorViewerCommand canonicalizes the compatibility alias and
+// rejects fields that do not belong to the selected command. This prevents the
+// Viewer control API from becoming an arbitrary navigation or process-control
+// channel.
+func PrepareOperatorViewerCommand(req ViewerCommandCreate) (ViewerCommandCreate, error) {
+	req.Type = strings.TrimSpace(req.Type)
+	if req.Type == "restart_agent" {
+		req.Type = "restart_service"
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	req.Route = strings.TrimSpace(req.Route)
+	req.Mode = strings.TrimSpace(req.Mode)
+	req.StreamName = strings.TrimSpace(req.StreamName)
+	req.DesiredVersion = strings.TrimSpace(req.DesiredVersion)
+	req.ArtifactSHA256 = strings.TrimSpace(req.ArtifactSHA256)
+
+	switch req.Type {
+	case "ping", "reload_live":
+		if req.Message != "" || req.StreamName != "" {
+			return ViewerCommandCreate{}, fmt.Errorf("command fields do not match %s: %w", req.Type, ErrValidation)
+		}
+	case "resubscribe_stream":
+		if req.Message != "" || !validViewerStreamName(req.StreamName) {
+			return ViewerCommandCreate{}, fmt.Errorf("a safe stream name is required: %w", ErrValidation)
+		}
+	case "restart_viewer", "restart_service":
+		if req.StreamName != "" || len([]rune(req.Message)) > MaxViewerCommandReason {
+			return ViewerCommandCreate{}, fmt.Errorf("invalid restart command fields: %w", ErrValidation)
+		}
+	default:
+		return ViewerCommandCreate{}, fmt.Errorf("unsupported operator command: %w", ErrValidation)
+	}
+
+	if req.Route != "" || req.Mode != "" || req.DesiredVersion != "" || req.ArtifactSHA256 != "" || req.Generation != 0 {
+		return ViewerCommandCreate{}, fmt.Errorf("internal command fields are not allowed: %w", ErrValidation)
+	}
+	if req.TTLSeconds == 0 {
+		req.TTLSeconds = DefaultViewerCommandTTL
+	}
+	if req.TTLSeconds < MinViewerCommandTTL || req.TTLSeconds > MaxViewerCommandTTL {
+		return ViewerCommandCreate{}, fmt.Errorf("command TTL is out of range: %w", ErrValidation)
+	}
+	req.Message = RedactText(req.Message)
+	return req, nil
+}
+
+func validViewerStreamName(value string) bool {
+	if value == "" || len([]rune(value)) > MaxViewerStreamName || value != strings.TrimSpace(value) {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "//") {
+		return false
+	}
+	if colon := strings.IndexByte(lower, ':'); colon > 0 {
+		scheme := lower[:colon]
+		validScheme := true
+		for index, character := range scheme {
+			if (index == 0 && (character < 'a' || character > 'z')) ||
+				(index > 0 && !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '+' || character == '.' || character == '-')) {
+				validScheme = false
+				break
+			}
+		}
+		if validScheme {
+			return false
+		}
+	}
+	for _, character := range value {
+		if character <= 31 || (character >= 127 && character <= 159) {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *DB) EnsureViewerUpdateCommand(ctx context.Context, viewerID, version, artifactSHA256 string) (ViewerCommand, error) {
@@ -217,7 +336,7 @@ func prepareViewerCommand(req ViewerCommandCreate) (ViewerCommandCreate, string,
 		return ViewerCommandCreate{}, "", fmt.Errorf("command type is required: %w", ErrValidation)
 	}
 	if req.TTLSeconds <= 0 {
-		req.TTLSeconds = 300
+		req.TTLSeconds = DefaultViewerCommandTTL
 	}
 	payload, err := json.Marshal(struct {
 		Type           string `json:"type"`
@@ -415,16 +534,16 @@ func (d *DB) ApplyViewerCommandResult(ctx context.Context, viewerID string, id i
 }
 
 func (d *DB) CancelViewerCommand(ctx context.Context, viewerID string, id int64, reason string) (ViewerCommand, error) {
-	return d.finishViewerCommand(ctx, viewerID, id, ViewerCommandCancelled, reason)
+	return d.finishViewerCommand(ctx, viewerID, id, ViewerCommandCancelled, reason, ViewerCommandPending)
 }
 
 func (d *DB) DeleteViewerCommand(ctx context.Context, viewerID string, id int64) (ViewerCommand, error) {
 	now := time.Now().UTC()
 	res, err := d.db.ExecContext(ctx,
 		`UPDATE viewer_commands SET state = ?, error = '', completed_at = ?, updated_at = ?
-		 WHERE viewer_id = ? AND id = ? AND state IN (?, ?, ?)`,
+		 WHERE viewer_id = ? AND id = ? AND state IN (?, ?)`,
 		ViewerCommandDeleted, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
-		strings.TrimSpace(viewerID), id, ViewerCommandPending, ViewerCommandSent, ViewerCommandCancelled,
+		strings.TrimSpace(viewerID), id, ViewerCommandPending, ViewerCommandCancelled,
 	)
 	if err != nil {
 		return ViewerCommand{}, fmt.Errorf("delete viewer command: %w", err)
@@ -435,14 +554,18 @@ func (d *DB) DeleteViewerCommand(ctx context.Context, viewerID string, id int64)
 	return d.GetViewerCommand(ctx, viewerID, id)
 }
 
-func (d *DB) finishViewerCommand(ctx context.Context, viewerID string, id int64, state ViewerCommandState, message string) (ViewerCommand, error) {
+func (d *DB) finishViewerCommand(ctx context.Context, viewerID string, id int64, state ViewerCommandState, message string, allowed ...ViewerCommandState) (ViewerCommand, error) {
+	if len(allowed) == 0 {
+		return ViewerCommand{}, ErrViewerCommandNotFound
+	}
 	now := time.Now().UTC()
-	res, err := d.db.ExecContext(ctx,
-		`UPDATE viewer_commands SET state = ?, error = ?, completed_at = ?, updated_at = ?
-		 WHERE viewer_id = ? AND id = ? AND state IN (?, ?)`,
-		state, RedactText(strings.TrimSpace(message)), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
-		strings.TrimSpace(viewerID), id, ViewerCommandPending, ViewerCommandSent,
-	)
+	query := `UPDATE viewer_commands SET state = ?, error = ?, completed_at = ?, updated_at = ?
+		 WHERE viewer_id = ? AND id = ? AND state IN (` + strings.TrimRight(strings.Repeat("?,", len(allowed)), ",") + `)`
+	args := []any{state, RedactText(strings.TrimSpace(message)), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), strings.TrimSpace(viewerID), id}
+	for _, current := range allowed {
+		args = append(args, current)
+	}
+	res, err := d.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return ViewerCommand{}, fmt.Errorf("finish viewer command: %w", err)
 	}

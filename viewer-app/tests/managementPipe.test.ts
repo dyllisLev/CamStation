@@ -40,3 +40,43 @@ test("management IPC connects without Agent launch identity and acquires a lease
   assert.deepEqual(await connection.acquireLease(), { leaseId: "lease-1", heartbeatSeconds: 5 });
   connection.close();
 });
+
+test("management IPC separates unsolicited Viewer commands from request responses", async (t) => {
+  const directory = process.platform === "win32"
+    ? null
+    : await mkdtemp(path.join(tmpdir(), "camstation-viewer-events-"));
+  const socketPath = directory === null
+    ? String.raw`\\.\pipe\camstation-viewer-events-${process.pid}-${randomUUID()}`
+    : path.join(directory, "service.sock");
+  const server = createServer((socket) => {
+    socket.on("data", (chunk) => {
+      const request = JSON.parse(chunk.toString("utf8")) as { requestId: string; type: string };
+      socket.write(`${JSON.stringify({
+        version: 2,
+        requestId: request.requestId,
+        ok: true,
+        payload: { configured: false, connection: "unconfigured", autoStart: true, leaseAvailable: true },
+      })}\n${JSON.stringify({
+        version: 2,
+        event: "viewer_command",
+        eventId: "command-42",
+        payload: { type: "resubscribe_stream", streamName: "gate-main", operationKey: "command-42" },
+      })}\n`);
+    });
+  });
+  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(socketPath, resolve));
+  t.after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (directory !== null) await rm(directory, { recursive: true, force: true });
+  });
+
+  const connection = await ManagementConnection.connect(socketPath);
+  const received = new Promise<unknown>((resolve) => connection.onCommand(resolve));
+  await connection.status();
+  assert.deepEqual(await received, {
+    type: "resubscribe_stream",
+    streamName: "gate-main",
+    operationKey: "command-42",
+  });
+  connection.close();
+});

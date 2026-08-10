@@ -77,7 +77,7 @@ func TestViewersAPI_HeartbeatRegistryUpdateDeleteAndCommandLifecycle(t *testing.
 	heartbeatStatus, heartbeatBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
 	listStatus, listBody := requestJSONArray(t, server.handler, http.MethodGet, "/api/viewers", "")
 	patchStatus, patchBody := requestJSON(t, server.handler, http.MethodPatch, "/api/viewers/viewer-01", `{"label":"Control wall","note":"rotate"}`)
-	commandStatus, commandBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/viewer-01/commands", `{"type":"refresh","message":"refresh `+secret+`","route":"/live"}`)
+	commandStatus, commandBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/viewer-01/commands", `{"type":"restart_viewer","message":"refresh `+secret+`"}`)
 
 	// Then
 	if heartbeatStatus != http.StatusOK {
@@ -100,7 +100,7 @@ func TestViewersAPI_HeartbeatRegistryUpdateDeleteAndCommandLifecycle(t *testing.
 	commandPath := "/api/viewers/viewer-01/commands/" + strconv.FormatInt(id, 10)
 	queueStatus, queueBody := requestJSONArray(t, server.handler, http.MethodGet, "/api/viewers/viewer-01/commands", "")
 	ackStatus, ackBody := requestJSON(t, server.handler, http.MethodPatch, commandPath, `{"state":"acknowledged"}`)
-	cancelCreateStatus, cancelCreateBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/viewer-01/commands", `{"type":"blank","message":"standby"}`)
+	cancelCreateStatus, cancelCreateBody := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/viewer-01/commands", `{"type":"ping"}`)
 	cancelID := int64(cancelCreateBody["id"].(float64))
 	cancelPath := "/api/viewers/viewer-01/commands/" + strconv.FormatInt(cancelID, 10)
 	cancelStatus, cancelBody := requestJSON(t, server.handler, http.MethodPost, cancelPath+"/cancel", `{"reason":"operator"}`)

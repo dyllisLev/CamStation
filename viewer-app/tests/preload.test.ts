@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPreloadBridge, startRendererHeartbeat } from "../src/preload.ts";
 
-test("preload exposes only narrow Viewer methods including native fullscreen", () => {
+test("preload exposes only narrow Viewer methods including native fullscreen", async () => {
   const sent: unknown[][] = [];
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const bridge = createPreloadBridge({
@@ -17,9 +17,14 @@ test("preload exposes only narrow Viewer methods including native fullscreen", (
   assert.deepEqual(sent.map((entry) => entry[0]), ["viewer:renderer", "viewer:stream"]);
 
   const received: unknown[] = [];
-  const unsubscribe = bridge.onCommand((command) => received.push(command));
-  listeners.get("viewer:command")?.({}, { type: "resubscribe_stream", streamName: "yard-live" });
-  assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "yard-live" }]);
+  const unsubscribe = bridge.onCommand((command) => {
+    received.push(command);
+    return true;
+  });
+  listeners.get("viewer:command")?.({}, { type: "resubscribe_stream", streamName: "yard-live", operationKey: "command-1" });
+  assert.deepEqual(received, [{ type: "resubscribe_stream", streamName: "yard-live", operationKey: "command-1" }]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent.at(-1), ["viewer:command-result", { operationKey: "command-1", succeeded: true }]);
   unsubscribe();
   assert.equal(listeners.has("viewer:command"), false);
 

@@ -55,3 +55,23 @@ func TestProtocolResponseCodecWritesOneBoundedFrame(t *testing.T) {
 		t.Fatalf("WriteResponse error=%v", err)
 	}
 }
+
+func TestProtocolEventCodecIsDistinctFromRequestResponse(t *testing.T) {
+	var encoded bytes.Buffer
+	event := Event{
+		Version: PipeProtocolVersion,
+		Event:   "viewer_command",
+		EventID: "command-7",
+		Payload: []byte(`{"type":"reload_live","operationKey":"command-7"}`),
+	}
+	if err := WriteEvent(&encoded, event); err != nil {
+		t.Fatal(err)
+	}
+	got := encoded.String()
+	if !strings.Contains(got, `"event":"viewer_command"`) || strings.Contains(got, `"requestId"`) || strings.Contains(got, `"ok"`) {
+		t.Fatalf("event frame=%s", got)
+	}
+	if err := WriteEvent(&bytes.Buffer{}, Event{Version: PipeProtocolVersion, Event: "viewer_command"}); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("invalid event error=%v", err)
+	}
+}

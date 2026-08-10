@@ -415,6 +415,45 @@ func TestViewerOfflineRegistryEntryCanBeDeleted(t *testing.T) {
 	}
 }
 
+func TestViewerOperatorCommandEndpointEnforcesSchemaAndCanonicalName(t *testing.T) {
+	server := newTestRouteServer(t)
+	if _, err := server.db.UpsertViewerHeartbeat(t.Context(), store.ViewerHeartbeat{
+		ID: "viewer-schema", DisplayName: "viewer-schema", Route: "/live?viewer=1", Mode: "live",
+		Streams: []store.ViewerStreamHealth{{StreamName: "gate-main", State: "playing"}},
+	}); err != nil {
+		t.Fatalf("seed schema viewer: %v", err)
+	}
+	target := "/api/viewers/viewer-schema/commands"
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantType   string
+	}{
+		{name: "ping", body: `{"type":"ping"}`, wantStatus: http.StatusCreated, wantType: "ping"},
+		{name: "stream", body: `{"type":"resubscribe_stream","streamName":"gate-main"}`, wantStatus: http.StatusCreated, wantType: "resubscribe_stream"},
+		{name: "agent alias", body: `{"type":"restart_agent","message":"operator recovery"}`, wantStatus: http.StatusCreated, wantType: "restart_service"},
+		{name: "unknown type", body: `{"type":"shell"}`, wantStatus: http.StatusBadRequest},
+		{name: "unknown field", body: `{"type":"ping","executable":"cmd.exe"}`, wantStatus: http.StatusBadRequest},
+		{name: "irrelevant route", body: `{"type":"reload_live","route":"/admin"}`, wantStatus: http.StatusBadRequest},
+		{name: "url stream", body: `{"type":"resubscribe_stream","streamName":"https://example.test/live"}`, wantStatus: http.StatusBadRequest},
+		{name: "unregistered stream", body: `{"type":"resubscribe_stream","streamName":"unknown-camera"}`, wantStatus: http.StatusBadRequest},
+		{name: "internal update", body: `{"type":"update_app"}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing object", body: `{"type":"ping"}{"type":"ping"}`, wantStatus: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, body := requestJSON(t, server.handler, http.MethodPost, target, test.body)
+			if status != test.wantStatus {
+				t.Fatalf("status=%d want=%d body=%#v", status, test.wantStatus, body)
+			}
+			if test.wantType != "" && body["type"] != test.wantType {
+				t.Fatalf("type=%v want=%s body=%#v", body["type"], test.wantType, body)
+			}
+		})
+	}
+}
+
 func seedRouteViewer(t *testing.T, server testRouteServer, id string) {
 	t.Helper()
 	if _, err := server.db.UpsertViewerHeartbeat(t.Context(), store.ViewerHeartbeat{

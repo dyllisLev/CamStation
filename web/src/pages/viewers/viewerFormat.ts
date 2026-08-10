@@ -34,27 +34,7 @@ export function viewerBadgeState(status?: string): string {
 }
 
 export function commandBadgeState(state?: string): string {
-  switch (state) {
-    case "acknowledged":
-    case "delivered":
-    case "running":
-      return "running";
-    case "succeeded":
-      return "succeeded";
-    case "pending":
-      return "info";
-    case "failed":
-    case "rejected":
-      return "error";
-    case "expired":
-    case "cancelled":
-    case "deleted":
-      return "warning";
-    case undefined:
-      return "offline";
-    default:
-      return state;
-  }
+  return state ?? "offline";
 }
 
 type ViewerHealthAxes = {
@@ -75,7 +55,7 @@ export function viewerControlState(viewer: ViewerHealthAxes): string | undefined
 }
 
 export function canCancelViewerCommand(state?: string): boolean {
-  return state === "pending" || state === "delivered";
+  return state === "pending";
 }
 
 export function canDeleteViewer(status?: string): boolean {

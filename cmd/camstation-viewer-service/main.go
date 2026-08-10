@@ -61,15 +61,24 @@ func main() {
 
 func run(args []string, stderr io.Writer) int {
 	console := false
+	restartHelper := false
 	switch {
 	case len(args) == 0:
 	case len(args) == 1 && args[0] == "--console":
 		console = true
+	case len(args) == 1 && args[0] == "--restart-service-helper":
+		restartHelper = true
 	default:
 		fmt.Fprintln(stderr, "usage: CamStationViewerService.exe [--console]")
 		return 2
 	}
-	if err := runPlatform(console); err != nil {
+	var err error
+	if restartHelper {
+		err = runRestartHelperPlatform()
+	} else {
+		err = runPlatform(console)
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

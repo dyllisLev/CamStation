@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -141,11 +142,10 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/viewers/{id}/commands", func(w http.ResponseWriter, r *http.Request) {
 		var req store.ViewerCommandCreate
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		if !decodeViewerCommandJSON(w, r, &req) {
 			return
 		}
-		command, err := d.db.CreateViewerCommand(r.Context(), r.PathValue("id"), req)
+		command, err := d.db.CreateOperatorViewerCommand(r.Context(), r.PathValue("id"), req)
 		if err != nil {
 			writeViewerError(w, err)
 			return
@@ -229,6 +229,21 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 
 func viewerCanDelete(status string) bool {
 	return status == "offline" || status == "stale"
+}
+
+func decodeViewerCommandJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Viewer 제어 요청 형식이 올바르지 않습니다."})
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Viewer 제어 요청은 하나의 JSON 객체여야 합니다."})
+		return false
+	}
+	return true
 }
 
 func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerHeartbeat, viewer store.Viewer) (*viewerDesiredReleaseResponse, error) {

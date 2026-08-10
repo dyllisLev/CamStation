@@ -59,8 +59,11 @@ test("MSI publication inspects identity and writes secret-free hash metadata", a
   assert.match(script, /toolVersions/u);
   assert.match(script, /SELECT `File` FROM `File`/u);
   assert.doesNotMatch(script, /SELECT COUNT\(\*\) FROM `File`/u);
-  assert.match(script, /FinalReleaseComObject\(\$database\)/u);
-  assert.match(script, /FinalReleaseComObject\(\$windowsInstaller\)/u);
+  assert.match(script, /function Release-ComObject/u);
+  assert.match(script, /Release-ComObject -Value \$record/u);
+  assert.match(script, /Release-ComObject -Value \$view/u);
+  assert.match(script, /Release-ComObject -Value \$database/u);
+  assert.match(script, /Release-ComObject -Value \$windowsInstaller/u);
   assert.doesNotMatch(script, /clientId|serverUrl|displayName/u);
 });
 

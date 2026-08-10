@@ -1,7 +1,14 @@
 import { app, BrowserWindow, ipcMain, Menu } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ManagementConnection, ManagementRequestError, type ConfigDraft, type LeaseGrant, type ViewerStatus } from "./managementPipe.js";
+import {
+  ManagementConnection,
+  ManagementRequestError,
+  type ConfigDraft,
+  type LeaseGrant,
+  type ViewerCommand,
+  type ViewerStatus,
+} from "./managementPipe.js";
 import { browserWindowOptions, isNavigationAllowed, rendererStateForEvent, viewerURL } from "./navigation.js";
 import { disconnectAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "./viewerLifecycle.js";
 
@@ -16,6 +23,7 @@ let reconnectAttempt = 0;
 let heartbeat: NodeJS.Timeout | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let setupVisible = false;
+const rendererCommandResults = new Map<string, (succeeded: boolean) => void>();
 
 async function run(): Promise<void> {
   if (!app.requestSingleInstanceLock()) return app.quit();
@@ -53,6 +61,7 @@ async function connectAndShow(autoStartLaunch = false): Promise<void> {
     previous?.close();
     const active = await ManagementConnection.connect();
     connection = active;
+    active.onCommand((command) => executeViewerCommand(active, command));
     active.onDisconnect(() => {
       if (connection !== active) return;
       lease = null;
@@ -107,6 +116,15 @@ async function showSetup(status: ViewerStatus | null): Promise<void> {
 function registerIPC(): void {
   ipcMain.on("viewer:renderer", (_event, payload: unknown) => reportRenderer((payload as { state?: string })?.state ?? "ready"));
   ipcMain.on("viewer:stream", (_event, payload: unknown) => lease && connection?.reportStream(lease.leaseId, payload));
+  ipcMain.on("viewer:command-result", (event, payload: unknown) => {
+    if (!window || event.sender !== window.webContents || !payload || typeof payload !== "object") return;
+    const result = payload as Record<string, unknown>;
+    if (typeof result.operationKey !== "string" || typeof result.succeeded !== "boolean") return;
+    const resolve = rendererCommandResults.get(result.operationKey);
+    if (!resolve) return;
+    rendererCommandResults.delete(result.operationKey);
+    resolve(result.succeeded);
+  });
   ipcMain.handle("viewer:setup-state", () => currentStatus);
   ipcMain.handle("viewer:retry-connection", async () => {
     await connectAndShow(false);
@@ -127,6 +145,60 @@ function registerIPC(): void {
     } catch (error) {
       return { ok: false, errorCode: error instanceof ManagementRequestError ? error.code : "storage_failed" };
     }
+  });
+}
+
+async function executeViewerCommand(active: ManagementConnection, command: ViewerCommand): Promise<void> {
+  const activeLease = lease;
+  if (!activeLease || connection !== active) return;
+  let succeeded = false;
+  let errorCode = "viewer_command_failed";
+  let relaunch = false;
+  try {
+    switch (command.type) {
+      case "reload_live":
+        if (!window || !currentLiveURL) throw new Error("live window is unavailable");
+        await window.loadURL(currentLiveURL);
+        break;
+      case "resubscribe_stream":
+        if (!window || !currentLiveURL) throw new Error("live renderer is unavailable");
+        if (!await sendRendererCommand(window, command)) {
+          errorCode = "renderer_failed";
+          throw new Error("renderer rejected Viewer command");
+        }
+        break;
+      case "restart_viewer":
+        relaunch = true;
+        break;
+    }
+    succeeded = true;
+  } catch {
+    succeeded = false;
+  }
+  try {
+    await active.reportCommandResult(activeLease.leaseId, command.operationKey, succeeded, succeeded ? undefined : errorCode);
+  } catch {
+    return;
+  }
+  if (succeeded && relaunch) {
+    explicitShutdown = true;
+    app.relaunch();
+    app.exit(0);
+  }
+}
+
+function sendRendererCommand(target: BrowserWindow, command: Extract<ViewerCommand, { readonly type: "resubscribe_stream" }>): Promise<boolean> {
+  if (rendererCommandResults.has(command.operationKey)) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      rendererCommandResults.delete(command.operationKey);
+      resolve(false);
+    }, 10_000);
+    rendererCommandResults.set(command.operationKey, (succeeded) => {
+      clearTimeout(timer);
+      resolve(succeeded);
+    });
+    target.webContents.send("viewer:command", command);
   });
 }
 
@@ -173,6 +245,8 @@ app.once("before-quit", () => {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (lease) connection?.release(lease.leaseId);
   connection?.close();
+  for (const resolve of rendererCommandResults.values()) resolve(false);
+  rendererCommandResults.clear();
 });
 process.on("SIGBREAK", () => app.quit());
 process.on("SIGTERM", () => app.quit());

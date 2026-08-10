@@ -36,6 +36,13 @@ type Response struct {
 	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
+type Event struct {
+	Version int             `json:"version"`
+	Event   string          `json:"event"`
+	EventID string          `json:"eventId"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
 func ReadRequest(reader io.Reader) (Request, error) {
 	return readRequest(bufio.NewReaderSize(reader, MaxManagementMessageBytes+1))
 }
@@ -81,6 +88,21 @@ func WriteResponse(writer io.Writer, response Response) error {
 	}
 	encoded = append(encoded, '\n')
 	_, err = writer.Write(encoded)
+	return err
+}
+
+func WriteEvent(writer io.Writer, event Event) error {
+	if event.Version != PipeProtocolVersion || strings.TrimSpace(event.Event) == "" || strings.TrimSpace(event.EventID) == "" {
+		return fmt.Errorf("%w: invalid event", ErrProtocol)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("%w: encode event: %v", ErrProtocol, err)
+	}
+	if len(encoded)+1 > MaxManagementMessageBytes {
+		return ErrMessageTooLarge
+	}
+	_, err = writer.Write(append(encoded, '\n'))
 	return err
 }
 

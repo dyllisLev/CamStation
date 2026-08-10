@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
+	"unicode"
 )
 
 const (
@@ -40,15 +43,20 @@ type UpdateSnapshot struct {
 }
 
 type StatusSnapshot struct {
-	Configured     bool           `json:"configured"`
-	Config         *PublicConfig  `json:"config,omitempty"`
-	Connection     string         `json:"connection"`
-	Viewer         string         `json:"viewer"`
-	Renderer       string         `json:"renderer"`
-	Installed      string         `json:"installedVersion"`
-	Update         UpdateSnapshot `json:"update"`
-	AutoStart      bool           `json:"autoStart"`
-	LeaseAvailable bool           `json:"leaseAvailable"`
+	Configured              bool                `json:"configured"`
+	Config                  *PublicConfig       `json:"config,omitempty"`
+	Connection              string              `json:"connection"`
+	ControlLastSuccessAt    *time.Time          `json:"controlLastSuccessAt,omitempty"`
+	Viewer                  string              `json:"viewer"`
+	ViewerLastHeartbeatAt   *time.Time          `json:"viewerLastHeartbeatAt,omitempty"`
+	Renderer                string              `json:"renderer"`
+	RendererLastHeartbeatAt *time.Time          `json:"rendererLastHeartbeatAt,omitempty"`
+	RendererLastProgressAt  *time.Time          `json:"rendererLastProgressAt,omitempty"`
+	Streams                 []ViewerStreamState `json:"streams,omitempty"`
+	Installed               string              `json:"installedVersion"`
+	Update                  UpdateSnapshot      `json:"update"`
+	AutoStart               bool                `json:"autoStart"`
+	LeaseAvailable          bool                `json:"leaseAvailable"`
 }
 
 type LeaseGrant struct {
@@ -57,18 +65,31 @@ type LeaseGrant struct {
 	LogPath          string `json:"logPath,omitempty"`
 }
 
+type LocalCommandResult struct {
+	LeaseID      string `json:"leaseId"`
+	OperationKey string `json:"operationKey"`
+	Succeeded    bool   `json:"succeeded"`
+	ErrorCode    string `json:"errorCode,omitempty"`
+}
+
 type Server struct {
 	config           ConfigManager
 	leases           *LeaseManager
 	installedVersion string
 	logError         func(context.Context, error) string
 	leaseLogAssigner func(Peer) (string, error)
+	commandResult    func(LocalCommandResult) error
 
-	mu         sync.Mutex
-	connection string
-	viewer     string
-	renderer   string
-	update     UpdateSnapshot
+	mu                      sync.Mutex
+	connection              string
+	controlLastSuccessAt    *time.Time
+	viewer                  string
+	viewerLastHeartbeatAt   *time.Time
+	renderer                string
+	rendererLastHeartbeatAt *time.Time
+	rendererLastProgressAt  *time.Time
+	streams                 []ViewerStreamState
+	update                  UpdateSnapshot
 }
 
 func NewServer(config ConfigManager, leases *LeaseManager, installedVersion string, logError func(context.Context, error) string) *Server {
@@ -89,10 +110,20 @@ func (server *Server) SetLeaseLogAssigner(assigner func(Peer) (string, error)) {
 	server.leaseLogAssigner = assigner
 }
 
+func (server *Server) SetCommandResultHandler(handler func(LocalCommandResult) error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.commandResult = handler
+}
+
 func (server *Server) SetConnection(state string) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	server.connection = state
+	if state == "online" {
+		now := time.Now().UTC()
+		server.controlLastSuccessAt = &now
+	}
 }
 
 func (server *Server) SetDesiredUpdate(update UpdateNotice) {
@@ -156,6 +187,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 		if err := server.leases.Refresh(connectionID, leaseID, peer); err != nil {
 			return Response{}, fmt.Errorf("%w: %v", ErrPeerIdentity, err)
 		}
+		server.markViewerHeartbeat()
 		return successResponse(request, nil), nil
 	case "release_lease":
 		leaseID, _, err := decodeLeasePayload(request.Payload)
@@ -179,8 +211,44 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 			return server.errorResponse(ctx, request, err), nil
 		}
 		return successResponse(request, nil), nil
+	case "command_result":
+		var result LocalCommandResult
+		if err := decodePayload(request.Payload, &result); err != nil {
+			return server.errorResponse(ctx, request, err), nil
+		}
+		if err := server.leases.Authorize(connectionID, result.LeaseID, peer); err != nil {
+			return Response{}, fmt.Errorf("%w: %v", ErrPeerIdentity, err)
+		}
+		if !validLocalCommandResult(result) {
+			return server.errorResponse(ctx, request, fmt.Errorf("%w: invalid command result", ErrInvalidRequest)), nil
+		}
+		server.mu.Lock()
+		handler := server.commandResult
+		server.mu.Unlock()
+		if handler == nil {
+			return server.errorResponse(ctx, request, ErrUnsupportedRequest), nil
+		}
+		if err := handler(result); err != nil {
+			return server.errorResponse(ctx, request, err), nil
+		}
+		return successResponse(request, nil), nil
 	default:
 		return server.errorResponse(ctx, request, ErrUnsupportedRequest), nil
+	}
+}
+
+func validLocalCommandResult(result LocalCommandResult) bool {
+	if strings.TrimSpace(result.LeaseID) == "" || strings.TrimSpace(result.OperationKey) == "" || len(result.OperationKey) > 128 {
+		return false
+	}
+	if result.Succeeded {
+		return result.ErrorCode == ""
+	}
+	switch result.ErrorCode {
+	case "renderer_failed", "viewer_command_failed", "viewer_relaunch_failed":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -222,6 +290,11 @@ func (server *Server) status(ctx context.Context) (StatusSnapshot, error) {
 	}
 	status.Viewer = server.viewer
 	status.Renderer = server.renderer
+	status.ControlLastSuccessAt = server.controlLastSuccessAt
+	status.ViewerLastHeartbeatAt = server.viewerLastHeartbeatAt
+	status.RendererLastHeartbeatAt = server.rendererLastHeartbeatAt
+	status.RendererLastProgressAt = server.rendererLastProgressAt
+	status.Streams = append([]ViewerStreamState(nil), server.streams...)
 	status.Update = server.update
 	return status, nil
 }
@@ -233,8 +306,19 @@ func (server *Server) Snapshot(ctx context.Context) (StatusSnapshot, error) {
 }
 
 func (server *Server) recordReport(requestType string, payload map[string]json.RawMessage) error {
-	if requestType != "viewer_status" && requestType != "renderer_status" {
+	if requestType == "diagnostic_event" {
 		return nil
+	}
+	if requestType == "stream_telemetry" {
+		stream, err := decodeViewerStreamTelemetry(payload, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		server.storeViewerTelemetry(stream)
+		return nil
+	}
+	if requestType != "viewer_status" && requestType != "renderer_status" {
+		return fmt.Errorf("%w: unsupported report type", ErrInvalidRequest)
 	}
 	var state string
 	if err := json.Unmarshal(payload["state"], &state); err != nil || !validReportedState(requestType, state) {
@@ -242,12 +326,97 @@ func (server *Server) recordReport(requestType string, payload map[string]json.R
 	}
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	now := time.Now().UTC()
+	server.viewerLastHeartbeatAt = &now
 	if requestType == "viewer_status" {
 		server.viewer = state
 	} else {
 		server.renderer = state
+		server.rendererLastHeartbeatAt = &now
 	}
 	return nil
+}
+
+func decodeViewerStreamTelemetry(payload map[string]json.RawMessage, now time.Time) (ViewerStreamState, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ViewerStreamState{}, fmt.Errorf("%w: invalid stream telemetry", ErrInvalidRequest)
+	}
+	var input struct {
+		StreamName     string `json:"streamName"`
+		Transport      string `json:"transport"`
+		Phase          string `json:"phase"`
+		LastBinaryAt   int64  `json:"lastBinaryAt"`
+		LastProgressAt int64  `json:"lastProgressAt"`
+	}
+	if err := json.Unmarshal(encoded, &input); err != nil || !validViewerStreamName(input.StreamName) ||
+		(input.Transport != "webrtc" && input.Transport != "mse") || !validViewerStreamPhase(input.Phase) {
+		return ViewerStreamState{}, fmt.Errorf("%w: invalid stream telemetry", ErrInvalidRequest)
+	}
+	stream := ViewerStreamState{
+		StreamName: input.StreamName, State: input.Phase, Transport: input.Transport, UpdatedAt: timePointer(now),
+	}
+	stream.LastBinaryAt = viewerTelemetryTime(input.LastBinaryAt)
+	stream.LastProgressAt = viewerTelemetryTime(input.LastProgressAt)
+	return stream, nil
+}
+
+func (server *Server) storeViewerTelemetry(stream ViewerStreamState) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.viewerLastHeartbeatAt = stream.UpdatedAt
+	server.rendererLastHeartbeatAt = stream.UpdatedAt
+	if stream.LastProgressAt != nil &&
+		(server.rendererLastProgressAt == nil || stream.LastProgressAt.After(*server.rendererLastProgressAt)) {
+		server.rendererLastProgressAt = stream.LastProgressAt
+	}
+	for index := range server.streams {
+		if server.streams[index].StreamName == stream.StreamName {
+			server.streams[index] = stream
+			return
+		}
+	}
+	if len(server.streams) >= 64 {
+		copy(server.streams, server.streams[1:])
+		server.streams = server.streams[:63]
+	}
+	server.streams = append(server.streams, stream)
+}
+
+func (server *Server) markViewerHeartbeat() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	now := time.Now().UTC()
+	server.viewerLastHeartbeatAt = &now
+}
+
+func viewerTelemetryTime(milliseconds int64) *time.Time {
+	if milliseconds <= 0 {
+		return nil
+	}
+	return timePointer(time.UnixMilli(milliseconds).UTC())
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
+}
+
+func validViewerStreamName(value string) bool {
+	if value == "" || len(value) > 128 || value != strings.TrimSpace(value) || strings.HasPrefix(value, "//") ||
+		strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == ""
+}
+
+func validViewerStreamPhase(value string) bool {
+	switch value {
+	case "connecting", "retrying", "fallback", "recovering", "playing", "stalled", "cooldown", "unsupported":
+		return true
+	default:
+		return false
+	}
 }
 
 func (server *Server) setViewerState(viewer, renderer string) {
@@ -255,6 +424,7 @@ func (server *Server) setViewerState(viewer, renderer string) {
 	defer server.mu.Unlock()
 	server.viewer = viewer
 	server.renderer = renderer
+	server.streams = nil
 }
 
 func (server *Server) errorResponse(ctx context.Context, request Request, err error) Response {

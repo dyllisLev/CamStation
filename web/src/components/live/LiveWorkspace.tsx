@@ -709,19 +709,24 @@ function LiveVideo({
 
   useEffect(() => {
     if (!activeStreamName) return;
-    reportViewerStream({
-      streamName: activeStreamName,
-      transport,
-      phase,
-      lastBinaryAt: lastBinaryAt ?? undefined,
-      lastProgressAt: lastProgressAt ?? undefined,
-      readyState,
-      stalledForMs,
-      reconnectCount,
-      fallbackCount,
-      resubscribeCount,
-      errorCategory,
-    });
+    const report = () => {
+      reportViewerStream({
+        streamName: activeStreamName,
+        transport,
+        phase,
+        lastBinaryAt: lastBinaryAt ?? undefined,
+        lastProgressAt: lastProgressAt ?? undefined,
+        readyState,
+        stalledForMs,
+        reconnectCount,
+        fallbackCount,
+        resubscribeCount,
+        errorCategory,
+      });
+    };
+    report();
+    const timer = window.setInterval(report, 5_000);
+    return () => window.clearInterval(timer);
   }, [activeStreamName, errorCategory, fallbackCount, lastBinaryAt, lastProgressAt, phase, readyState, reconnectCount, resubscribeCount, stalledForMs, transport]);
 
   useEffect(() => {

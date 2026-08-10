@@ -1477,3 +1477,278 @@
   30초 안내가 정확히 렌더링됐다. 최종 화면 SHA-256은
   `ddf77e131e6eb6e8c096918751460470372d8cbb1e12aca9163efd4eaf3d590f`이고 브라우저
   page/console 오류는 0이다.
+---
+
+# 2026-08-10 Viewer command feature analysis
+
+## Scope and specification
+
+- Analyze the checked-out CamStation 2.0 implementation only; use legacy/production evidence only
+  where it explains compatibility or a runtime dependency.
+- Trace the complete command path: operator UI selection and form state, public HTTP API, database
+  state transitions, Viewer Agent polling/claiming, local execution, result acknowledgement, and
+  operator-visible history/actions.
+- For every exposed command, identify its user-facing intent, required/optional inputs, validation,
+  actual execution behavior, observable success result, failure/cancel behavior, and implementation
+  status. Do not infer capability from a dropdown label alone.
+- Distinguish source-level implementation, automated-test coverage, and live Windows/runtime proof.
+  A feature is not called operational unless all dependencies required for execution are present.
+- Define the target interaction contract: the user selects one currently controllable Viewer,
+  chooses a clearly described supported action, supplies only inputs relevant to that action,
+  confirms disruptive actions, executes it, and can see delivery, execution, success/failure, and
+  retry/cancel outcomes.
+- This task is analysis and documentation. Do not change Viewer command product behavior, contact a
+  production Viewer, revive stale agents, or enqueue/cancel/delete live commands.
+
+## Plan
+
+- [x] Inventory the Viewer command UI, API modules, route registration, store schema/queries, Agent
+      client, local command dispatcher, and related tests/docs.
+- [x] Build a command-by-command behavior matrix with evidence for inputs, validation, execution,
+      acknowledgement, cancellation, deletion, timeout/staleness, and operator feedback.
+- [x] Run the narrow Go/Web/Viewer tests and safe local checks needed to establish what the source
+      actually guarantees, recording any environment-dependent gaps separately.
+- [x] Identify root causes behind the current ambiguity and any broken, misleading, unsafe, or
+      incomplete flows; rank them by their effect on the operator's select-and-run goal.
+- [x] Publish a Korean analysis document containing the current data flow, supported capability
+      matrix, verified versus unverified status, target UX/API contract, phased implementation plan,
+      and independently reproducible evidence paths.
+- [x] Validate document links/evidence, `git diff --check`, and final worktree scope, then complete
+      this section's review without claiming an implementation change.
+
+## Acceptance criteria
+
+- [x] Every command visible to the user is mapped to concrete server and Viewer code or explicitly
+      classified as unsupported/unimplemented.
+- [x] The analysis answers whether a selected Viewer can currently receive and execute each action,
+      and states the exact prerequisites and proof level behind that answer.
+- [x] Operator-visible defects are tied to root causes rather than only screenshot observations.
+- [x] The desired select-action-execute-result flow is specified precisely enough to implement and
+      test without another discovery pass.
+- [x] No command is sent and no external Viewer/server state is changed during analysis.
+
+## Review
+
+- Published `docs/2026-08-10_viewer-command-feature-analysis.md` with the current path, screenshot
+  interpretation, command matrix, root causes, target contract, implementation priorities, and
+  completion criteria.
+- Confirmed that the five UI commands are not operational in the current standard MSI: three are
+  ignored by Viewer Service, while the other two are queued but discarded by Electron's
+  request-response-only management client. The current Service also has no server result reporter.
+- Distinguished the older, implemented Viewer Agent/Host command path from the current packaged
+  Service/direct-Electron architecture; old source and stale status prose are not runtime proof for
+  the current MSI.
+- Verified existing suites: 55 Web tests, 35 Viewer tests, and focused Go tests for `internal/store`,
+  `cmd/camstationd`, `internal/vieweragent`, and `internal/viewerservice` all passed. These suites do
+  not contain a current-architecture end-to-end command test.
+- All relative document links resolve and `git diff --check` passed. No local daemon was running,
+  no command was sent, and no external Viewer/server state was changed.
+
+---
+
+# 2026-08-10 Viewer original control architecture reconciliation
+
+## Scope and specification
+
+- Treat the operator's requirement as normative: the server must monitor and remotely control a
+  Viewer because routine recovery cannot require direct access to the Viewer PC.
+- Search the working tree and complete Git history, including deleted and renamed documentation,
+  for the earliest Viewer feature inventory and the monitoring/control layer separation.
+- Reconstruct the decision chronology rather than treating the latest MSI packaging plan as the
+  entire product contract.
+- Reconcile the recovered intent with the current server, Viewer Service, Electron Viewer, UI, and
+  the prior analysis document. Do not restore code or choose a new architecture without evidence.
+- This remains a read-only product/architecture analysis except for correcting documentation and
+  task lessons. Do not send, cancel, delete, or replay a Viewer command.
+
+## Plan
+
+- [x] Inventory all current Viewer specifications, plans, implementation-status notes, and relevant
+      commit/file history for monitoring, control, Agent, Service, watchdog, and remote recovery.
+- [x] Identify the earliest authoritative feature statement and build a dated decision chronology,
+      including any superseding documents and whether they intentionally removed remote control.
+- [x] Map the intended monitoring plane and control plane to concrete server and Windows components,
+      including lifecycle ownership, command/result flow, and failure recovery boundaries.
+- [x] Compare the recovered product contract with the current implementation and classify preserved,
+      migrated, broken, or accidentally dropped responsibilities.
+- [x] Correct the Viewer command analysis so it preserves server-side remote-control intent while
+      accurately describing the current implementation gap and the required target architecture.
+- [x] Validate citations, relative links, repository diff scope, and documentation consistency, then
+      record the evidence and any remaining ambiguity in this review.
+
+## Acceptance criteria
+
+- [x] The original or earliest recoverable Viewer feature document and its commit are identified.
+- [x] Monitoring and control are described as distinct layers with explicit responsibilities.
+- [x] The analysis answers whether remote-control capability was superseded intentionally or lost
+      during migration, based on documentary evidence rather than inference.
+- [x] The corrected target preserves server-driven recovery without requiring normal PC access.
+- [x] No production/runtime Viewer state is changed.
+
+## Review
+
+- Identified `docs/superpowers/specs/2026-07-03-viewer-client-redesign.md` at commit `ee6879c` as the
+  earliest recoverable Git-tracked Viewer 2.0 feature specification. Its approved original version
+  requires server monitoring and control even when the renderer is frozen, crashed, or unresponsive.
+- Checked the earlier removed May CCTV wiki and the plan-referenced `.omo/drafts` path. The wiki only
+  records a Viewer nginx route, while the draft is absent from both the worktree and Git history.
+- Confirmed that the 2026-07-16 Agent design strengthened the monitoring/control separation and that
+  the 2026-07-18 standard MSI design retained server status and UI commands while removing general
+  process supervision.
+- Located the concrete execution regression in `c6ef57c`: the standard MSI conversion deleted the
+  prior Electron `onCommand`, `viewer:command`, and `command_result` path without adding equivalent
+  unsolicited-command handling to `ManagementConnection`.
+- Corrected `docs/2026-08-10_viewer-command-feature-analysis.md` to make remote control a normative
+  requirement, document the monitoring/control/lifecycle layers, preserve the full original command
+  catalog, and define the missing narrow lifecycle adapter.
+- Corrected the Windows Viewer section of `docs/07-implementation-status.md` so the historical
+  Agent/Host implementation is not reported as the active standard-MSI runtime and the current
+  command gap is explicit.
+- Relative links and whitespace checks pass. Only documentation/task files changed; no Viewer
+  command was sent and no local or external runtime state changed.
+
+---
+
+# 2026-08-10 Restore Viewer remote control and verify on WinPC
+
+## Scope and specification
+
+- Restore the operator-facing command set currently exposed by `/viewers`: `ping`, `reload_live`,
+  `resubscribe_stream`, `restart_viewer`, and the current control-component restart semantic renamed
+  from `restart_agent` to `restart_service` at the UI/API compatibility boundary.
+- Preserve the recovered product contract: Viewer monitoring and command control are separate
+  planes, and server-driven recovery must not require routine direct operation of the Viewer PC.
+- Keep the standard MSI and direct Electron launch model. Add only the narrow lifecycle mechanism
+  required for explicit, audited Viewer/service restart; do not add arbitrary shell, desktop-control,
+  URL-navigation, process-launch, or file-access commands.
+- Use durable command identity, bounded deadlines, exact state transitions, duplicate suppression,
+  and post-restart reconciliation so delivery is not mistaken for execution.
+- Verify source-level behavior locally, build the served Web UI and Windows MSI, deploy through the
+  existing approved WinPC maintenance path, and prove each command through server state plus
+  process/UI evidence.
+- Preserve unrelated existing worktree changes and runtime evidence; do not expose WinPC endpoints,
+  credentials, camera URLs, or sensitive screenshots in tracked files or command output.
+
+## Plan
+
+- [x] Capture the current worktree, Viewer command tests/contracts, standard MSI composition, and
+      bounded WinPC access/GUI-harness readiness without changing runtime state.
+- [x] Write and review a focused design plus implementation plan covering command schemas, state
+      transitions, IPC events/results, lifecycle restart ownership, UI behavior, and Windows proof.
+- [x] Add failing-first server/store tests for command whitelist and per-type fields, exact lifecycle
+      transitions, TTL/cancel semantics, compatibility naming, and safe error handling.
+- [x] Implement server/store command validation and current command delivery/result behavior with
+      exact operator-visible states and no raw-secret fields.
+- [x] Add failing-first Viewer Service tests for direct `ping`, UI-command dispatch/result reporting,
+      duplicate suppression, Viewer restart, service restart handoff, and restart reconciliation.
+- [x] Implement the Service command engine and narrow lifecycle adapters without weakening named-pipe,
+      session, executable-path, or service-ownership boundaries.
+- [x] Add failing-first Electron/Web tests and implement unsolicited management commands, renderer
+      result return, approved live reload, targeted stream resubscribe, localized capability-aware
+      UI controls, confirmations, and active-command status refresh.
+- [x] Restore the Viewer Service monitoring adapter so lease/renderer timestamps and bounded
+      per-stream telemetry reach the server heartbeat independently of the command engine; prove an
+      offline displayed stream remains selectable for targeted resubscribe.
+- [x] Run focused and full Go/Web/Viewer tests, lint/build, Windows cross-build/MSI validation, secret
+      scan, `git diff --check`, and review the implementation for simpler failure-safe boundaries.
+- [x] Deploy the exact verified MSI to WinPC through the approved maintenance workflow and prove all
+      five commands from server creation through final result, including process/renderer evidence
+      for both restart commands and continued monitoring independence.
+- [x] Update implementation status, analysis/design documentation, task review, and lessons with the
+      exact verified behavior and any remaining environmental limitation.
+
+## Acceptance criteria
+
+- [x] A user selects a registered Viewer and sees only supported Korean-named actions with relevant
+      inputs; arbitrary Viewer IDs, command types, routes, and irrelevant fields are rejected.
+- [x] Command UI distinguishes pending, delivered, acknowledged, running, succeeded, failed,
+      rejected, expired, and cancelled and updates active commands without manual refresh.
+- [x] `ping`, `reload_live`, and `resubscribe_stream` execute exactly once and return a terminal result.
+- [x] `restart_viewer` succeeds only after a new Viewer process/lease and renderer-ready proof.
+- [x] `restart_service` succeeds only after a new Service boot/control connection reconciles the
+      original durable command; the UI does not claim success before reconnection.
+- [x] Service heartbeat/control status remains independent from Viewer/renderer/stream status across
+      every injected failure and restart.
+- [x] Duplicate delivery, cancellation, TTL expiry, missing Viewer lease, missing interactive session,
+      and restart timeout produce bounded, safe, operator-visible outcomes.
+- [x] The exact locally verified artifact passes real WinPC installation and end-to-end command proof
+      without asking the operator to manipulate the Viewer desktop.
+
+## Review
+
+- Restored the five approved commands across server validation/store transitions, Service durable
+  execution, Electron/renderer IPC, fixed-target Windows lifecycle adapters, and the Korean operator
+  UI. `restart_agent` remains only a compatibility alias for `restart_service`.
+- Kept monitoring independent from command execution and fixed a second migration omission found
+  during WinPC acceptance: Service had acknowledged then discarded `stream_telemetry`. Viewer lease,
+  renderer heartbeat/progress, and bounded streams now reach server heartbeat; the renderer repeats
+  current stream state during long recovery cooldowns.
+- `./scripts/check-dev.sh` passed all Go packages, 58 Web tests, 36 Viewer tests, Web lint/build,
+  Viewer build, embedded Web regeneration, and daemon build. Native Windows Viewer/Service tests,
+  Electron packaging, WiX validation, and the standard MSI build also passed without warnings or
+  errors.
+- Built and installed unsigned development MSI `2.0.24` (`124436480` bytes; SHA-256
+  `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160`) on the authorized Windows 11
+  PC. All five commands reached `succeeded` through the normal API. Viewer restart replaced the
+  entire Viewer process set and recovered lease/renderer state; Service restart changed PID and boot
+  generation, recovered control, and kept the Viewer running.
+- Exercised the real `/viewers` user path by selecting the registered Viewer and `제어 연결 확인`, then
+  submitting with keyboard focus. The API returned HTTP 201 and the UI automatically rendered the
+  terminal succeeded row with exact lifecycle timestamps.
+- Used an offline disposable camera to prove both monitoring states and targeted resubscription.
+  Automated tests cover duplicate, TTL, cancel, unavailable lease/session, timeout, unsafe payload,
+  and restart reconciliation boundaries; a long-running fault/soak matrix remains release work.
+- Removed the disposable CamStation server/database/camera, Viewer configuration, local command
+  journal/history, GUI evidence directories, and temporary automation state. WinPC retains only the
+  verified `2.0.24` installation and automatic Service, with the Viewer closed and configuration
+  returned to an unconfigured baseline.
+- The remaining deliberate boundaries are an unsigned development MSI, no long-duration Windows
+  soak, server-side `restart_stream` remaining on the Streams page, and no advertised
+  `capture_diagnostics` Viewer command. If Windows accepts a Service stop but cannot start it again,
+  the stopped component cannot report a terminal result and external SCM recovery is required.
+
+---
+
+# 2026-08-10 Merge Viewer remote control into 2.0
+
+## Scope and specification
+
+- Commit the verified Viewer monitoring/control restoration on its feature branch without including
+  ignored runtime artifacts or external WinPC evidence.
+- Merge it into the active local 2.0 branch `camstation2-initial`, preserving the five newer 2.0
+  commits for MSI publication, Viewer registry cleanup, and GUI verification.
+- Resolve overlapping server, Web, generated-asset, status, and task-document changes by retaining
+  both the newer 2.0 behavior and the verified remote-control implementation.
+- Rebuild derived Web assets and run the complete repository check from the merged 2.0 worktree
+  before declaring the merge complete.
+- Do not push, publish a release, reinstall WinPC, or change runtime configuration as part of this
+  local branch merge.
+
+## Plan
+
+- [x] Reconfirm both worktrees are clean apart from the reviewed feature changes and identify every
+      file changed by the five newer 2.0 commits.
+- [x] Commit the verified feature branch with its source, tests, generated Web output, documentation,
+      checklist, and lessons.
+- [x] Merge the feature commit into `camstation2-initial` with an explicit merge commit and resolve
+      each conflict against both parents rather than choosing one side wholesale.
+- [x] Rebuild Web/Viewer/daemon derived output as required and run `./scripts/check-dev.sh` from the
+      merged 2.0 worktree.
+- [ ] Inspect merge ancestry, worktree status, diff summary, whitespace, and added-line secret
+      patterns; document the exact merge and verification result.
+
+## Acceptance criteria
+
+- [ ] `camstation2-initial` contains the verified Viewer command implementation and all five commits
+      that preceded the merge.
+- [ ] The merged branch exposes the five fixed operator commands while retaining current MSI release
+      download and Viewer registry behavior.
+- [ ] Full Go/Web/Viewer tests, lint, builds, embedded Web output, and daemon build pass on the merged
+      branch.
+- [ ] The feature branch and 2.0 parent are both visible in merge ancestry, with no force update or
+      history rewrite.
+- [ ] No remote push, release publication, WinPC reinstall, or runtime-state mutation occurs.
+
+## Review
+
+- Pending.

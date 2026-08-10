@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -406,6 +407,38 @@ func TestDisconnectReleasesOwnedLeaseImmediately(t *testing.T) {
 	}
 }
 
+func TestCommandResultRequiresActiveLeaseAndExactSafePayload(t *testing.T) {
+	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	peer := Peer{PID: 10, SessionID: 2, Interactive: true}
+	grantResponse, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "lease", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%#v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	var received LocalCommandResult
+	server.SetCommandResultHandler(func(result LocalCommandResult) error {
+		received = result
+		return nil
+	})
+	payload, _ := json.Marshal(LocalCommandResult{LeaseID: grant.LeaseID, OperationKey: "command-7", Succeeded: true})
+	response, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "result", Type: "command_result", Payload: payload,
+	})
+	if err != nil || !response.OK || received.OperationKey != "command-7" || !received.Succeeded {
+		t.Fatalf("response=%#v received=%#v err=%v", response, received, err)
+	}
+	if _, err := server.Handle(t.Context(), "connection-b", Peer{PID: 11, SessionID: 3, Interactive: true}, Request{
+		Version: PipeProtocolVersion, RequestID: "forged", Type: "command_result", Payload: payload,
+	}); !errors.Is(err, ErrPeerIdentity) {
+		t.Fatalf("forged result error=%v", err)
+	}
+}
+
 func TestRequestStatusNeverExposesPrivateConfiguration(t *testing.T) {
 	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
 	response, err := server.Handle(context.Background(), "connection-a", Peer{PID: 10, SessionID: 2}, Request{
@@ -448,7 +481,10 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 		{Version: PipeProtocolVersion, RequestID: "heartbeat", Type: "lease_heartbeat", Payload: leasePayload(t, grant.LeaseID, nil)},
 		{Version: PipeProtocolVersion, RequestID: "viewer", Type: "viewer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "running"})},
 		{Version: PipeProtocolVersion, RequestID: "renderer", Type: "renderer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "ready"})},
-		{Version: PipeProtocolVersion, RequestID: "stream", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{"streamName": "yard-live", "phase": "playing"})},
+		{Version: PipeProtocolVersion, RequestID: "stream", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{
+			"streamName": "yard-live", "transport": "webrtc", "phase": "playing",
+			"lastBinaryAt": time.Now().Add(-2 * time.Second).UnixMilli(), "lastProgressAt": time.Now().Add(-time.Second).UnixMilli(),
+		})},
 		{Version: PipeProtocolVersion, RequestID: "diagnostic", Type: "diagnostic_event", Payload: leasePayload(t, grant.LeaseID, map[string]any{"code": "renderer_ready"})},
 	}
 	for _, request := range requests {
@@ -456,6 +492,19 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 		if err != nil || !response.OK {
 			t.Fatalf("%s response=%+v err=%v", request.Type, response, err)
 		}
+	}
+	snapshot, err := server.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ViewerLastHeartbeatAt == nil || snapshot.RendererLastHeartbeatAt == nil ||
+		snapshot.RendererLastProgressAt == nil || len(snapshot.Streams) != 1 {
+		t.Fatalf("monitoring snapshot=%+v", snapshot)
+	}
+	stream := snapshot.Streams[0]
+	if stream.StreamName != "yard-live" || stream.State != "playing" || stream.Transport != "webrtc" ||
+		stream.LastBinaryAt == nil || stream.LastProgressAt == nil || stream.UpdatedAt == nil {
+		t.Fatalf("stream telemetry=%+v", stream)
 	}
 
 	foreign := requests[0]
@@ -466,6 +515,42 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 	release := Request{Version: PipeProtocolVersion, RequestID: "release", Type: "release_lease", Payload: leasePayload(t, grant.LeaseID, nil)}
 	if response, err := server.Handle(context.Background(), "connection-a", peer, release); err != nil || !response.OK {
 		t.Fatalf("release response=%+v err=%v", response, err)
+	}
+	snapshot, err = server.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Viewer != "closed" || snapshot.Renderer != "not_ready" || len(snapshot.Streams) != 0 {
+		t.Fatalf("released monitoring snapshot=%+v", snapshot)
+	}
+}
+
+func TestRequestRejectsInvalidStreamTelemetry(t *testing.T) {
+	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	peer := Peer{PID: 10, SessionID: 2, Interactive: true}
+	grantResponse, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "acquire", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%+v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+
+	for index, fields := range []map[string]any{
+		{"streamName": "https://camera.invalid/live", "transport": "webrtc", "phase": "playing"},
+		{"streamName": "yard-live", "transport": "rtsp", "phase": "playing"},
+		{"streamName": "yard-live", "transport": "webrtc", "phase": "unknown"},
+	} {
+		response, handleErr := server.Handle(t.Context(), "connection-a", peer, Request{
+			Version: PipeProtocolVersion, RequestID: fmt.Sprintf("invalid-stream-%d", index), Type: "stream_telemetry",
+			Payload: leasePayload(t, grant.LeaseID, fields),
+		})
+		if handleErr != nil || response.OK || response.ErrorCode != CodeInvalidRequest {
+			t.Fatalf("case %d response=%+v err=%v", index, response, handleErr)
+		}
 	}
 }
 

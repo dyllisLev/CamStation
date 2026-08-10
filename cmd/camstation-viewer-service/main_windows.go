@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 
 	"camstation/internal/viewerservice"
 	"golang.org/x/sys/windows"
@@ -30,6 +31,12 @@ func runPlatform(console bool) error {
 		return runtime.Run(ctx)
 	}
 	return svc.Run(serviceName, scmHandler{})
+}
+
+func runRestartHelperPlatform() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	return viewerservice.RunServiceRestartHelper(ctx)
 }
 
 func (scmHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
