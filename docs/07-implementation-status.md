@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-07-17
+Last updated: 2026-08-09
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -47,6 +47,15 @@ This document records the current implementation state so the next session can c
 - Health, events, stream status, stream restart, camera probe endpoints
 - Korean default UI and language setting menu
 - Live monitoring workspace at `/live`
+- Dedicated mobile monitoring viewer at `/viewer`:
+  - bypasses the desktop console shell and fills the mobile dynamic viewport
+  - presents enabled cameras four per 2×2 page with horizontal swipe and page controls
+  - mounts playback only for the visible page to bound mobile bandwidth use
+  - opens a single-camera detail view with previous/next/close controls and a KST clock
+  - requests browser fullscreen and landscape orientation when available, with iOS native-video fullscreen fallback
+  - uses the applied live output for grid tiles and the applied focus output for detail/fullscreen
+  - reuses the bounded WebRTC-primary/MSE-fallback playback recovery path
+  - restores the grid safely when a selected camera is disabled or removed
 - Live PTZ control for capability-advertised cameras:
   - guarded ONVIF continuous pan/tilt/zoom and explicit Stop
   - Stop is the final ordered command with a 2-second HTTP and device timeout backstop
@@ -189,12 +198,19 @@ rtsp://127.0.0.1:8554/{streamName}
 Commands run successfully:
 
 ```bash
+cd web && npm test
 cd web && node --experimental-strip-types --test tests/streamSelection.test.ts
 cd web && npm run lint
 cd web && npm run build
 go test ./...
 go build -o camstationd ./cmd/camstationd
 ```
+
+Mobile viewer route verification:
+
+- The frontend route test confirms `/viewer` is registered before the desktop console shell.
+- The embedded SPA test confirms a direct `/viewer` request returns the generated app entry with `Cache-Control: no-store`.
+- The page model tests cover four-camera pagination, the legacy strict 50-pixel swipe threshold, and bounded page navigation.
 
 Focused stream selection verification:
 
