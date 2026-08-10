@@ -456,3 +456,17 @@
   is Korean. Protect the trigger metadata, exact-window boundary, artifact integrity, and cleanup
   rules with a source-policy test that also rejects embedded environment IPs, key fingerprints, and
   private-key material.
+
+## 2026-08-10 — Publish operator downloads through the settings surface
+
+- When the operator asks to download a client from the 2.0 server, a working API endpoint alone is
+  incomplete. The canonical operator entry point is `/settings`; verify the real rendered page and
+  require a visible download action backed by the same release metadata and artifact hash.
+- Inspect the live page before adding UI. The source may already contain the correct card while the
+  deployed release catalog is empty; in that case publish and verify the artifact instead of
+  duplicating the component or inventing a second download route.
+- Define completion by the operator journey: settings-page download, Windows installation, Viewer
+  launch, server connection, and live monitoring. Do not confuse the installed application EXE with
+  the distributable installer. The current standard package is the MSI and must install the Viewer
+  EXE, service, shortcuts, and uninstall registration as one lifecycle-owned product; reviving the
+  rejected custom Setup EXE or publishing a bare application EXE would not satisfy that journey.

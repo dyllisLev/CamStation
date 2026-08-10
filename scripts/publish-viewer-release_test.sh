@@ -55,6 +55,8 @@ expect_failure "$publisher" --installer "$installer" --version '../2.0.0' --rele
 write_installer "$tmp_dir/escape" 'wrong name'
 mv "$tmp_dir/escape/CamStationViewerSetup.exe" "$tmp_dir/escape.exe"
 expect_failure "$publisher" --installer "$tmp_dir/escape.exe" --version '2.0.0-dev.1' --release-dir "$release_dir"
+printf 'wrong msi name\n' >"$tmp_dir/Other.msi"
+expect_failure "$publisher" --installer "$tmp_dir/Other.msi" --version '2.0.0-dev.1' --release-dir "$release_dir"
 (
   cd "$tmp_dir"
   expect_failure "$publisher" --installer "$installer" --version '2.0.0-dev.1' --release-dir '-unsafe'
@@ -185,5 +187,17 @@ files_after=$(find "$release_dir" -type f -printf '%P\n' | sort | sha256sum | aw
 
 find "$release_dir/releases" -maxdepth 1 -name '.stage.*' -print -quit | grep -q . && fail "staging directory was left behind"
 [[ -f "$release_dir/.publish.lock" ]] || fail "publisher lock file is missing"
+
+msi_input_dir="$tmp_dir/input-msi"
+msi_release_dir="$tmp_dir/msi-releases-root"
+mkdir -p "$msi_input_dir"
+printf 'viewer-msi-installer\n' >"$msi_input_dir/CamStationViewer.msi"
+msi_dry_run=$("$publisher" --installer "$msi_input_dir/CamStationViewer.msi" --version '2.0.21' --release-dir "$msi_release_dir" --development-unsigned --dry-run)
+[[ "$msi_dry_run" == *'"filename":"CamStationViewer.msi"'* ]] || fail "MSI dry-run manifest has the wrong filename"
+[[ ! -e "$msi_release_dir" ]] || fail "MSI dry-run created the release directory"
+"$publisher" --installer "$msi_input_dir/CamStationViewer.msi" --version '2.0.21' --release-dir "$msi_release_dir" --development-unsigned >/dev/null
+msi_current=$(pointer_dir "$msi_release_dir" current)
+assert_file_contains "$msi_current/release.json" '"filename":"CamStationViewer.msi"'
+cmp -s "$msi_input_dir/CamStationViewer.msi" "$msi_current/CamStationViewer.msi" || fail "active MSI differs from input"
 
 echo "PASS: viewer release publisher"

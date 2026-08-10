@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -14,6 +14,21 @@ This document records the current implementation state so the next session can c
 
 ## Implemented
 
+### 2026-08-10 standard Viewer MSI publication boundary
+
+- The dedicated Windows build PC produced and independently validated the unsigned development
+  `CamStationViewer.msi` version `2.0.21`: 124,350,464 bytes, SHA-256
+  `9a1d9f853a19c7f6e46cc8d392915a1fe38e2bfef61115627e0ba1ad0506753e`.
+- The release catalog and atomic publisher accept only the exact current MSI name and the exact
+  legacy EXE name. The settings page shows the actual installer filename and a fixed same-origin
+  download action; arbitrary executable/package names remain rejected.
+- The MSI is a manual standard-installation artifact. Publishing it does not enqueue an update for
+  the superseded EXE-specific Agent flow. The operator journey is settings download, MSI install,
+  launch of the installed `CamStationViewer.exe`, server connection, and monitoring confirmation.
+- Publisher, focused release/API/update-boundary tests, the full Go suite, 55 web tests plus
+  lint/build, and 37 Viewer tests plus TypeScript build pass. Docker publication and the clean-host
+  manual-install handoff are recorded separately after runtime verification.
+
 ### 2026-08-09 Windows-local Viewer MSI build entry point
 
 - `scripts/build-viewer-msi.ps1` is the repository-owned one-command entry point for a dedicated
@@ -26,9 +41,9 @@ This document records the current implementation state so the next session can c
 - Linux-side source validation passes: 29 Viewer tests, TypeScript build, Windows Electron package,
   Viewer-service Go tests, PowerShell 7.5 parser, non-Windows fail-closed gate, temporary x64 service
   cross-build, fresh-fragment generation, and tracked-input hash preservation.
-- No new MSI has been produced on this Linux host. A dedicated Windows x64 host must still run the
-  documented command and prove the resulting MSI database and artifact set. The NUC monitor PC is
-  strictly an install/repair/uninstall target and must not receive build tools or source caches.
+- No MSI is produced on this Linux host. The dedicated Windows x64 build and MSI-database proof were
+  subsequently completed as recorded above. The NUC monitor PC remains strictly an
+  install/repair/uninstall target and must not receive build tools or source caches.
 - Build command, prerequisites, outputs, and troubleshooting are in
   [the installer guide](../installer/README.md).
 
@@ -237,7 +252,8 @@ This document records the current implementation state so the next session can c
   - each policy card shows advertised/detected input plus desired/applied/effective/runtime state
 - Windows monitoring client delivery:
   - the Settings page shows the current Windows installer version, size, digest prefix, development-unsigned marker, and a fixed download link
-  - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified `CamStationViewerSetup.exe`
+  - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified exact `CamStationViewer.msi` or legacy `CamStationViewerSetup.exe`
+  - MSI publication is manual-download-only and does not enter the legacy EXE-specific automatic-update command path
   - the Viewer registry stores independent Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
   - durable idempotent commands, bounded SSE/long-poll recovery, force restart, and server-directed `update_app` control are implemented
   - the Viewer command selector exposes only `ping`, `reload_live`, `restart_viewer`, `restart_agent`, and `resubscribe_stream`; the Agent additionally accepts server-directed `update_app`

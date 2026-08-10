@@ -56,6 +56,37 @@ func TestViewerReleaseRoutesServeVerifiedInstaller(t *testing.T) {
 	}
 }
 
+func TestViewerReleaseRoutesServeVerifiedMSI(t *testing.T) {
+	server := newTestRouteServer(t)
+	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
+	artifact := []byte("msi installer")
+	digest := publishViewerFixtureNamed(t, releaseDir, "CamStationViewer.msi", artifact)
+
+	status, metadata := requestJSON(t, server.handler, http.MethodGet, "/api/viewers/app/version", "")
+	if status != http.StatusOK || metadata["filename"] != "CamStationViewer.msi" || metadata["sha256"] != digest {
+		t.Fatalf("MSI metadata = %d %#v", status, metadata)
+	}
+	response := performRequest(t, server.handler, http.MethodGet, "/api/viewers/app/download")
+	if response.Code != http.StatusOK {
+		t.Fatalf("MSI download status = %d; body=%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename="CamStationViewer.msi"` {
+		t.Fatalf("MSI content disposition = %q", got)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("MSI content type = %q", got)
+	}
+	if got := response.Header().Get("Content-Length"); got != strconv.Itoa(len(artifact)) {
+		t.Fatalf("MSI content length = %q", got)
+	}
+	if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("MSI X-Content-Type-Options = %q", got)
+	}
+	if got := response.Body.String(); got != string(artifact) {
+		t.Fatalf("MSI download body = %q", got)
+	}
+}
+
 func TestViewerReleaseRoutesReturnServiceUnavailableWithoutValidRelease(t *testing.T) {
 	server := newTestRouteServer(t)
 	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")

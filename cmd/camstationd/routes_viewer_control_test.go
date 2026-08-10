@@ -81,6 +81,23 @@ func TestViewerHeartbeatEnsuresExactDesiredReleaseCommand(t *testing.T) {
 	assertEncodedDoesNotContain(t, body, releaseDir)
 }
 
+func TestViewerHeartbeatDoesNotOfferMSIToLegacyAgent(t *testing.T) {
+	server := newTestRouteServer(t)
+	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")
+	publishViewerFixtureNamed(t, releaseDir, "CamStationViewer.msi", []byte("msi installer"))
+	heartbeat := `{
+		"id":"viewer-msi-boundary","displayName":"Manual MSI wall","appVersion":"2.0.20",
+		"route":"/live?viewer=1","mode":"live","agent":{"state":"online","version":"2.0.20"},
+		"viewer":{"state":"running","version":"2.0.20"},"renderer":{"state":"ready"},"streams":[]
+	}`
+
+	status, body := requestJSON(t, server.handler, http.MethodPost, "/api/viewers/heartbeat", heartbeat)
+	commands, err := server.db.ListViewerCommands(t.Context(), "viewer-msi-boundary")
+	if status != http.StatusOK || body["desiredRelease"] != nil || err != nil || len(commands) != 0 {
+		t.Fatalf("MSI heartbeat = %d desired=%#v commands=%#v err=%v", status, body["desiredRelease"], commands, err)
+	}
+}
+
 func TestViewerHeartbeatRequiresExactReportedVersionAndDigest(t *testing.T) {
 	server := newTestRouteServer(t)
 	releaseDir := filepath.Join(filepath.Dir(server.recordingsDir), "viewer-releases", "current")

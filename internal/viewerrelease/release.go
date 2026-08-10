@@ -18,6 +18,11 @@ var (
 	ErrInvalid     = errors.New("viewer release invalid")
 )
 
+const (
+	MSIInstallerFilename       = "CamStationViewer.msi"
+	LegacyEXEInstallerFilename = "CamStationViewerSetup.exe"
+)
+
 type Release struct {
 	Version             string    `json:"version"`
 	Filename            string    `json:"filename"`
@@ -72,6 +77,10 @@ func Load(rootDir string) (Release, error) {
 
 func (r Release) DownloadURL() string {
 	return "/api/viewers/app/download"
+}
+
+func (r Release) SupportsAgentUpdate() bool {
+	return r.Filename == LegacyEXEInstallerFilename
 }
 
 func (r Release) OpenVerified() (*os.File, error) {
@@ -148,7 +157,7 @@ func selectedReleaseDir(root *os.Root) (string, error) {
 }
 
 func (r Release) validManifest() bool {
-	if r.Filename == "" || filepath.IsAbs(r.Filename) || strings.ContainsAny(r.Filename, `/\`) || strings.IndexFunc(r.Filename, unicode.IsControl) >= 0 || filepath.Ext(r.Filename) != ".exe" {
+	if !validInstallerFilename(r.Filename) || filepath.IsAbs(r.Filename) || strings.ContainsAny(r.Filename, `/\`) || strings.IndexFunc(r.Filename, unicode.IsControl) >= 0 {
 		return false
 	}
 	if r.SizeBytes <= 0 || len(r.SHA256) != sha256.Size*2 || strings.ToLower(r.SHA256) != r.SHA256 {
@@ -156,6 +165,10 @@ func (r Release) validManifest() bool {
 	}
 	_, err := hex.DecodeString(r.SHA256)
 	return err == nil
+}
+
+func validInstallerFilename(filename string) bool {
+	return filename == MSIInstallerFilename || filename == LegacyEXEInstallerFilename
 }
 
 func currentRootError(err error) error {

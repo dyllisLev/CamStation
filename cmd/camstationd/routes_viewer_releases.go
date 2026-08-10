@@ -38,11 +38,18 @@ func (d routeDeps) handleViewerReleaseDownload(w http.ResponseWriter, r *http.Re
 	defer file.Close()
 
 	w.Header().Set("Content-Disposition", attachmentDisposition(release.Filename))
-	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
+	w.Header().Set("Content-Type", viewerInstallerContentType(release.Filename))
 	w.Header().Set("Content-Length", strconv.FormatInt(release.SizeBytes, 10))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, file)
+}
+
+func viewerInstallerContentType(filename string) string {
+	if filename == viewerrelease.LegacyEXEInstallerFilename {
+		return "application/vnd.microsoft.portable-executable"
+	}
+	return "application/octet-stream"
 }
 
 func attachmentDisposition(filename string) string {

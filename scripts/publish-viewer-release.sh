@@ -25,10 +25,11 @@ json_scalar() {
 validate_release() {
   local directory=$1
   local expected_version=$2
-  local expected_size=$3
-  local expected_sha=$4
-  local expected_unsigned=$5
-  local artifact="$directory/CamStationViewerSetup.exe"
+  local expected_filename=$3
+  local expected_size=$4
+  local expected_sha=$5
+  local expected_unsigned=$6
+  local artifact="$directory/$expected_filename"
   local release_manifest="$directory/release.json"
 
   [[ -d "$directory" && ! -L "$directory" ]] || return 1
@@ -36,7 +37,7 @@ validate_release() {
   [[ $(stat -c %s -- "$artifact") == "$expected_size" ]] || return 1
   [[ $(sha256sum -- "$artifact" | awk '{print $1}') == "$expected_sha" ]] || return 1
   [[ $(json_string "$release_manifest" version) == "$expected_version" ]] || return 1
-  [[ $(json_string "$release_manifest" filename) == 'CamStationViewerSetup.exe' ]] || return 1
+  [[ $(json_string "$release_manifest" filename) == "$expected_filename" ]] || return 1
   [[ $(json_scalar "$release_manifest" sizeBytes) == "$expected_size" ]] || return 1
   [[ $(json_string "$release_manifest" sha256) == "$expected_sha" ]] || return 1
   [[ $(json_scalar "$release_manifest" developmentUnsigned) == "$expected_unsigned" ]] || return 1
@@ -47,27 +48,28 @@ stage_release() {
   local source_manifest=$2
   local release_id=$3
   local expected_version=$4
-  local expected_size=$5
-  local expected_sha=$6
-  local expected_unsigned=$7
+  local expected_filename=$5
+  local expected_size=$6
+  local expected_sha=$7
+  local expected_unsigned=$8
   local destination="$releases_dir/$release_id"
 
   if [[ -e "$destination" ]]; then
-    validate_release "$destination" "$expected_version" "$expected_size" "$expected_sha" "$expected_unsigned" || die "immutable release conflicts with existing content"
+    validate_release "$destination" "$expected_version" "$expected_filename" "$expected_size" "$expected_sha" "$expected_unsigned" || die "immutable release conflicts with existing content"
     return 0
   fi
 
   stage=$(mktemp -d "$releases_dir/.stage.XXXXXX")
-  cp --reflink=auto -- "$source_installer" "$stage/CamStationViewerSetup.exe"
+  cp --reflink=auto -- "$source_installer" "$stage/$expected_filename"
   if [[ "$source_manifest" == '-' ]]; then
     printf '%s\n' "$manifest" >"$stage/release.json"
   else
     cp --reflink=auto -- "$source_manifest" "$stage/release.json"
   fi
-  chmod 0444 "$stage/CamStationViewerSetup.exe" "$stage/release.json"
-  validate_release "$stage" "$expected_version" "$expected_size" "$expected_sha" "$expected_unsigned" || die "staged release verification failed"
+  chmod 0444 "$stage/$expected_filename" "$stage/release.json"
+  validate_release "$stage" "$expected_version" "$expected_filename" "$expected_size" "$expected_sha" "$expected_unsigned" || die "staged release verification failed"
   chmod 0555 "$stage"
-  sync "$stage/CamStationViewerSetup.exe" "$stage/release.json" "$stage"
+  sync "$stage/$expected_filename" "$stage/release.json" "$stage"
   mv -T -- "$stage" "$destination"
   stage=''
   sync "$releases_dir"
@@ -163,7 +165,11 @@ done
 
 [[ -n "$installer" && -n "$version" && -n "$release_dir" ]] || { usage; die "installer, version, and release directory are required"; }
 [[ -f "$installer" && ! -L "$installer" ]] || die "installer must be a regular file"
-[[ $(basename -- "$installer") == 'CamStationViewerSetup.exe' ]] || die "installer filename must be CamStationViewerSetup.exe"
+installer_filename=$(basename -- "$installer")
+case "$installer_filename" in
+  CamStationViewer.msi|CamStationViewerSetup.exe) ;;
+  *) die "installer filename must be CamStationViewer.msi or CamStationViewerSetup.exe" ;;
+esac
 [[ "/$installer/" != *'/../'* ]] || die "installer path must not contain parent traversal"
 [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || die "version contains unsupported characters"
 [[ "$release_dir" != -* ]] || die "relative release directory must not begin with a dash"
@@ -175,8 +181,8 @@ size_bytes=$(stat -c %s -- "$installer")
 ((size_bytes > 0)) || die "installer must not be empty"
 sha256=$(sha256sum -- "$installer" | awk '{print $1}')
 published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-manifest=$(printf '{"version":"%s","filename":"CamStationViewerSetup.exe","sizeBytes":%s,"sha256":"%s","publishedAt":"%s","developmentUnsigned":%s}\n' \
-  "$version" "$size_bytes" "$sha256" "$published_at" "$development_unsigned")
+manifest=$(printf '{"version":"%s","filename":"%s","sizeBytes":%s,"sha256":"%s","publishedAt":"%s","developmentUnsigned":%s}\n' \
+  "$version" "$installer_filename" "$size_bytes" "$sha256" "$published_at" "$development_unsigned")
 
 if [[ "$dry_run" == true ]]; then
   printf '%s\n' "$manifest"
@@ -243,14 +249,21 @@ if old_current_pointer=$(read_pointer "$current_dir"); then
 else
   pointer_status=$?
   ((pointer_status == 2)) || die "current pointer is invalid"
-  if [[ -f "$current_dir/release.json" && ! -L "$current_dir/release.json" && -f "$current_dir/CamStationViewerSetup.exe" && ! -L "$current_dir/CamStationViewerSetup.exe" ]]; then
+  if [[ -f "$current_dir/release.json" && ! -L "$current_dir/release.json" ]]; then
     legacy_version=$(json_string "$current_dir/release.json" version)
+    legacy_filename=$(json_string "$current_dir/release.json" filename)
     legacy_size=$(json_scalar "$current_dir/release.json" sizeBytes)
     legacy_sha=$(json_string "$current_dir/release.json" sha256)
     legacy_unsigned=$(json_scalar "$current_dir/release.json" developmentUnsigned)
+    case "$legacy_filename" in
+      CamStationViewer.msi|CamStationViewerSetup.exe) ;;
+      *) die "legacy release filename is invalid" ;;
+    esac
+    legacy_artifact="$current_dir/$legacy_filename"
+    [[ -f "$legacy_artifact" && ! -L "$legacy_artifact" ]] || die "legacy release artifact is invalid"
     [[ "$legacy_version" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ && "$legacy_size" =~ ^[0-9]+$ && "$legacy_sha" =~ ^[a-f0-9]{64}$ && "$legacy_unsigned" =~ ^(true|false)$ ]] || die "legacy release manifest is invalid"
     legacy_id="$legacy_version-$legacy_sha"
-    stage_release "$current_dir/CamStationViewerSetup.exe" "$current_dir/release.json" "$legacy_id" "$legacy_version" "$legacy_size" "$legacy_sha" "$legacy_unsigned"
+    stage_release "$legacy_artifact" "$current_dir/release.json" "$legacy_id" "$legacy_version" "$legacy_filename" "$legacy_size" "$legacy_sha" "$legacy_unsigned"
     old_current_pointer="../releases/$legacy_id"
   fi
 fi
@@ -264,7 +277,7 @@ else
 fi
 
 release_id="$version-$sha256"
-stage_release "$installer" '-' "$release_id" "$version" "$size_bytes" "$sha256" "$development_unsigned"
+stage_release "$installer" '-' "$release_id" "$version" "$installer_filename" "$size_bytes" "$sha256" "$development_unsigned"
 new_current_pointer="../releases/$release_id"
 
 if [[ "$old_current_pointer_exists" != true || "$old_current_pointer" != "$new_current_pointer" ]]; then

@@ -213,7 +213,7 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 
 func (d routeDeps) desiredViewerRelease(r *http.Request, heartbeat store.ViewerHeartbeat, viewer store.Viewer) (*viewerDesiredReleaseResponse, error) {
 	release, err := d.viewerReleases.Current(r.Context())
-	if err != nil {
+	if err != nil || !release.SupportsAgentUpdate() {
 		return nil, nil
 	}
 	if viewerReportsRelease(viewer, heartbeat.Agent.ArtifactSHA256, release) {

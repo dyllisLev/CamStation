@@ -24,13 +24,14 @@ export function ViewerClientDownloadCard() {
           <div className="text-sm text-slate-400">설치 파일 정보를 불러오는 중입니다.</div>
         ) : release.data && fixedDownloadRoute ? (
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <ReleaseMetric label="버전" value={release.data.version} />
+              <ReleaseMetric label="설치 파일" value={release.data.filename} mono />
               <ReleaseMetric label="파일 크기" value={formatReleaseSize(release.data.sizeBytes)} />
               <ReleaseMetric label="SHA-256" value={release.data.sha256.slice(0, 12)} mono />
             </div>
             <Button asChild variant="primary">
-              <a href={withAppBase(fixedDownloadRoute)} download={release.data.filename}>
+              <a href={withAppBase(fixedDownloadRoute)} download={release.data.filename} data-testid="viewer-installer-download">
                 <Download size={16} />
                 Windows 설치 파일 다운로드
               </a>

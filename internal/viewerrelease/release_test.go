@@ -38,6 +38,8 @@ func TestLoadRejectsUnsafeManifestFields(t *testing.T) {
 		{name: "slash", filename: "nested/setup.exe", size: 9, digest: strings.Repeat("0", 64)},
 		{name: "backslash", filename: `nested\setup.exe`, size: 9, digest: strings.Repeat("0", 64)},
 		{name: "wrong extension", filename: "CamStationViewerSetup.zip", size: 9, digest: strings.Repeat("0", 64)},
+		{name: "arbitrary exe", filename: "Other.exe", size: 9, digest: strings.Repeat("0", 64)},
+		{name: "arbitrary msi", filename: "Other.msi", size: 9, digest: strings.Repeat("0", 64)},
 		{name: "zero size", filename: "CamStationViewerSetup.exe", size: 0, digest: strings.Repeat("0", 64)},
 		{name: "short digest", filename: "CamStationViewerSetup.exe", size: 9, digest: "00"},
 		{name: "uppercase digest", filename: "CamStationViewerSetup.exe", size: 9, digest: strings.Repeat("A", 64)},
@@ -145,6 +147,41 @@ func TestLoadAndOpenVerified(t *testing.T) {
 	}
 	if string(contents) != string(artifact) {
 		t.Fatalf("verified contents = %q", contents)
+	}
+}
+
+func TestLoadAndOpenVerifiedMSI(t *testing.T) {
+	dir := t.TempDir()
+	artifact := []byte("msi installer")
+	writeReleaseFixtureNamed(t, dir, viewerrelease.MSIInstallerFilename, artifact, "")
+
+	release, err := viewerrelease.Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if release.Filename != viewerrelease.MSIInstallerFilename || release.SupportsAgentUpdate() {
+		t.Fatalf("MSI release = %#v, SupportsAgentUpdate() = %v", release, release.SupportsAgentUpdate())
+	}
+	file, err := release.OpenVerified()
+	if err != nil {
+		t.Fatalf("OpenVerified() error = %v", err)
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read verified MSI: %v", err)
+	}
+	if string(contents) != string(artifact) {
+		t.Fatalf("verified MSI contents = %q", contents)
+	}
+}
+
+func TestSupportsAgentUpdateOnlyForLegacyEXE(t *testing.T) {
+	if !(viewerrelease.Release{Filename: viewerrelease.LegacyEXEInstallerFilename}).SupportsAgentUpdate() {
+		t.Fatal("legacy EXE should support Agent update")
+	}
+	if (viewerrelease.Release{Filename: viewerrelease.MSIInstallerFilename}).SupportsAgentUpdate() {
+		t.Fatal("MSI must remain manual-download-only")
 	}
 }
 
@@ -301,10 +338,20 @@ type releaseManifest struct {
 
 func writeReleaseFixture(t *testing.T, root string, artifact []byte, digestOverride string) {
 	t.Helper()
-	writeReleaseFixtureAtDir(t, filepath.Join(root, "current"), artifact, digestOverride)
+	writeReleaseFixtureNamed(t, root, viewerrelease.LegacyEXEInstallerFilename, artifact, digestOverride)
+}
+
+func writeReleaseFixtureNamed(t *testing.T, root, filename string, artifact []byte, digestOverride string) {
+	t.Helper()
+	writeReleaseFixtureAtDirNamed(t, filepath.Join(root, "current"), filename, artifact, digestOverride)
 }
 
 func writeReleaseFixtureAtDir(t *testing.T, dir string, artifact []byte, digestOverride string) {
+	t.Helper()
+	writeReleaseFixtureAtDirNamed(t, dir, viewerrelease.LegacyEXEInstallerFilename, artifact, digestOverride)
+}
+
+func writeReleaseFixtureAtDirNamed(t *testing.T, dir, filename string, artifact []byte, digestOverride string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create release dir: %v", err)
@@ -316,13 +363,13 @@ func writeReleaseFixtureAtDir(t *testing.T, dir string, artifact []byte, digestO
 	}
 	writeManifestAtDir(t, dir, releaseManifest{
 		Version:             "2.0.0-dev.1",
-		Filename:            "CamStationViewerSetup.exe",
+		Filename:            filename,
 		SizeBytes:           int64(len(artifact)),
 		SHA256:              digestHex,
 		PublishedAt:         time.Date(2026, 7, 16, 1, 2, 3, 0, time.UTC),
 		DevelopmentUnsigned: true,
 	})
-	if err := os.WriteFile(filepath.Join(dir, "CamStationViewerSetup.exe"), artifact, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, filename), artifact, 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 }

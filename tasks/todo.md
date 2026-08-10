@@ -1346,3 +1346,55 @@
 - A secret/environment scan found no concrete host IP, desktop username, host-key fingerprint, or
   private-key material in the skill. No Windows host, Viewer installation, camera configuration, or
   runtime evidence was changed while registering it.
+
+---
+
+# 2026-08-10 publish Viewer installer and return WIN11-DELL to clean-install state
+
+## Specification
+
+- Treat the acceptance path as one operator journey: `/settings` download -> Windows install ->
+  Viewer launch -> server connection -> monitoring confirmation. The downloaded standard package is
+  `CamStationViewer.msi`; it must install `CamStationViewer.exe` and the complete MSI-owned runtime.
+  Do not publish a bare application EXE or revive the rejected custom Setup EXE.
+- Identify the exact current CamStation Viewer 2.0 Windows installer format, version, size, and
+  SHA-256 before changing either host. Do not rename an MSI to EXE or publish an unverified build.
+- Publish the verified installer through the already running CamStation 2.0 Docker service using its
+  existing release/download boundary when available. Keep the artifact in a persistent host mount,
+  expose only the intended download file/metadata, and surface the download action on the 2.0
+  `/settings` page rather than handing off only a raw API URL.
+- Only after the server-side artifact is durable and an independent HTTP download matches its
+  source hash, completely uninstall the existing Viewer product from the authorized Windows
+  development PC. Remove only Viewer-owned installed state, service, tasks, shortcuts, registration,
+  processes, and configuration; preserve SSH access, RDP, Windows build tools, source checkout, and
+  unrelated evidence.
+- Finish with two independent proofs: a fresh download from the 2.0 service has the expected hash,
+  and the Windows PC has no installed Viewer product/runtime remnants while remaining available for
+  the operator's manual installation test.
+
+## Plan
+
+- [x] Inventory the existing release endpoint/container mounts, candidate installer artifacts, and
+      exact Windows installed product footprint without mutation.
+- [ ] Select and verify the canonical installer, stage it into persistent 2.0 release storage, and
+      make the Docker settings page/download endpoint serve it with matching metadata.
+- [ ] Download the artifact independently through the `10.x` service URL and prove filename, size,
+      content type, and SHA-256.
+- [ ] Uninstall the exact Windows Viewer product, then remove only confirmed Viewer-owned remnants.
+- [ ] Audit Windows product/service/process/task/file/registry state plus preserved SSH/build access;
+      record the download URL, hash, rollback boundary, and verification results.
+
+## Acceptance criteria
+
+- [ ] The published filename and extension match the real installer format and its version/hash are
+      fixed in release metadata.
+- [ ] The installer appears as a download action on the CamStation 2.0 `/settings` page, remains
+      downloadable after a container restart, and a downloaded copy matches the published SHA-256.
+- [ ] WIN11-DELL contains no installed CamStation Viewer product, Viewer service/process/task,
+      auto-start entry, application directory, protected Viewer state, or product-created shortcut.
+- [ ] SSH maintenance access, the interactive Windows account/RDP session, source tree, and MSI build
+      toolchain are preserved for subsequent development and the user's manual clean-install test.
+
+## Review
+
+- Pending inventory, publication, uninstall, and verification.
