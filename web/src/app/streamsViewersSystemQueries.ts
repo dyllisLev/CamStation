@@ -70,7 +70,13 @@ export function useCreateViewerCommand() {
 }
 
 export function useViewerCommands(id: string) {
-  return useQuery({ queryKey: viewerKeys.commands(id), queryFn: () => api.viewerCommands(id), enabled: id !== "" });
+  return useQuery({
+    queryKey: viewerKeys.commands(id),
+    queryFn: () => api.viewerCommands(id),
+    enabled: id !== "",
+    refetchInterval: (query) => query.state.data?.some((command) =>
+      ["pending", "delivered", "acknowledged", "running"].includes(command.state)) ? 1000 : false,
+  });
 }
 
 export function useUpdateViewerCommand() {

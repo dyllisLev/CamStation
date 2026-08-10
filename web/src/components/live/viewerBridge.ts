@@ -23,7 +23,7 @@ export type ViewerCommand = { readonly type: "resubscribe_stream"; readonly stre
 
 export type CamStationViewerBridge = {
   reportStream(telemetry: ViewerStreamTelemetry): void;
-  onCommand(handler: (command: unknown) => void): void | (() => void);
+  onCommand(handler: (command: unknown) => boolean | Promise<boolean>): void | (() => void);
   setFullscreen?(fullscreen: boolean): Promise<unknown> | void;
   onFullscreenChange?(handler: (fullscreen: boolean) => void): void | (() => void);
 };
@@ -54,7 +54,9 @@ export function subscribeViewerCommands(
   try {
     const unsubscribe = bridge.onCommand((input) => {
       const command = safeCommand(input);
-      if (command && (!registered || registered.has(command.streamName))) handler(command);
+      if (!command || (registered && !registered.has(command.streamName))) return false;
+      handler(command);
+      return true;
     });
     return typeof unsubscribe === "function"
       ? () => {

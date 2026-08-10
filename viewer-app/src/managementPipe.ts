@@ -25,12 +25,24 @@ export type LeaseGrant = {
   readonly logPath?: string;
 };
 
+export type ViewerCommand =
+  | { readonly type: "reload_live"; readonly operationKey: string }
+  | { readonly type: "resubscribe_stream"; readonly streamName: string; readonly operationKey: string }
+  | { readonly type: "restart_viewer"; readonly operationKey: string };
+
 type Response = {
   readonly version: number;
   readonly requestId: string;
   readonly ok: boolean;
   readonly errorCode?: string;
   readonly message?: string;
+  readonly payload?: unknown;
+};
+
+type EventEnvelope = {
+  readonly version: number;
+  readonly event: string;
+  readonly eventId: string;
   readonly payload?: unknown;
 };
 
@@ -53,6 +65,7 @@ export class ManagementConnection {
   #buffer = Buffer.alloc(0);
   #pending = new Map<string, PendingRequest>();
   #disconnectHandlers = new Set<(error: Error) => void>();
+  #commandHandlers = new Set<(command: ViewerCommand) => void | Promise<void>>();
   private readonly socket: net.Socket;
 
   private constructor(socket: net.Socket) {
@@ -109,6 +122,13 @@ export class ManagementConnection {
     void this.request("stream_telemetry", { leaseId, ...objectPayload(payload) }).catch(() => undefined);
   }
 
+  reportCommandResult(leaseId: string, operationKey: string, succeeded: boolean, errorCode?: string): Promise<void> {
+    const payload = succeeded
+      ? { leaseId, operationKey, succeeded: true }
+      : { leaseId, operationKey, succeeded: false, errorCode: errorCode || "viewer_command_failed" };
+    return this.request("command_result", payload).then(() => undefined);
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -119,6 +139,11 @@ export class ManagementConnection {
   onDisconnect(handler: (error: Error) => void): () => void {
     this.#disconnectHandlers.add(handler);
     return () => this.#disconnectHandlers.delete(handler);
+  }
+
+  onCommand(handler: (command: ViewerCommand) => void | Promise<void>): () => void {
+    this.#commandHandlers.add(handler);
+    return () => this.#commandHandlers.delete(handler);
   }
 
   private request(type: string, payload?: unknown): Promise<unknown> {
@@ -154,17 +179,27 @@ export class ManagementConnection {
         this.socket.destroy(new Error("invalid management response"));
         return;
       }
-      let response: Response;
+      let decoded: unknown;
       try {
-        response = JSON.parse(line.toString("utf8")) as Response;
+        decoded = JSON.parse(line.toString("utf8")) as unknown;
       } catch {
         this.socket.destroy(new Error("invalid management response"));
         return;
       }
-      if (response.version !== MANAGEMENT_PROTOCOL_VERSION || typeof response.requestId !== "string" || typeof response.ok !== "boolean") {
+      if (isEventEnvelope(decoded)) {
+        const command = viewerCommandFromEvent(decoded);
+        if (!command) {
+          this.socket.destroy(new Error("invalid management event"));
+          return;
+        }
+        for (const handler of this.#commandHandlers) void handler(command);
+        continue;
+      }
+      if (!isResponse(decoded)) {
         this.socket.destroy(new Error("invalid management response"));
         return;
       }
+      const response = decoded;
       const pending = this.#pending.get(response.requestId);
       if (!pending) continue;
       this.#pending.delete(response.requestId);
@@ -180,6 +215,46 @@ export class ManagementConnection {
     this.#pending.clear();
     for (const handler of this.#disconnectHandlers) handler(error);
   }
+}
+
+function isResponse(value: unknown): value is Response {
+  if (!value || typeof value !== "object") return false;
+  const response = value as Record<string, unknown>;
+  return response.version === MANAGEMENT_PROTOCOL_VERSION && typeof response.requestId === "string"
+    && response.requestId.length > 0 && typeof response.ok === "boolean";
+}
+
+function isEventEnvelope(value: unknown): value is EventEnvelope {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Record<string, unknown>;
+  return event.version === MANAGEMENT_PROTOCOL_VERSION && typeof event.event === "string"
+    && typeof event.eventId === "string" && event.eventId.length > 0 && !("requestId" in event);
+}
+
+export function viewerCommandFromEvent(event: EventEnvelope): ViewerCommand | null {
+  if (event.event !== "viewer_command" || !event.payload || typeof event.payload !== "object") return null;
+  const payload = event.payload as Record<string, unknown>;
+  if (!safeOperationKey(payload.operationKey)) return null;
+  if (payload.type === "reload_live" || payload.type === "restart_viewer") {
+    return { type: payload.type, operationKey: payload.operationKey };
+  }
+  if (payload.type === "resubscribe_stream" && safeStreamName(payload.streamName)) {
+    return { type: "resubscribe_stream", streamName: payload.streamName, operationKey: payload.operationKey };
+  }
+  return null;
+}
+
+function safeOperationKey(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[a-z0-9._-]+$/iu.test(value);
+}
+
+function safeStreamName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128 || value !== value.trim()) return false;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value) || value.startsWith("//")) return false;
+  return !Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || (code >= 127 && code <= 159);
+  });
 }
 
 function objectPayload(value: unknown): Record<string, unknown> {

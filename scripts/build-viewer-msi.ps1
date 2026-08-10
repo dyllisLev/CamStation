@@ -32,6 +32,14 @@ function Assert-LastExitCode {
     }
 }
 
+function Release-ComObject {
+    param([AllowNull()][object]$Value)
+
+    if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value)
+    }
+}
+
 function Get-MsiProperty {
     param(
         [Parameter(Mandatory = $true)][object]$Database,
@@ -39,6 +47,8 @@ function Get-MsiProperty {
     )
 
     $query = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$Name'"
+    $view = $null
+    $record = $null
     $view = $Database.GetType().InvokeMember(
         "OpenView",
         [System.Reflection.BindingFlags]::InvokeMethod,
@@ -73,19 +83,29 @@ function Get-MsiProperty {
         ))
     }
     finally {
-        $null = $view.GetType().InvokeMember(
-            "Close",
-            [System.Reflection.BindingFlags]::InvokeMethod,
-            $null,
-            $view,
-            $null
-        )
+        Release-ComObject -Value $record
+        if ($null -ne $view) {
+            try {
+                $null = $view.GetType().InvokeMember(
+                    "Close",
+                    [System.Reflection.BindingFlags]::InvokeMethod,
+                    $null,
+                    $view,
+                    $null
+                )
+            }
+            finally {
+                Release-ComObject -Value $view
+            }
+        }
     }
 }
 
 function Get-MsiFileCount {
     param([Parameter(Mandatory = $true)][object]$Database)
 
+    $view = $null
+    $record = $null
     $view = $Database.GetType().InvokeMember(
         "OpenView",
         [System.Reflection.BindingFlags]::InvokeMethod,
@@ -102,25 +122,41 @@ function Get-MsiFileCount {
             $null
         )
         $count = 0
-        while ($null -ne $view.GetType().InvokeMember(
-            "Fetch",
-            [System.Reflection.BindingFlags]::InvokeMethod,
-            $null,
-            $view,
-            $null
-        )) {
-            $count++
+        while ($true) {
+            $record = $view.GetType().InvokeMember(
+                "Fetch",
+                [System.Reflection.BindingFlags]::InvokeMethod,
+                $null,
+                $view,
+                $null
+            )
+            if ($null -eq $record) { break }
+            try {
+                $count++
+            }
+            finally {
+                Release-ComObject -Value $record
+                $record = $null
+            }
         }
         return $count
     }
     finally {
-        $null = $view.GetType().InvokeMember(
-            "Close",
-            [System.Reflection.BindingFlags]::InvokeMethod,
-            $null,
-            $view,
-            $null
-        )
+        Release-ComObject -Value $record
+        if ($null -ne $view) {
+            try {
+                $null = $view.GetType().InvokeMember(
+                    "Close",
+                    [System.Reflection.BindingFlags]::InvokeMethod,
+                    $null,
+                    $view,
+                    $null
+                )
+            }
+            finally {
+                Release-ComObject -Value $view
+            }
+        }
     }
 }
 
@@ -414,14 +450,10 @@ try {
     } | Format-List
 }
 finally {
-    if ($null -ne $database -and [System.Runtime.InteropServices.Marshal]::IsComObject($database)) {
-        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
-        $database = $null
-    }
-    if ($null -ne $windowsInstaller -and [System.Runtime.InteropServices.Marshal]::IsComObject($windowsInstaller)) {
-        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller)
-        $windowsInstaller = $null
-    }
+    Release-ComObject -Value $database
+    $database = $null
+    Release-ComObject -Value $windowsInstaller
+    $windowsInstaller = $null
     if ($null -ne $workspace -and (Test-Path -LiteralPath $workspace)) {
         if ($KeepBuildWorkspace) {
             Write-Warning "Build workspace retained at $workspace"

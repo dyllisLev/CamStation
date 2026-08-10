@@ -99,6 +99,16 @@ type CommandSink interface {
 	SetDesiredUpdate(UpdateNotice)
 }
 
+type CommandResult struct {
+	State        string `json:"state"`
+	Error        string `json:"error,omitempty"`
+	OperationKey string `json:"operationKey,omitempty"`
+}
+
+type CommandReporter interface {
+	Report(context.Context, Command, CommandResult) error
+}
+
 type HTTPControlLoop struct {
 	HTTPClient               *http.Client
 	HeartbeatInterval        time.Duration
@@ -572,6 +582,40 @@ func (client ControlClient) ExchangeHeartbeat(ctx context.Context, heartbeat Hea
 	return heartbeatResponse, nil
 }
 
+func (client ControlClient) Report(ctx context.Context, command Command, result CommandResult) error {
+	if command.ID <= 0 || strings.TrimSpace(client.ClientID) == "" || !validCommandResultState(result.State) {
+		return errors.New("invalid viewer command result")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPatch,
+		client.endpoint("/api/viewers/"+url.PathEscape(client.ClientID)+"/commands/"+command.Key()), bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.httpClient().Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("command result status %s", response.Status)
+	}
+	return nil
+}
+
+func validCommandResultState(state string) bool {
+	switch state {
+	case "acknowledged", "running", "succeeded", "failed", "rejected", "expired":
+		return true
+	default:
+		return false
+	}
+}
+
 func (client ControlClient) endpoint(path string) string {
 	return strings.TrimSuffix(client.ServerURL, "/") + path
 }
@@ -598,6 +642,10 @@ func (loop HTTPControlLoop) Run(ctx context.Context, config MachineConfig, sourc
 		HTTPClient: loop.HTTPClient, ServerURL: config.ServerURL, ClientID: config.ClientID,
 		ReadDeadline: loop.ControlReadDeadline,
 	}
+	if aware, ok := sink.(interface{ SetCommandReporter(CommandReporter) }); ok {
+		aware.SetCommandReporter(client)
+		defer aware.SetCommandReporter(nil)
+	}
 	probes := ReconnectState{}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -616,14 +664,11 @@ func (loop HTTPControlLoop) Run(ctx context.Context, config MachineConfig, sourc
 				return nil
 			}
 			switch result.Command.Type {
-			case "reload_live", "resubscribe_stream", "shutdown":
+			case "ping", "reload_live", "resubscribe_stream", "restart_viewer", "restart_service", "restart_agent":
 			default:
-				return nil
+				return sink.DeliverViewerCommand(*result.Command)
 			}
 			err := sink.DeliverViewerCommand(*result.Command)
-			if errors.Is(err, ErrLeaseOwner) {
-				return nil
-			}
 			return err
 		})
 	}()
@@ -674,15 +719,20 @@ func (loop HTTPControlLoop) sendHeartbeat(ctx context.Context, config MachineCon
 	if heartbeat.Control.State == "" {
 		heartbeat.Control.State = "connecting"
 	}
+	heartbeat.Control.LastSuccessAt = status.ControlLastSuccessAt
 	heartbeat.Viewer.State = status.Viewer
 	if heartbeat.Viewer.State == "" {
 		heartbeat.Viewer.State = "closed"
 	}
 	heartbeat.Viewer.Version = installed
+	heartbeat.Viewer.LastHeartbeatAt = status.ViewerLastHeartbeatAt
 	heartbeat.Renderer.State = status.Renderer
 	if heartbeat.Renderer.State == "" {
 		heartbeat.Renderer.State = "not_ready"
 	}
+	heartbeat.Renderer.LastHeartbeatAt = status.RendererLastHeartbeatAt
+	heartbeat.Renderer.LastProgressAt = status.RendererLastProgressAt
+	heartbeat.Streams = append([]ViewerStreamState(nil), status.Streams...)
 	heartbeat.Update.State = "idle"
 	deadline := loop.HeartbeatRequestDeadline
 	if deadline <= 0 {

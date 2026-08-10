@@ -440,3 +440,35 @@
   upstream tests, and remove duplicate or superseded source and plans.
 - Embedded frontend assets are derived from resolved source. Rebuild them after conflict resolution
   and confirm the expected content hashes before the final full-suite verification.
+
+## 2026-08-10 — Recover the product contract before judging an architecture migration
+
+- When a current package no longer carries an older supervisor component, do not infer that remote
+  control was intentionally removed. Search the original specifications and Git history first.
+- Separate the normative product requirement from the current implementation state. A broken or
+  incomplete migration is evidence of a gap, not evidence that the requirement disappeared.
+- For Viewer analysis, preserve the operator requirement that the server can recover a remote
+  display without routine PC access, and map monitoring and control as separate planes before
+  recommending which process owns lifecycle actions.
+
+## 2026-08-10 — Prove Viewer control and monitoring as separate end-to-end paths
+
+- A local IPC handler returning success is not proof that telemetry is monitored. Trace every status
+  field through renderer report, Service snapshot, server heartbeat, database, and operator UI; the
+  standard Service had accepted `stream_telemetry` while silently discarding it.
+- Stream telemetry must be repeated independently of playback-state transitions. A renderer can sit
+  in a long recovery cooldown without changing state; periodic reports keep the stream selectable for
+  targeted remote resubscription and make its latest progress time truthful.
+- Persist a Service-restart command and target boot generation before stopping the Service. On the
+  next boot, reconcile and retry any unreported terminal result from the local journal without
+  executing the side effect again or waiting for server redelivery.
+- Before a standard MSI upgrade, close only the exact installed Viewer process set so Windows
+  Installer can replace the payload deterministically. After installation, verify the registered
+  version, exact service state, packaged files, size, and hash rather than trusting installer exit 0.
+- Clean a disposable Viewer identity as one unit: remove both its server configuration and local
+  command journal. Journal command IDs are machine-local, and retaining test IDs beside a newly
+  generated client identity can contaminate later acceptance runs.
+- Windows PowerShell 5.1 does not support every newer convenience behavior. Poll the exact process
+  for bounded waits instead of assuming `Wait-Process -Timeout`, and inspect a property object before
+  reading an optional registry value because a missing `Get-ItemPropertyValue` property can still
+  emit an error under `SilentlyContinue`.

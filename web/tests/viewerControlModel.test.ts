@@ -30,8 +30,7 @@ test("server liveness overrides stale stored Agent health", () => {
 
 test("allows cancellation only while the backend accepts it", () => {
   assert.equal(canCancelViewerCommand("pending"), true);
-  assert.equal(canCancelViewerCommand("delivered"), true);
-  for (const state of ["acknowledged", "running", "succeeded", "failed", "rejected", "expired", "cancelled", "deleted"]) {
+  for (const state of ["delivered", "acknowledged", "running", "succeeded", "failed", "rejected", "expired", "cancelled", "deleted"]) {
     assert.equal(canCancelViewerCommand(state), false, state);
   }
 });

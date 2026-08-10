@@ -236,20 +236,25 @@ This document records the current implementation state so the next session can c
   - 202 saved-but-pending state is shown as a warning instead of ordinary success
   - each policy card shows advertised/detected input plus desired/applied/effective/runtime state
 - Windows monitoring client delivery:
-  - the Settings page shows the current Windows installer version, size, digest prefix, development-unsigned marker, and a fixed download link
-  - `GET /api/viewers/app/version` serves no-store release metadata and `GET /api/viewers/app/download` serves only a size/SHA-256-verified `CamStationViewerSetup.exe`
-  - the Viewer registry stores independent Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
-  - durable idempotent commands, bounded SSE/long-poll recovery, force restart, and server-directed `update_app` control are implemented
-  - the Viewer command selector exposes only `ping`, `reload_live`, `restart_viewer`, `restart_agent`, and `resubscribe_stream`; the Agent additionally accepts server-directed `update_app`
+  - the product contract requires server-side monitoring and remote control even when the renderer is frozen or crashed; monitoring and command-channel health are separate planes ([analysis](2026-08-10_viewer-command-feature-analysis.md))
+  - the Viewer registry stores independent service/Agent, control-channel, Viewer, renderer, update, and stream-progress health instead of treating visible video as client health
+  - the current standard MSI packages `CamStationViewerService.exe` plus a directly launched Electron Viewer; it does not package the older Agent/Host/Bootstrap supervision chain
+  - the standard Service owns the stable identity, heartbeat, SSE/long-poll management connection, single Viewer lease, and lease-derived Viewer/renderer telemetry; it now forwards bounded per-stream telemetry and lease/renderer/progress timestamps instead of acknowledging and dropping those reports
+  - the operator API accepts only `ping`, `reload_live`, `resubscribe_stream`, `restart_viewer`, and `restart_service`; legacy `restart_agent` is normalized only as a compatibility alias, while arbitrary types, URLs, routes, modes, update fields, irrelevant fields, and out-of-range TTLs are rejected
+  - the server queue distinguishes pending, delivered, acknowledged, running, succeeded, failed, rejected, expired, and cancelled; cancellation is limited to pending commands and active rows poll automatically
+  - the Service uses a bounded atomic command journal, persists acknowledgement/running before side effects, suppresses exact duplicates, rejects changed payloads for an existing identity, and re-reports unreported terminal results after reconnect without repeating the action
+  - management-pipe protocol v2 separates unsolicited command events from responses; Electron reloads only its approved live URL, forwards one safe stream name to the renderer, and returns a lease-authorized result
+  - Viewer restart uses Electron relaunch for an active lease or starts only the adjacent MSI Viewer in the active console session, and succeeds only after a replacement lease plus renderer-ready proof
+  - Service restart uses only the fixed installed service and private helper; the next boot generation reconciles and reports the original command instead of claiming success before restart
+  - `/viewers` uses real Viewer/action selectors with Korean labels, only relevant stream/reason inputs, two-step confirmation for disruptive actions, exact state timestamps, and safe localized result categories
+  - all five actions were proven end to end on the authorized Windows 11 PC with unsigned development MSI `2.0.24`: the Viewer process set changed on `restart_viewer`, the Service PID/boot generation changed on `restart_service`, and control, Viewer, renderer, and offline-stream telemetry recovered independently
   - `restart_stream` remains the existing Streams-page server control and `capture_diagnostics` is not implemented or advertised as a Viewer command
-  - the Windows Agent runs behind a stable automatic SCM service host; the per-user bootstrap owns the Electron Viewer process tree through a Windows Job Object
-  - Electron opens only the CamStation 2.0 `/live?viewer=1` route, emits renderer-context liveness pulses, and uses finite WebRTC-primary/MSE-fallback playback recovery whose 30-second budget begins at failure detection
-  - the Agent supervises Viewer IPC and renderer liveness independently of server/control health, persists the automatic restart budget, and serializes Viewer restart, Agent restart, and update side effects
-  - the installer registers the automatic Agent service, SCM recovery actions, configured-user logon task, and boot recovery task in one unattended installation flow
-  - initial install binds the Viewer task to the actual shell user in the current local or RDP session, independent of UAC elevation credentials
-  - install and repair create `CamStation Viewer.lnk` on the public desktop; it launches the stable scheduled task and uninstall or rollback removes it
-  - update activation, durable retry budgets, exact artifact verification, ownership, rollback, quarantine, and restart recovery are transactional
-  - `scripts/publish-viewer-release.sh` serializes publishers with `flock`, fsyncs immutable `releases/<version>-<sha>` directories, and atomically replaces stable `current/active` and `previous/active` pointers
+  - the older `internal/vieweragent` source contains durable command execution, Viewer generation restart, service restart reconciliation, and transactional custom updates; it is historical implementation evidence, not the active standard-MSI runtime
+  - general automatic process supervision remains intentionally excluded; explicit audited server lifecycle commands are the narrow recovery boundary
+  - Electron opens only the CamStation 2.0 `/live?viewer=1` route and reports renderer/stream telemetry through the Service lease; local playback recovery and server-command execution remain separate state machines
+  - `scripts/build-viewer-msi.ps1` builds the standard MSI locally, while the current Settings release channel and `/api/viewers/app/*` endpoints still publish the older size/SHA-256-verified `CamStationViewerSetup.exe` format
+  - production rollout still requires Authenticode signing and broader Windows fault/soak coverage; the WinPC proof used a checksum-verified unsigned development MSI and disposable server/stream state
+  - `scripts/publish-viewer-release.sh` serializes legacy EXE publishers with `flock`, fsyncs immutable `releases/<version>-<sha>` directories, and atomically replaces stable `current/active` and `previous/active` pointers
   - legacy `current` files remain readable during one-time migration, and the release loader pins the selected immutable directory through an `os.Root` boundary so concurrent pointer changes cannot escape the release root or invalidate an in-flight download
 
 ## Stream And Recording Policy

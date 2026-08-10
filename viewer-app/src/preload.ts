@@ -6,6 +6,19 @@ export type PreloadIPC = {
 };
 
 export function createPreloadBridge(ipc: PreloadIPC) {
+  const commandHandlers = new Set<(command: unknown) => boolean | Promise<boolean>>();
+  const commandListener = (_event: unknown, command: unknown) => {
+    const operationKey = command && typeof command === "object" ? (command as Record<string, unknown>).operationKey : undefined;
+    void Promise.all([...commandHandlers].map(async (handler) => {
+      try {
+        return await handler(command);
+      } catch {
+        return false;
+      }
+    })).then((results) => {
+      ipc.send("viewer:command-result", { operationKey, succeeded: results.some(Boolean) });
+    });
+  };
   return Object.freeze({
     getSetupState() {
       return ipc.invoke?.("viewer:setup-state");
@@ -25,11 +38,14 @@ export function createPreloadBridge(ipc: PreloadIPC) {
     reportStream(payload: unknown) {
       ipc.send("viewer:stream", payload);
     },
-    onCommand(handler: (command: unknown) => void) {
+    onCommand(handler: (command: unknown) => boolean | Promise<boolean>) {
       if (typeof handler !== "function") return () => undefined;
-      const listener = (_event: unknown, command: unknown) => handler(command);
-      ipc.on("viewer:command", listener);
-      return () => ipc.removeListener("viewer:command", listener);
+      if (commandHandlers.size === 0) ipc.on("viewer:command", commandListener);
+      commandHandlers.add(handler);
+      return () => {
+        commandHandlers.delete(handler);
+        if (commandHandlers.size === 0) ipc.removeListener("viewer:command", commandListener);
+      };
     },
     onFullscreenChange(handler: (fullscreen: boolean) => void) {
       const listener = (_event: unknown, fullscreen: unknown) => {
