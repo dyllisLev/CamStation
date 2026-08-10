@@ -2,13 +2,36 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"camstation/internal/store"
 )
+
+func TestSPAHandlerServesEmbeddedAppForViewerRoute(t *testing.T) {
+	static, err := fs.Sub(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/viewer", nil)
+
+	spaHandler(http.FS(static)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cacheControl)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `<div id="root"></div>`) {
+		t.Fatalf("/viewer did not serve the embedded SPA entry: %q", body)
+	}
+}
 
 func TestGo2RTCProxyAllowsOnlyRegisteredPublicStreamNames(t *testing.T) {
 	cameras := []store.Camera{{
