@@ -430,3 +430,13 @@
   `work/` artifact can pass in the active workspace and fail in a clean clone.
 - Promote reusable maintenance scripts into a reviewed source directory, point tests there, and
   keep raw screenshots, runtime evidence, known-host files, and operator records outside Git.
+
+## 2026-08-10 — Reconcile long-running work before handing off commits
+
+- For a long dirty session, inventory tracked, untracked, ignored, and upstream state before staging.
+  Split completed work by responsibility and inspect every staged name/stat/check result.
+- If upstream gained overlapping work, first secure the local work in logical commits, then fetch and
+  reconcile explicitly. Keep the implementation proven against the real runtime, retain useful
+  upstream tests, and remove duplicate or superseded source and plans.
+- Embedded frontend assets are derived from resolved source. Rebuild them after conflict resolution
+  and confirm the expected content hashes before the final full-suite verification.

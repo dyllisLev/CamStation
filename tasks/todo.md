@@ -1259,14 +1259,36 @@
 - [x] Classify changed files into coherent development tooling, server/canary, Viewer surface,
       Windows Viewer/MSI, GUI observability, and maintenance-history commits.
 - [x] Add only the narrow generated-evidence ignore needed to make the working tree maintainable.
-- [ ] Run the full relevant verification suite against the combined final tree.
-- [ ] Stage and inspect each logical commit, commit it, and verify the resulting commit contents.
-- [ ] Confirm final worktree status and record commit IDs, verification results, preserved evidence,
+- [x] Run the full relevant verification suite against the combined final tree.
+- [x] Stage and inspect each logical commit, commit it, and verify the resulting commit contents.
+- [x] Confirm final worktree status and record commit IDs, verification results, preserved evidence,
       and any remaining upstream action.
 
 ## Acceptance criteria
 
-- [ ] Every source change from the completed work is committed exactly once in a coherent commit.
-- [ ] Generated `work/`, build tools, artifacts, runtime data, and secrets are not committed.
-- [ ] Full verification passes on the exact committed tree.
-- [ ] The final status is clean apart from explicitly documented upstream divergence.
+- [x] Every source change from the completed work is committed exactly once in a coherent commit.
+- [x] Generated `work/`, build tools, artifacts, runtime data, and secrets are not committed.
+- [x] Full verification passes on the exact committed tree.
+- [x] The final status is clean apart from explicitly documented upstream divergence.
+
+## Review
+
+- Created eight scoped local commits: `2a2af55` development tooling, `0116944` migration/cutover,
+  `b00f2b1` Viewer web surface, `c41b0ff` setup-focus fix, `7499e0e` MSI build, `25863aa` GUI
+  capture, `a4d0479` operational documentation, and `1f3ad40` work history.
+- Fetched the two upstream `/viewer` commits and reconciled them in merge `c45ec7f`. The verified
+  saved-layout Viewer remained canonical, stale duplicate mobile components/plans were omitted, and
+  the useful direct `/viewer` embedded-SPA test was retained. The web build reproduced
+  `index-BlQ_LcUs.js` and `index-C8YzIVTY.css`.
+- `./scripts/check-dev.sh` passed after reconciliation: all Go packages, 55 web tests, 35 Viewer
+  tests, web lint/build, Viewer build, and daemon build. `scripts/production/test-policy.sh` and
+  `git diff --check` also passed.
+- The production policy check was corrected to distinguish the allowed Docker-internal
+  `0.0.0.0:18080` listener from forbidden host-production exposure, while asserting the isolated
+  host publication mapping explicitly.
+- The reusable WinPC bootstrap was promoted from local evidence into `scripts/windows`; its source
+  hash matches the operator-run script, so Viewer tests no longer depend on ignored workspace data.
+- `.tools/`, `artifacts/`, `work/`, runtime `data/`, generated binaries, MSI output, screenshots,
+  known-host files, and operational evidence remain uncommitted. `work/` was preserved locally.
+- Final pre-review status was clean and `origin/camstation2-initial...HEAD` was `0 9`; no push was
+  performed.
