@@ -1,4 +1,4 @@
-import type { ConfigDraft } from "./managementPipe.js";
+import type { ConfigDraft, ViewerStatus } from "./managementPipe.js";
 
 export type SetupState = {
   readonly draft: ConfigDraft;
@@ -16,6 +16,37 @@ export function setupErrorMessage(errorCode: string): string {
   case "server_unreachable": return "서버에 연결할 수 없습니다.";
   case "api_incompatible": return "서버 버전이 호환되지 않습니다.";
   case "registration_rejected": return "Viewer 등록이 거부되었습니다.";
+  case "service_unavailable": return "관리 서비스에 연결할 수 없습니다.";
   default: return "설정을 저장할 수 없습니다.";
   }
+}
+
+type SetupStatus = Pick<ViewerStatus, "config" | "autoStart" | "connection">;
+
+export type SetupInteraction = {
+  readonly dirty: boolean;
+  readonly editing: boolean;
+};
+
+export type SetupHydration = {
+  readonly draft?: ConfigDraft;
+  readonly focusServer: boolean;
+  readonly message?: string;
+};
+
+export function setupHydration(
+  status: SetupStatus | null | undefined,
+  interaction: SetupInteraction,
+): SetupHydration {
+  if (interaction.dirty || interaction.editing) return { focusServer: false };
+
+  const draft = {
+    serverUrl: status?.config?.serverUrl ?? "",
+    displayName: status?.config?.displayName ?? "",
+    autoStart: status?.autoStart ?? true,
+  };
+  if (status?.connection === "service_unavailable") {
+    return { draft, focusServer: true, message: setupErrorMessage("service_unavailable") };
+  }
+  return { draft, focusServer: true };
 }

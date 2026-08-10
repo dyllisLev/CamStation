@@ -35,7 +35,6 @@ function createWindow(): BrowserWindow {
   window.once("ready-to-show", () => window?.show());
   window.on("closed", () => app.quit());
   window.webContents.on("did-finish-load", () => {
-    window?.show();
     reportRenderer(rendererStateForEvent("did-finish-load"));
   });
   window.on("enter-full-screen", () => window?.webContents.send("viewer:fullscreen-changed", true));

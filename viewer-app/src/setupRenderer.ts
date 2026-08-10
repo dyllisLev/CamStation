@@ -1,12 +1,61 @@
-type Result = { ok?: boolean; errorCode?: string };
-type Bridge = { getSetupState(): Promise<any>; saveConfiguration(draft: unknown): Promise<Result>; retryConnection(): Promise<any> };
+import type { ViewerStatus } from "./managementPipe.js";
+import { setupErrorMessage, setupHydration } from "./setupModel.js";
+
+type Result = { readonly ok?: boolean; readonly errorCode?: string };
+type SetupStatus = Pick<ViewerStatus, "config" | "autoStart" | "connection">;
+type Bridge = {
+  getSetupState(): Promise<SetupStatus | null>;
+  saveConfiguration(draft: unknown): Promise<Result>;
+  retryConnection(): Promise<SetupStatus | null>;
+};
+
 const bridge = (globalThis as unknown as { camstationViewer: Bridge }).camstationViewer;
 const server = document.querySelector<HTMLInputElement>("#server-url")!;
-const name = document.querySelector<HTMLInputElement>("#display-name")!;
+const displayName = document.querySelector<HTMLInputElement>("#display-name")!;
 const autoStart = document.querySelector<HTMLInputElement>("#auto-start")!;
 const message = document.querySelector<HTMLElement>("#message")!;
-const errorMessage: Record<string, string> = { invalid_input: "입력값을 확인해 주세요.", server_unreachable: "서버에 연결할 수 없습니다.", api_incompatible: "서버 버전이 호환되지 않습니다.", registration_rejected: "Viewer 등록이 거부되었습니다.", service_unavailable: "관리 서비스에 연결할 수 없습니다." };
-async function refresh(): Promise<void> { const status = await bridge.getSetupState(); if (status?.config) { server.value = status.config.serverUrl; name.value = status.config.displayName; } autoStart.checked = status?.autoStart ?? true; if (status?.connection === "service_unavailable") message.textContent = errorMessage.service_unavailable; }
-document.querySelector<HTMLFormElement>("#connection-form")!.addEventListener("submit", async (event) => { event.preventDefault(); const result = await bridge.saveConfiguration({ serverUrl: server.value, displayName: name.value, autoStart: autoStart.checked }); if (!result?.ok) message.textContent = errorMessage[result?.errorCode ?? ""] ?? "설정을 저장할 수 없습니다."; });
-document.querySelector("#retry")!.addEventListener("click", () => void bridge.retryConnection().then(refresh));
+const setupInputs = [server, displayName, autoStart];
+let dirty = false;
+
+for (const input of setupInputs) {
+  input.addEventListener(input === autoStart ? "change" : "input", () => {
+    dirty = true;
+  });
+}
+
+function applyStatus(status: SetupStatus | null): void {
+  const editing = setupInputs.some((input) => document.activeElement === input);
+  const hydration = setupHydration(status, { dirty, editing });
+  if (hydration.draft) {
+    server.value = hydration.draft.serverUrl;
+    displayName.value = hydration.draft.displayName;
+    autoStart.checked = hydration.draft.autoStart;
+  }
+  message.textContent = hydration.message ?? "서버 연결 정보를 입력해 주세요.";
+  if (hydration.focusServer) server.focus({ preventScroll: true });
+}
+
+async function refresh(): Promise<void> {
+  applyStatus(await bridge.getSetupState());
+}
+
+document.querySelector<HTMLFormElement>("#connection-form")!.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void bridge.saveConfiguration({
+    serverUrl: server.value,
+    displayName: displayName.value,
+    autoStart: autoStart.checked,
+  }).then((result) => {
+    if (!result?.ok) message.textContent = setupErrorMessage(result?.errorCode ?? "");
+  }).catch(() => {
+    message.textContent = setupErrorMessage("service_unavailable");
+  });
+});
+
+document.querySelector<HTMLButtonElement>("#retry")!.addEventListener("click", () => {
+  void bridge.retryConnection().then(applyStatus).catch(() => {
+    message.textContent = setupErrorMessage("service_unavailable");
+  });
+});
+
 void refresh();

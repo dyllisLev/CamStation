@@ -38,9 +38,10 @@ test("BrowserWindow uses the hardened renderer boundary", () => {
   });
 });
 
-test("Viewer reveals its window once a document has finished loading", async () => {
+test("Viewer shows once without taking focus again after the document loads", async () => {
   const source = await readFile(path.resolve(import.meta.dirname, "../src/main.ts"), "utf8");
-  assert.match(source, /webContents\.on\("did-finish-load", \(\) => \{\s*window\?\.show\(\);/u);
+  assert.match(source, /window\.once\("ready-to-show", \(\) => window\?\.show\(\)\);/u);
+  assert.doesNotMatch(source, /webContents\.on\("did-finish-load", \(\) => \{\s*window\?\.show\(\);/u);
 });
 
 test("Viewer owns fullscreen through native BrowserWindow IPC", async () => {
