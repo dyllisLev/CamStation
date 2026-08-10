@@ -11,10 +11,12 @@ import { SettingsPage } from "../pages/SettingsPage";
 import { StreamsPage } from "../pages/StreamsPage";
 import { SystemPage } from "../pages/SystemPage";
 import { ViewersPage } from "../pages/ViewersPage";
+import { ViewerPage } from "../pages/ViewerPage";
 
 export function App() {
   return (
     <Routes>
+      <Route path="viewer" element={<ViewerPage />} />
       <Route element={<ConsoleLayout />}>
         <Route index element={<ControlRoomPage />} />
         <Route path="live" element={<LivePage />} />

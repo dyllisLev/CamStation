@@ -59,11 +59,12 @@ type AttemptOptions = {
 export function useWebRtcMseStream(
   streamNames: string | readonly string[],
   resubscribeGeneration = 0,
+  preferredTransport: PlaybackTransport = "webrtc",
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const input = typeof streamNames === "string" ? [streamNames] : streamNames;
   const candidateKey = input.filter(Boolean).join("\u001f");
-  const [playback, setPlayback] = useState<PlaybackState>(() => initialPlayback(input[0] ?? ""));
+  const [playback, setPlayback] = useState<PlaybackState>(() => initialPlayback(input[0] ?? "", preferredTransport));
 
   useEffect(() => {
     const candidates = candidateKey ? candidateKey.split("\u001f") : [];
@@ -88,7 +89,7 @@ export function useWebRtcMseStream(
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
     let activeAttempt: AttemptOptions = {
-      transport: "webrtc",
+      transport: preferredTransport,
       streamName: candidates[0],
       attempt: 1,
       phase: "connecting",
@@ -177,7 +178,7 @@ export function useWebRtcMseStream(
         cooldownTimer = setTimeout(() => {
           cooldownTimer = null;
           beginAttempt({
-            transport: "webrtc",
+            transport: preferredTransport,
             streamName: candidates[0],
             attempt: activeAttempt.attempt + 1,
             phase: "retrying",
@@ -194,7 +195,7 @@ export function useWebRtcMseStream(
         }
         counts.resubscribe++;
         beginAttempt({
-          transport: "webrtc",
+          transport: preferredTransport,
           streamName: candidates[0],
           attempt: step.attempt,
           phase: "recovering",
@@ -468,7 +469,7 @@ export function useWebRtcMseStream(
       video.removeEventListener("timeupdate", handleTimeUpdate);
       teardownAttempt();
     };
-  }, [candidateKey, resubscribeGeneration]);
+  }, [candidateKey, preferredTransport, resubscribeGeneration]);
 
   return {
     videoRef,
@@ -483,9 +484,9 @@ export function useWebRtcMseStream(
   };
 }
 
-function initialPlayback(streamName: string): PlaybackState {
+function initialPlayback(streamName: string, transport: PlaybackTransport): PlaybackState {
   return {
-    transport: "webrtc",
+    transport,
     phase: "connecting",
     activeStreamName: streamName,
     usingFallback: false,
