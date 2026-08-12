@@ -1,6 +1,6 @@
 # CamStation 2.0 Docker 카나리 운영 문서
 
-최종 확인: 2026-08-12 13:14 KST
+최종 확인: 2026-08-12 13:40 KST
 
 > 화면 캡처와 런타임 검증 원본은 민감한 운영 증거이므로 Git에 넣지 않고, 유지보수
 > 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/`와
@@ -29,9 +29,9 @@
 |---|---|
 | 서버 | `cctv` / 관리 `10.0.0.26`, 모니터링 `192.168.0.160` |
 | 컨테이너 | `camstation2-canary` — running, healthy, restart 0 |
-| 이미지 | `camstation:2.0.0-rc.20260812.11-canary` |
-| 이미지 ID | `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a` |
-| 소스 revision | `dd619b5990b4f05a2b6b56a969acdffd39c97f40` |
+| 이미지 | `camstation:2.0.0-rc.20260812.12-canary` |
+| 이미지 ID | `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799` |
+| 소스 revision | `723dc3d771bd3ad42d300cd4d07e98c99369471f` |
 | 공개 포트 | HTTP `10.0.0.26:18081/tcp`와 `192.168.0.160:18081/tcp`; WebRTC `192.168.0.160:18555/tcp+udp` |
 | 내부 HTTP | `18080/tcp` |
 | go2rtc | API `1984`와 RTSP `8554`는 내부 전용; WebRTC `8555`만 host `18555/tcp+udp`에 매핑 |
@@ -83,6 +83,13 @@ WIN11-DELL은 2.0.21 clean-host 시험을 마친 뒤, 원격 제어 수락용 2.
 0.712~1.102초에 재생되는 것을 확인했다. `CamStationViewerService`와 기존 interactive
 session, Viewer ID·표시명·자동 시작 설정은 유지했고, GUI 증거 수집용 일회성 작업과
 worker는 모두 정리했다. 개발 소스·도구와 해시가 일치하는 2.0.24 원본 MSI도 그대로 보존했다.
+
+최종 `.12` 반영에서도 MSI package/runtime 입력은 2.0.24 수락 revision
+`1d87081e268383f85ae676ffe6a77203bf716ccc`와 비교해 변경 0개였다. 따라서 동일한 클라이언트를
+재빌드·재업로드하지 않았고, 운영 metadata와 전체 HTTP 다운로드가 위 124,436,480-byte
+SHA-256에 다시 일치함을 확인했다. 13:31 KST에 `.12`를 대상으로 Viewer를 새로 실행한
+세 session은 WebRTC attempt 1에서 3.119~4.967초에 재생됐고 retry·MSE·stream fallback은
+모두 0이었다.
 
 증거·결론·수동 수락 경로를 한 문서에서 인계하려면
 [Viewer 설정 다운로드 보고서](2026-08-10_viewer-settings-download-report.md)를 사용한다.
@@ -288,10 +295,14 @@ docker compose up -d --no-deps --force-recreate camstation
 docker compose ps
 ```
 
-문제가 생기면 `.env`와 Compose를 root 전용
+현재 `.12` 이미지에서 직전 `.11`로 복귀할 때는 root 전용
+`.env.pre-final-2x-20260812-042406.bak`을 사용한다. 직전 이미지는
+`camstation:2.0.0-rc.20260812.11-canary`, image ID
+`sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`로 보존돼 있다.
+별도로 192 대역 네트워크 정의 전체를 이전으로 돌려야 하는 문제가 생기면 `.env`와 Compose를 root 전용
 `.env.pre-monitor-192-20260812-125110.bak`,
 `compose.yaml.pre-monitor-192-20260812-125110.bak`으로 되돌린 뒤 같은 `up` 명령을 실행한다.
-이 네트워크 설정 복귀는 현재 `.11-canary` 이미지를 그대로 사용한다. 이미지 자체를 이전
+이 네트워크 설정 복귀는 `.11-canary` 이미지를 사용한다. 이미지 자체를 더 이전
 WebRTC 미지원 버전으로 복귀해야 할 때의 이미지는
 `camstation:2.0.0-rc.20260810.10-canary`, image ID
 `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`다.
@@ -520,6 +531,36 @@ docker compose up -d
 - finding: 모니터링 PC가 접근 가능한 192 대역에 signaling HTTP와 advertised WebRTC media
   경로가 함께 있어야 한다. 최종 경로는 첫 WebRTC attempt에서 재생되며 MSE transport 전환과
   실제 `live`→`focus` stream fallback을 각각 별도 상태로 유지한다.
+
+### E-009 — 최종 2.0 소스·이미지·Viewer 조합 게시
+
+- observed_at: 2026-08-12 13:24-13:40 KST
+- source_type: pushed Git revision, clean immutable image build, Docker/runtime inspection,
+  package-input diff, complete MSI download, Viewer structured telemetry, server packet capture,
+  Windows interactive GUI capture, recorder growth, systemd inspection
+- source_revision: `723dc3d771bd3ad42d300cd4d07e98c99369471f`
+- image: `camstation:2.0.0-rc.20260812.12-canary`,
+  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`
+- compose: 로컬과 운영 `compose.yaml` SHA-256
+  `07952df8045df2c6527e07d33e2145c3f5a92a0e5bc53129943702f0d6ef7ba5` 일치
+- viewer_release: 2.0.24 수락 revision과 현재 source 사이 MSI package/runtime 입력 변경
+  0개; 재빌드·재게시 없이 운영 metadata와 124,436,480-byte 전체 다운로드의
+  SHA-256 `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160` 일치
+- playback_result: 세 카메라 모두 WebRTC attempt 1에서 3.119~4.967초에 재생,
+  failed attempt/retry/MSE/stream fallback 0; server `192.168.0.160:18555`에서 test PC
+  `192.168.0.178`로 가는 실제 UDP media packet 확인
+- gui_result: session 1의 정확한 `CamStation 2.0` 창에 영상과 녹색 카메라 상태,
+  UIA control 17개를 확인; PNG
+  `f7b41ed84d07f9fbd26d6b1906a88e595186aa391f8e1df984a5299a71d03495`, UIA
+  `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`, complete JSON
+  `44884abc707f605fe2a3153df8aa8896dd35d06b1cb0668e763e6c8730c4293b`; harness task/worker 0
+- continuity: container healthy/restart 0, camera 3/3 streaming, recorder 3/3 running,
+  세 recursive active recording group 전부 증가, 정확한 state/media mount·보안·resource 경계 유지,
+  legacy 1.0 five-unit PID/restart baseline 불변
+- rollback: `.11-canary` image와 root 전용 `.env.pre-final-2x-20260812-042406.bak` 보존
+- finding: 서버 소스·Docker 이미지·운영 포인터·기존 Viewer 2.0.24의 최종 조합이
+  192 대역에서 첫 WebRTC attempt로 실제 영상을 재생하며, 불필요한 동일 MSI 재게시를
+  하지 않고도 운영 다운로드 무결성을 유지한다.
 
 ### F-001 — 전용 `/viewer`가 필요함
 

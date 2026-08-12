@@ -1,5 +1,22 @@
 # Lessons
 
+## 2026-08-12 — 최종 반영은 실제 package·runtime 경계로 판정한다
+
+- Viewer 관련 파일이 바뀌었다는 이유만으로 MSI 버전을 올리지 않는다. 수락한 게시 revision과
+  현재 HEAD 사이에서 설치형 서비스, Electron runtime/assets, package lock, WiX 입력,
+  MSI build/manifest script만 명시적으로 비교한다. 이 입력이 0개이면 검증 도구·문서 변경 때문에
+  동일한 artifact를 재빌드·재업로드하지 말고, 운영 metadata와 전체 다운로드 해시를 다시
+  검증한다.
+- Windows Viewer의 `Agent/Control=online`과 `Viewer=closed/Renderer=not_ready`는 서버 연결 장애로
+  단정할 수 없다. 특히 `autoStart=false`에서는 서비스만 재연결되고 대화형 Viewer 창은 닫혀 있는
+  것이 정상이다. 저장 주소, source-bound health, 실제 process, renderer telemetry를 나눠서 확인한다.
+- Active recording 연속성 검사는 temp root 바로 아래에 파일이 있다고 가정하지 않고 실제
+  nested stream 디렉터리를 recursive하게 집계한다. segment rollover 중에는 inode·파일명이 바뀐 수
+  있으므로 각 stream group의 총 byte 증가를 보고, 검사기 가정 실패와 녹화 실패를 구분한다.
+- 여러 shell/SSH 경계를 건너는 복잡한 regex·JSON 검증은 인라인 quoting에 의존하지 말고
+  heredoc parser나 구조화된 inspect JSON을 사용한다. assertion이 실패하면 즉시 mutation을 멈추고
+  출력 필드의 실제 계약을 최소 요약으로 확인한 뒤 검사기를 교정한다.
+
 ## 2026-08-12 — 노출된 media transport와 플레이어 기본 경로를 일치시킨다
 
 - HTTP-only Docker 배포에서 go2rtc WebRTC candidate가 bridge 내부 주소뿐이면 WebRTC는

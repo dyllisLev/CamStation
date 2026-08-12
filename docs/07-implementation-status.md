@@ -10,9 +10,9 @@ This document records the current implementation state so the next session can c
 - Active branch used for this work: `camstation2-initial`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 source revision: `dd619b5990b4f05a2b6b56a969acdffd39c97f40`
-- Current deployed image: `camstation:2.0.0-rc.20260812.11-canary`, image ID
-  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`
+- Current deployed 2.0 source revision: `723dc3d771bd3ad42d300cd4d07e98c99369471f`
+- Current deployed image: `camstation:2.0.0-rc.20260812.12-canary`, image ID
+  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
 - Main monitoring page: `http://192.168.0.160:18081/live`
@@ -21,6 +21,11 @@ This document records the current implementation state so the next session can c
 
 ### 2026-08-12 Docker WebRTC first-attempt playback and diagnostics
 
+- The final 2.0 publication was clean-built from pushed revision
+  `723dc3d771bd3ad42d300cd4d07e98c99369471f` as immutable
+  `camstation:2.0.0-rc.20260812.12-canary`, image ID
+  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`.
+  Local and production Compose SHA-256 values match, and only the canary was recreated.
 - The canary publishes HTTP `18081/tcp` on both management `10.0.0.26` and monitoring
   `192.168.0.160`. go2rtc WebRTC `8555` is published only as
   `192.168.0.160:18555/tcp+udp` and advertises only candidate `192.168.0.160:18555`; the 10 subnet
@@ -37,22 +42,25 @@ This document records the current implementation state so the next session can c
   uses `debug`. Input size, fields, registered streams, event rate, and string lengths are bounded,
   and raw URLs, SDP, ICE candidates, and credentials are not accepted.
 - The initial isolated production browser acceptance on the 10 subnet played all three cameras on
-  WebRTC attempt 1 in 2.917–4.352 seconds. The final installed Viewer 2.0.24 acceptance forced
-  WIN11-DELL source `192.168.0.178` to server `192.168.0.160` and played all three on attempt 1 in
-  0.712–1.102 seconds. The final three sessions emitted no retry, MSE fallback, or stream fallback;
-  their 18 structured events contained zero forbidden URL/SDP/ICE/credential patterns. A server-side
-  `eth1` capture also observed three actual UDP media flows from the test PC to port 18555.
+  WebRTC attempt 1 in 2.917–4.352 seconds. The first 192-LAN acceptance on `.11` played all three in
+  0.712–1.102 seconds. A fresh installed Viewer 2.0.24 launch against the final `.12` image played
+  all three on attempt 1 in 3.119–4.967 seconds. The final three sessions emitted no retry, MSE
+  fallback, or stream fallback; their 18 structured events contained zero failed attempts. A
+  server-side `eth1` capture observed actual UDP media from `192.168.0.160:18555` to the test PC's
+  `192.168.0.178` interface.
 - The real interactive Viewer window was captured in session 1 and visually/UIA-verified with three
-  camera controls, rendered video, and no reconnect/fallback overlay. The Viewer retained its ID,
-  display name, autostart value, Service, and interactive session while its stored server URL changed
-  to the 192 address. The GUI harness left zero scheduled tasks and workers; its default worker-path
-  initialization and configure-only maintenance path are regression-tested.
+  camera controls, rendered video, and no reconnect/fallback overlay. The final `.12` PNG SHA-256 is
+  `f7b41ed84d07f9fbd26d6b1906a88e595186aa391f8e1df984a5299a71d03495` and the bounded UIA
+  SHA-256 is `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`.
+  The Viewer retained its ID, display name, `autoStart=false`, Service, and interactive session while
+  using the saved 192 address. The GUI harness left zero scheduled tasks and workers; its default
+  worker-path initialization and configure-only maintenance path are regression-tested.
 - The container remains healthy with restart 0, three streaming cameras and three running recorders.
-  All three active recording files grew, all five legacy 1.0 service PIDs/restart counts remained
-  unchanged, and the mount/security/resource boundaries were preserved. Immediate network rollback
-  retains the `.11-canary` image and uses root-only `.env.pre-monitor-192-20260812-125110.bak` and
-  `compose.yaml.pre-monitor-192-20260812-125110.bak`; the older `.10-canary` image remains the
-  application-image rollback.
+  All three recursive active recording groups grew, all five legacy 1.0 service PIDs/restart counts
+  remained unchanged, and the exact mount/security/resource boundaries were preserved. Immediate
+  application rollback retains `.11-canary`, image ID
+  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`, with root-only
+  `.env.pre-final-2x-20260812-042406.bak`. The earlier network rollback pair remains available.
 
 ### 2026-08-10 Viewer remote control Docker deployment
 
@@ -149,8 +157,8 @@ This document records the current implementation state so the next session can c
 - A hardened all-in-one 2.0 image runs as `camstation2-canary` on dual-homed production host
   `10.0.0.26` / `192.168.0.160`, publishing HTTP `18081/tcp` on both addresses and WebRTC
   `18555/tcp+udp` only on the 192 monitoring LAN. The current immutable
-  image is `camstation:2.0.0-rc.20260812.11-canary` with image ID
-  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`.
+  image is `camstation:2.0.0-rc.20260812.12-canary` with image ID
+  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`.
 - The canary DB was created only from the active 1.0 go2rtc YAML through a strict `집-` allowlist.
   It contains `집-마당`, `집-창고1`, and `집-창고2`; every fire-station camera and `염소장`
   are absent. The original YAML hash and all five legacy service PID/restart baselines remained

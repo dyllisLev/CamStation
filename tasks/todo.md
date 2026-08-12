@@ -2054,3 +2054,65 @@
 - 지연 재점검에서도 운영 container는 healthy/restart 0이고 정확한 dual HTTP·192 WebRTC
   publish/candidate와 보안 한계를 유지했다. 테스트 PC도 source-bound 192 health 성공,
   Viewer Service running, Viewer process 4, Explorer session 1, capture/config task 0이었다.
+
+---
+
+# 2026-08-12 2.0 소스·클라이언트·운영 이미지 최종 반영
+
+## 범위와 계획
+
+- [x] 로컬 branch/commit/worktree와 GitHub 인증·remote branch를 확인하고 현재 완료 커밋을 push한다.
+- [x] 게시 중인 Viewer 2.0.24 기준과 현재 HEAD 사이에서 MSI에 들어가는 runtime/package 입력만
+      비교해 새 클라이언트 artifact 필요 여부를 증거로 판정한다.
+- [x] Viewer package 입력이 바뀌었으면 승인된 WIN11-DELL 빌드 경로로 새 MSI를 만들고 metadata와
+      artifact를 원자적으로 게시한다. 바뀌지 않았으면 기존 2.0.24를 재빌드·재업로드하지 않고 그
+      이유와 기존 artifact 무결성을 기록한다.
+- [x] pushed HEAD에서 새 immutable 2.0 Docker image를 clean build하고 이미지 ID·revision·tag를
+      검증한 뒤 운영 서버에 적재한다.
+- [x] 카나리만 새 이미지로 재생성하고 dual HTTP, 192 WebRTC candidate/TCP/UDP, health, security,
+      storage, recorder, recording growth, rollback과 기존 1.0 연속성을 검증한다.
+- [x] WIN11-DELL의 저장된 192 서버 주소·source-bound health·실제 첫 WebRTC 재생 로그와 프로젝트
+      GUI evidence loop를 다시 검증하고 임시 task/worker를 모두 정리한다.
+- [x] 운영 문서·implementation status·lessons·Review를 최종 상태로 갱신하고 회귀 검사 후 커밋·push한다.
+
+## 합격 기준
+
+- [x] GitHub `camstation2-initial`이 최종 로컬 HEAD와 일치하고 worktree가 깨끗하다.
+- [x] 운영 2.0 container label revision이 최종 application source commit을 가리키며 immutable image
+      ID와 rollback pointer가 보존된다.
+- [x] 모니터링 PC는 `http://192.168.0.160:18081`을 유지하고 실제 media는
+      `192.168.0.160:18555/tcp+udp`의 단일 advertised candidate로 첫 attempt에서 재생된다.
+- [x] 새 MSI 게시 여부가 package input diff와 일치하고, 현재 settings metadata/download가 게시
+      artifact의 크기·SHA-256과 일치한다.
+- [x] container healthy/restart 0, camera 3/3, recorder 3/3, active recording growth, 보안·mount
+      경계와 기존 1.0 핵심 서비스가 유지된다.
+
+## Review
+
+- 완료 커밋 `dd619b5`, `48adfc1`, `723dc3d`를 GitHub `camstation2-initial`에 먼저
+  push했다. 게시 중인 Viewer 2.0.24 수락 revision `1d87081`과 `723dc3d` 사이의
+  실제 MSI service/Electron/WiX/package/build 입력 diff는 0개였다. 따라서 내용이 같은
+  MSI를 재빌드·재업로드하지 않았다.
+- pushed revision `723dc3d771bd3ad42d300cd4d07e98c99369471f`의 clean worktree에서
+  `camstation:2.0.0-rc.20260812.12-canary`, image ID
+  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`를 빌드해
+  카나리만 교체했다. local/remote Compose SHA-256은
+  `07952df8045df2c6527e07d33e2145c3f5a92a0e5bc53129943702f0d6ef7ba5`로 일치한다.
+- 운영은 healthy/restart 0, 정확한 dual HTTP·192 WebRTC publish/candidate, non-root/read-only/
+  no-new-privileges/cap-drop/resource 경계와 전용 state/media mount를 유지했다. camera 3/3,
+  recorder 3/3이며 recursive active recording group 세 개가 5초 샘플에서 모두 증가했다.
+  기존 1.0 핵심 서비스 5개의 PID·restart 0도 기준선과 같다.
+- WIN11-DELL은 저장 주소 `http://192.168.0.160:18081`, `autoStart=false`, Service·session 1을
+  유지했다. Viewer를 실제 실행한 세 session은 WebRTC attempt 1에서
+  3.119~4.967초에 재생됐고 retry·MSE·stream fallback은 모두 0이었다. 서버에서
+  `192.168.0.160:18555`→`192.168.0.178` UDP media를 관측했다.
+- 실제 `CamStation 2.0` 창에 세 카메라 영상·녹색 상태가 보였다. 최종 PNG SHA-256은
+  `f7b41ed84d07f9fbd26d6b1906a88e595186aa391f8e1df984a5299a71d03495`, UIA 17개 기록의
+  SHA-256은 `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`이며
+  capture task/worker는 0으로 정리됐다.
+- 운영 Viewer metadata와 전체 다운로드는 기존 2.0.24, 124,436,480 bytes,
+  SHA-256 `5e4a7b59bc457fb9c3dbace25db58009c61e2b6258957f123d7cb4ff30683160`을 유지했다.
+  직전 `.11-canary` image와 root 전용 `.env.pre-final-2x-20260812-042406.bak`을 rollback으로 보존했다.
+- `./scripts/check-dev.sh`의 Go 전 패키지, Web 64 tests·lint·build, Viewer 38 tests·build,
+  daemon build가 통과했다. production policy, `.12` exact Compose JSON render, 변경 문서
+  상대 링크 10개, changed-diff secret pattern과 `git diff --check`도 통과했다.
