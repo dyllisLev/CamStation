@@ -7,7 +7,7 @@ param(
   [ValidateSet("LaunchAndCapture", "Capture")]
   [string]$Operation = "LaunchAndCapture",
 
-  [string]$WorkerScript = (Join-Path $PSScriptRoot "Capture-CamStationViewerWindow.ps1"),
+  [string]$WorkerScript = "",
 
   [string]$EvidenceRoot = "C:\CamStationDev\gui-evidence",
 
@@ -20,6 +20,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($WorkerScript)) {
+  $WorkerScript = Join-Path $PSScriptRoot "Capture-CamStationViewerWindow.ps1"
+}
 
 $TASK_CREATE = 2
 $TASK_ACTION_EXEC = 0

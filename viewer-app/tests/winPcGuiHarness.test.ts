@@ -8,6 +8,9 @@ const workerURL = new URL("../../scripts/windows/Capture-CamStationViewerWindow.
 test("Windows GUI capture uses a bounded one-shot interactive-token task", async () => {
   const source = await readFile(launcherURL, "utf8");
 
+  assert.doesNotMatch(source, /\[string\]\$WorkerScript\s*=\s*\(Join-Path\s+\$PSScriptRoot/u);
+  assert.match(source, /\[string\]\$WorkerScript\s*=\s*""/u);
+  assert.match(source, /IsNullOrWhiteSpace\(\$WorkerScript\)[\s\S]+Join-Path\s+\$PSScriptRoot/u);
   assert.match(source, /\$TASK_LOGON_INTERACTIVE_TOKEN\s*=\s*3/u);
   assert.match(source, /\$TASK_RUNLEVEL_LUA\s*=\s*0/u);
   assert.match(source, /ExecutionTimeLimit\s*=\s*"PT2M"/u);

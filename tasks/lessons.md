@@ -13,6 +13,11 @@
   attempt, transport, error category, elapsed time을 구조화해 보존하고 Viewer 종료 뒤에도 마지막
   bounded telemetry를 유지해야 사후 진단이 가능하다. 그 전에는 DOM/video 타임라인, 배포 포트,
   ICE candidate, public stream consumer를 같은 시각축으로 대조한다.
+- PowerShell script의 `param(...)` 기본값에서 `$PSScriptRoot`에 의존하지 않는다. 원격 호출처럼
+  parameter binding 시점에 값이 비어 있을 수 있으므로 기본값은 빈 문자열로 받고 param block
+  이후에 script-relative 경로를 해석한다. 정적 회귀 테스트와 실제 기본 호출을 모두 통과해야 한다.
+- 파일 동기화 검증용 SHA-256은 눈으로 옮겨 적지 않는다. 실제 hash 명령의 출력을 변수로 받아
+  staging·교체 검증에 그대로 사용하고, 불일치 시 대상 교체 전에 멈춘 사실을 확인한다.
 
 ## 2026-08-10 — 최신 Docker 코드와 Viewer 설치파일 포인터를 함께 검증한다
 

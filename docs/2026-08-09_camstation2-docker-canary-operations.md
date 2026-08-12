@@ -1,10 +1,11 @@
 # CamStation 2.0 Docker 카나리 운영 문서
 
-최종 확인: 2026-08-10 16:47 KST
+최종 확인: 2026-08-12 11:54 KST
 
 > 화면 캡처와 런타임 검증 원본은 민감한 운영 증거이므로 Git에 넣지 않고, 유지보수
 > 워크스페이스의 무시된 `work/20260809-camstation2-docker-canary/`와
-> `work/20260810-viewer-download/`, `work/20260810-viewer-registry/` 아래에만 보존한다.
+> `work/20260810-viewer-download/`, `work/20260810-viewer-registry/`,
+> `work/20260812-docker-webrtc/` 아래에만 보존한다.
 
 ## 바로 접속
 
@@ -27,12 +28,14 @@
 |---|---|
 | 서버 | `cctv` / `10.0.0.26` |
 | 컨테이너 | `camstation2-canary` — running, healthy, restart 0 |
-| 이미지 | `camstation:2.0.0-rc.20260810.10-canary` |
-| 이미지 ID | `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9` |
-| 소스 revision | `f9f43b7bafa6157b8d3fd32562f378f060689c26` |
-| 공개 포트 | `10.0.0.26:18081/tcp` 한 개만 공개 |
+| 이미지 | `camstation:2.0.0-rc.20260812.11-canary` |
+| 이미지 ID | `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a` |
+| 소스 revision | `dd619b5990b4f05a2b6b56a969acdffd39c97f40` |
+| 공개 포트 | HTTP `10.0.0.26:18081/tcp`, WebRTC `10.0.0.26:18555/tcp+udp` |
 | 내부 HTTP | `18080/tcp` |
-| go2rtc | API `1984`, RTSP `8554`, WebRTC `8555` 모두 컨테이너 내부 전용 |
+| go2rtc | API `1984`와 RTSP `8554`는 내부 전용; WebRTC `8555`만 host `18555/tcp+udp`에 매핑 |
+| WebRTC candidate | `10.0.0.26:18555` 한 개만 광고; Docker bridge 주소는 광고하지 않음 |
+| 재생 로그 | 현재 canary `debug`; 운영 기본값 `info`, `off/error/warn/info/debug` 지원 |
 | 재시작 정책 | `no` — 시험 중 서버 재부팅 후 수동 시작 |
 | PID 정책 | `pids_limit: 1024` — 최종 8대 운용과 일시 재연결 여유를 반영 |
 | 권한 | UID/GID `10001:10001`, read-only root, capabilities 없음 |
@@ -74,10 +77,10 @@ metadata와 artifact를 다시 검증했다. 2.0.21 당시 증거는 Git에서 �
 `work/20260810-viewer-download/`에 보존하며, 현재 게시 기준은 이 문서의 2.0.24 값이다.
 
 WIN11-DELL은 2.0.21 clean-host 시험을 마친 뒤, 원격 제어 수락용 2.0.24를 설치했다.
-현재 2.0.24 제품과 자동 시작 `CamStationViewerService`는 유지하되 Viewer 앱은 닫혀 있고
-서버 설정은 비운 상태다. 따라서 서버에 남은 Viewer 행은 현재 `오프라인`이며, 다시 연결해
-명령을 시험하려면 운영자가 승인한 canary 주소를 Viewer에 설정해야 한다. 개발 소스·도구와
-해시가 일치하는 2.0.24 원본 MSI는 그대로 보존했다.
+2026-08-12 11:41~11:50 KST에는 저장된 canary 주소로 실제 Viewer를 실행해 세 카메라가
+모두 첫 WebRTC attempt에서 재생되는 것을 확인했다. `CamStationViewerService`와 기존
+interactive session은 유지했고, GUI 증거 수집용 일회성 작업과 worker는 모두 정리했다.
+개발 소스·도구와 해시가 일치하는 2.0.24 원본 MSI도 그대로 보존했다.
 
 증거·결론·수동 수락 경로를 한 문서에서 인계하려면
 [Viewer 설정 다운로드 보고서](2026-08-10_viewer-settings-download-report.md)를 사용한다.
@@ -126,8 +129,9 @@ Agent/Viewer/Renderer 상태가 과거 값으로 남아 있더라도 Agent 하�
 
 2026-08-10 WinPC 수락에서는 다섯 명령 모두 실제로 `succeeded`까지 확인했다. 이번 Docker
 배포 후에는 동일한 다섯 옵션과 명령 이력·상태 표시를 실제 `/viewers`에서 다시 확인했다.
-다만 정리된 WinPC가 현재 서버 미설정 상태이므로 실행 버튼이 비활성인 것이 정상이며, 배포
-검증을 위해 오프라인 Viewer에 새 명령을 억지로 만들지 않았다.
+당시 정리된 WinPC가 서버 미설정 상태였으므로 실행 버튼이 비활성인 것을 확인했고, 배포
+검증을 위해 오프라인 Viewer에 새 명령을 억지로 만들지 않았다. 이후 2026-08-12 WebRTC
+수락에서는 canary에 다시 연결했지만 원격 제어 명령은 실행하지 않았다.
 
 2.0 카나리에 들어 있는 카메라는 다음 세 대뿐이다.
 
@@ -146,6 +150,9 @@ Agent/Viewer/Renderer 상태가 과거 값으로 남아 있더라도 Agent 하�
 | `/viewer` 직접 요청과 새로고침 | HTTP 200, 경로 유지 |
 | iPhone 크기 `393×852` | 문서 overflow 없음, 관리 UI 없음 |
 | 그리드 영상 | 3/3 MSE, `readyState=4`, 재생시간 지속 증가 |
+| `/live` WebRTC | 3/3 첫 attempt 성공, 2.917~4.352초, retry/MSE/stream fallback 0 |
+| Windows Viewer WebRTC | 3/3 첫 attempt 성공, 3.209~4.210초, retry/MSE/stream fallback 0 |
+| 재생 진단 로그 | 브라우저·Windows 구조화 event 36건, 금지 URL/SDP/ICE/자격증명 패턴 0 |
 | 집중 보기 | 타일 선택 후 단일 1280×720 MSE 재생, 닫기 후 3타일 복귀 |
 | 3페이지 동시 부하 | 약 160초 동안 9/9 MSE가 `playing`, 각 live stream의 Viewer가 정확히 3 |
 | 연결 회수 | 시험 페이지 종료 직후 세 live stream 모두 Viewer/consumer 0으로 회수 |
@@ -278,7 +285,12 @@ docker compose ps
 ```
 
 문제가 생기면 `.env`의 이미지 태그를 직전 값으로 되돌린 뒤 같은 `up` 명령을 실행한다.
-현재 Viewer 원격 제어 배포의 직전 이미지는
+현재 WebRTC 배포의 즉시 복귀 이미지는
+`camstation:2.0.0-rc.20260810.10-canary`, image ID
+`sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`다.
+root 전용 포인터 백업은 `.env.pre-webrtc-20260812-113427.bak`, Compose 백업은
+`compose.yaml.pre-webrtc-20260812-113427.bak`이다. 그 이전 Viewer 원격 제어 배포의
+직전 이미지는
 `camstation:2.0.0-rc.20260810.9-canary`이고, root 전용 이미지 포인터 백업은 배포
 디렉터리의 `.env.pre-viewer-controls-20260810-074056.bak`이다. Viewer 레지스트리 변경의
 직전 이미지는 `camstation:2.0.0-rc.20260810.8-canary`이고 당시 백업은
@@ -323,13 +335,18 @@ docker compose up -d
 
 ### 화면은 열리지만 영상이 검음
 
-1. 최초 연결을 10초까지 기다린 뒤 한 번 새로고침한다.
-2. `/api/cameras`에서 세 대가 모두 `streaming`인지 확인한다.
-3. `/api/recorders/status`와 마스킹된 로그를 확인한다.
-4. `docker inspect`에서 PID 상한이 1024인지, `docker stats`에서 PID가 상한에 근접하지
+1. `/live`와 설치형 Windows Viewer는 첫 WebRTC attempt가 5초 안에 재생돼야 한다. 화면에
+   `영상 재연결 중`이 나오거나 MSE로 넘어가면 정상 초기화로 간주하지 말고 실패로 조사한다.
+2. host의 `10.0.0.26:18555/tcp+udp` publish와 생성 설정의 candidate
+   `10.0.0.26:18555`가 일치하는지 확인한다. API `1984`와 RTSP `8554`는 공개하지 않는다.
+3. `/api/cameras`에서 세 대가 모두 `streaming`인지 확인한다.
+4. `/api/recorders/status`와 `playback_event` 구조화 로그를 확인한다. 현재 debug는 signaling,
+   첫 track과 첫 media까지 남기며, 평시에는 `.env`의 `CAMSTATION_PLAYBACK_LOG_LEVEL=info`로
+   attempt 시작·성공·실패만 보존할 수 있다.
+5. `docker inspect`에서 PID 상한이 1024인지, `docker stats`에서 PID가 상한에 근접하지
    않는지 확인한다. 앱 로그가 조용해도 task 거부가 있으면 PID 고갈로 분류한다.
-5. RTSP, go2rtc API 또는 WebRTC 포트를 추가로 공개하지 않는다. `/viewer`는 HTTP의
-   same-origin `/player/api/ws`를 통한 MSE가 정상 경로다.
+6. 전용 `/viewer`는 저사양·호환용 MSE-first 화면이므로 HTTP의 same-origin
+   `/player/api/ws`가 정상 경로다. `/live`나 설치형 Viewer의 WebRTC-first 결과와 혼동하지 않는다.
 
 ### 1.0에 영향이 의심됨
 
@@ -346,10 +363,11 @@ docker compose up -d
 - 이것은 집 카메라 3대의 병행 카나리이며 전체 2.0 전환 완료가 아니다.
 - 소방서와 염소장은 한 번도 2.0 카나리 검증 대상으로 포함하지 않았다.
 - PID 1024는 전체 8대 운용을 위한 용량 설정이지, 카나리에서 8대를 활성화했다는 뜻이 아니다.
-- 외부 진입은 HTTP 한 개뿐이며 direct WebRTC는 공개·검증하지 않았다.
+- 외부 진입은 관리망에 bind한 HTTP와 WebRTC `18555/tcp+udp`뿐이다. direct WebRTC는
+  브라우저와 Windows Viewer에서 검증했지만 인터넷 공개·HTTPS/TLS 환경은 검증하지 않았다.
 - 백업 원격지, 알림, ONVIF/PTZ와 Windows Viewer 운영 전환은 아직 완료되지 않았다. Viewer
-  2.0.24 설치파일과 원격 제어 코드는 게시됐지만, 현재 WinPC는 서버 미설정 상태이므로 상시
-  운영 연결·장기 soak는 별도 수락 작업이다.
+  2.0.24 설치파일과 원격 제어 코드는 게시됐고 WinPC 실시간 연결도 확인했지만, 장기 soak와
+  정식 Authenticode 서명은 별도 수락 작업이다.
 - 자동 부팅은 의도적으로 꺼져 있다. 정식 전환 때 boot ownership과 안정 주소를 별도로 결정한다.
 
 ## 증거 → 결론 → 경로
@@ -434,6 +452,34 @@ docker compose up -d
 - finding: 병합된 Viewer 제어와 최신 검증 MSI가 기존 canary 격리·녹화·1.0 연속성을
   바꾸지 않고 실제 운영 화면에 반영됨
 
+### E-007 — Docker direct WebRTC와 재생 진단
+
+- observed_at: 2026-08-12 11:34-11:50 KST
+- source_type: immutable image, generated config, Docker port inspection, browser telemetry,
+  Windows interactive GUI capture, public API, recorder growth, systemd inspection
+- source_ref: `/live`, 설치된 Windows Viewer 2.0.24, `playback_event`, image labels
+- image: `camstation:2.0.0-rc.20260812.11-canary`,
+  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`
+- source_revision: `dd619b5990b4f05a2b6b56a969acdffd39c97f40`
+- transport: host `10.0.0.26:18555/tcp+udp` → container `8555`; advertised candidate
+  `10.0.0.26:18555`; API/RTSP는 내부 전용
+- browser_result: 세 카메라 모두 WebRTC attempt 1에서 2.917~4.352초에 재생,
+  retry/MSE/stream fallback 0
+- windows_result: 세 카메라 모두 WebRTC attempt 1에서 3.209~4.210초에 재생,
+  retry/MSE/stream fallback 0; 실제 `CamStation 2.0` 창에서 영상과 카메라 UIA 3개 확인
+- evidence_hashes: Windows PNG
+  `7b58feed11f17db87700e70c3c21bd585beba6705bd76dea0823c2c39419b562`, UIA
+  `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`, complete JSON
+  `3f40da6b76c830ca968ca4543f684bcd849f971713dd6b9a710e62e36389ec8e`
+- diagnostics: 두 실제 클라이언트의 구조화 event 36건, URL/SDP/ICE 원문/자격증명 패턴 0
+- continuity: container healthy/restart 0, camera 3/3 streaming, recorder 3/3 running,
+  세 active recording inode 모두 증가, legacy 1.0 five-unit PID/restart baseline 불변
+- rollback: `.10-canary` image와 root 전용 `.env.pre-webrtc-20260812-113427.bak`,
+  `compose.yaml.pre-webrtc-20260812-113427.bak` 보존
+- finding: 이전 약 10초 지연은 camera 장애가 아니라 공개되지 않은 WebRTC candidate를 두 번
+  timeout한 뒤 같은 `live` stream의 MSE로 바뀐 결함이었다. 현재는 첫 WebRTC attempt에서
+  재생되며, MSE transport 전환은 더 이상 `대체 스트림`으로 표시하지 않는다.
+
 ### F-001 — 전용 `/viewer`가 필요함
 
 - severity: operational
@@ -468,6 +514,21 @@ docker compose up -d
 - confidence: high
 - resolution: 시험 폼 제거, 실제 Agent 자동 등록만 유지, `offline`/`stale` 삭제 조건 공유,
   구조화된 한국어 409와 회귀 테스트 추가
+
+### F-004 — Docker bridge WebRTC candidate 때문에 매번 두 번 timeout함
+
+- severity: operational
+- category: network-configuration
+- status: resolved
+- evidence_ids: E-007
+- location: Docker port publish, go2rtc candidate 렌더링, live playback recovery
+- finding: host에 WebRTC를 publish하지 않은 채 bridge 내부 candidate를 광고해 `/live`와
+  Windows Viewer가 WebRTC를 두 번 5초 timeout한 뒤 같은 stream의 MSE로 전환했다.
+- impact: 정상 카메라도 화면마다 약 10초 뒤 재생되고 `대체 스트림`이라는 잘못된 문구가 노출됨
+- confidence: high
+- resolution: 관리망의 충돌 없는 `18555/tcp+udp`를 publish하고 검증된 명시 candidate만
+  광고했다. transport fallback과 실제 `live`→`focus` stream fallback을 분리하고 bounded
+  구조화 재생 로그를 추가해 두 실제 클라이언트에서 첫 attempt 성공을 검증했다.
 
 ### P-001 — 모바일 영상 경로
 
@@ -510,9 +571,8 @@ docker compose up -d
   3. 독립 제어 연결이 명령을 받아 Service 또는 renderer의 좁은 adapter로 전달한다.
   4. Viewer/Service 재시작은 새 process·lease·boot generation이 확인된 뒤 결과를 확정한다.
   5. `/viewers`가 전달·확인·실행·최종 결과 시각을 자동 갱신한다. — evidence: E-006
-- residual_risks: 현재 게시 Viewer는 오프라인이며, 상시 연결 상태의 장기 soak와 정식 서명
-  MSI 검증은 남아 있음
+- residual_risks: 현재 Viewer 실시간 연결은 검증했지만 장기 soak와 정식 서명 MSI 검증은 남아 있음
 
-잔여 위험은 HTTP-only 접근, 수동 재시작, 집 카메라에 한정된 검증이다. PID 용량은 8대
+잔여 위험은 HTTP/WebRTC의 관리망 직접 접근, 수동 재시작, 집 카메라에 한정된 검증이다. PID 용량은 8대
 기준으로 준비했지만 실제 8대 동시 영상 검증을 대신하지 않는다. 이 조건을 해소하기 전에는
 본 카나리를 정식 전체 전환으로 취급하지 않는다.

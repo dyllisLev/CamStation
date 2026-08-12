@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-08-10
+Last updated: 2026-08-12
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -10,15 +10,46 @@ This document records the current implementation state so the next session can c
 - Active branch used for this work: `camstation2-initial`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 source revision: `f9f43b7bafa6157b8d3fd32562f378f060689c26`
+- Current deployed 2.0 source revision: `dd619b5990b4f05a2b6b56a969acdffd39c97f40`
+- Current deployed image: `camstation:2.0.0-rc.20260812.11-canary`, image ID
+  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`
 - Runtime test URL on the camera-reachable server: `http://10.0.0.26:18081/`
 - Main monitoring page: `http://10.0.0.26:18081/live`
 
 ## Implemented
 
+### 2026-08-12 Docker WebRTC first-attempt playback and diagnostics
+
+- The canary publishes go2rtc WebRTC `8555` as management-only
+  `10.0.0.26:18555/tcp+udp` and advertises only candidate `10.0.0.26:18555`. go2rtc API `1984`
+  and RTSP `8554` remain container-internal. Native/non-Docker operation retains local-interface
+  candidate discovery when no explicit candidate is configured.
+- `/live` and the installed Viewer remain WebRTC-first. MSE is a fallback transport for the same
+  `live` stream, not a separate camera stream; only a real `live`→`focus` candidate change uses the
+  Korean alternative-stream text, badge, and counter. The dedicated low-overhead `/viewer` route
+  intentionally remains MSE-first.
+- Secret-safe structured playback diagnostics now record bounded correlation/session, stream role,
+  transport, attempt, phase, elapsed time, and failure category. Server filtering supports
+  `off/error/warn/info/debug`; production defaults to `info`, while this diagnostic canary currently
+  uses `debug`. Input size, fields, registered streams, event rate, and string lengths are bounded,
+  and raw URLs, SDP, ICE candidates, and credentials are not accepted.
+- An isolated production browser played all three cameras on WebRTC attempt 1 in 2.917–4.352 seconds.
+  The installed Viewer 2.0.24 on WIN11-DELL played all three on attempt 1 in 3.209–4.210 seconds.
+  Neither run emitted a retry, MSE fallback, or stream fallback; their 36 structured events contained
+  zero forbidden URL/SDP/ICE/credential patterns.
+- The real interactive Viewer window was captured in session 1 and visually/UIA-verified with three
+  camera controls and rendered video. The GUI harness left zero scheduled tasks and workers; its
+  default worker-path initialization was also corrected and regression-tested after the live run
+  exposed a PowerShell parameter-binding defect.
+- The container remains healthy with restart 0, three streaming cameras and three running recorders.
+  All three active recording files grew, all five legacy 1.0 service PIDs/restart counts remained
+  unchanged, and the mount/security/resource boundaries were preserved. Immediate rollback is the
+  retained `.10-canary` image plus root-only `.env.pre-webrtc-20260812-113427.bak` and
+  `compose.yaml.pre-webrtc-20260812-113427.bak`.
+
 ### 2026-08-10 Viewer remote control Docker deployment
 
-- The merged monitoring/control restoration is deployed as immutable image
+- The merged monitoring/control restoration was deployed as immutable image
   `camstation:2.0.0-rc.20260810.10-canary`, image ID
   `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`, built from exact
   revision `f9f43b7bafa6157b8d3fd32562f378f060689c26`.
@@ -53,10 +84,10 @@ This document records the current implementation state so the next session can c
 - All Go packages, 57 web tests plus lint/build, 37 Viewer tests plus build, the daemon build, and
   production policy checks pass. Browser verification proved the QA form/row absent, the actual
   Viewer preserved, and online deletion disabled.
-- The canary currently includes this fix in immutable image
+- This fix was first published in immutable image
   `camstation:2.0.0-rc.20260810.10-canary`, image ID
-  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`. It is healthy with
-  restart 0, three enabled cameras,
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`. That deployment was
+  healthy with restart 0, three enabled cameras,
   three running recorder workers, and unchanged 1.0 service PIDs/restart counts.
 
 ### 2026-08-10 standard Viewer MSI publication boundary
@@ -74,15 +105,16 @@ This document records the current implementation state so the next session can c
 - Publisher, focused release/API/update-boundary tests, the full Go suite, 57 web tests plus
   lint/build, and 37 Viewer tests plus TypeScript build pass. Docker publication and the clean-host
   manual-install handoff passed runtime verification.
-- The canary now runs immutable image `camstation:2.0.0-rc.20260810.10-canary`, image ID
+- At publication time the canary ran immutable image `camstation:2.0.0-rc.20260810.10-canary`, image ID
   `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`, built from
   `f9f43b7bafa6157b8d3fd32562f378f060689c26`. `/settings` visibly exposes the MSI, and both
   browser-button and direct HTTP downloads match the source size and SHA-256 after container
   recreation.
 - WIN11-DELL was returned to a manual clean-install state after the 2.0.21 download test, then used
-  for the 2.0.24 command acceptance. It now retains the verified 2.0.24 product and automatic
-  Service while the Viewer is closed and its server configuration is empty. SSH, the interactive
-  desktop session, development source/toolchain, and both verified MSI artifacts remain intact.
+  for the 2.0.24 command acceptance. On 2026-08-12 its verified product, automatic Service, and
+  interactive desktop session were reused for direct WebRTC acceptance against the canary; the
+  Viewer remains connected after that test. SSH, development source/toolchain, and both verified
+  MSI artifacts remain intact.
 - The operator procedure, immutable evidence hashes, findings, acceptance path, and rollback boundary
   are consolidated in
   [the Viewer settings download report](2026-08-10_viewer-settings-download-report.md).
@@ -107,10 +139,10 @@ This document records the current implementation state so the next session can c
 
 ### 2026-08-09 Docker home-camera canary and dedicated Viewer
 
-- A hardened all-in-one 2.0 image now runs as `camstation2-canary` on production host
-  `10.0.0.26`, publishing only HTTP `18081/tcp`. The current immutable image is
-  `camstation:2.0.0-rc.20260810.10-canary` with image ID
-  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`.
+- A hardened all-in-one 2.0 image runs as `camstation2-canary` on production host `10.0.0.26`,
+  publishing HTTP `18081/tcp` and management-only WebRTC `18555/tcp+udp`. The current immutable
+  image is `camstation:2.0.0-rc.20260812.11-canary` with image ID
+  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`.
 - The canary DB was created only from the active 1.0 go2rtc YAML through a strict `집-` allowlist.
   It contains `집-마당`, `집-창고1`, and `집-창고2`; every fire-station camera and `염소장`
   are absent. The original YAML hash and all five legacy service PID/restart baselines remained
@@ -226,10 +258,12 @@ This document records the current implementation state so the next session can c
   - fullscreen toggle
   - right panel with saved layouts and camera status
   - bottom two-row timeline shell
-- MSE live video playback without browser video controls
-- Browser MSE errors, initial-media silence, and media stalls trigger bounded reconnects
-- Normal tiles fall back from the live output to the browser-safe focus output without mutating camera policy
-- Tile status reflects browser media receipt and identifies fallback playback
+- `/live` and the installed Viewer use WebRTC first and fall back to MSE on the same stream through
+  bounded recovery; the dedicated `/viewer` route remains MSE-first
+- WebRTC/MSE setup errors, initial-media silence, and media stalls trigger bounded reconnects
+- Normal tiles can fall back from the live output to the browser-safe focus output without mutating
+  camera policy; only this stream-role change is presented as an alternative stream
+- Tile status reflects browser media receipt and distinguishes transport switching from stream fallback
 - go2rtc URL-only producer placeholders are reported idle instead of running
 - Video progress/control overlays hidden and avoided by direct MSE `<video>` use
 - Camera tile movement and resizing through `react-grid-layout`
@@ -379,7 +413,9 @@ Focused stream selection verification:
 
 Browser/Playwright verification performed:
 
-- `/live` loads live MSE videos.
+- `/live` loads all three production videos on their first WebRTC attempt before the five-second
+  setup timeout, with no retry or MSE/stream fallback.
+- `/viewer` loads live MSE videos by design.
 - Browser video controls are not enabled.
 - Hovering video does not show native progress controls.
 - Wheel zoom applies `scale(...) translate(...)` to the video.

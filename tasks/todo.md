@@ -1944,20 +1944,56 @@
 - [x] playback 구조화 로그 endpoint, 레벨 필터, redaction/bounds/rate limit를 failing-first로 구현한다.
 - [x] 프런트엔드 attempt 계측과 transport/stream fallback 표현 분리를 failing-first로 구현한다.
 - [x] 전체 Go/Web/Viewer 테스트와 lint/build를 통과하고, 배포 전 secret scan과 diff 검증을 완료한다.
-- [ ] 새 immutable Docker image를 배포하고 candidate·TCP/UDP publish·health·rollback 경계를 검증한다.
-- [ ] 브라우저에서 세 카메라가 첫 WebRTC attempt로 즉시 재생되고 info/debug 로그가 맞는지 증명한다.
-- [ ] WIN11-DELL Viewer에서 같은 결과와 실제 GUI를 증명하고 evidence harness를 정리한다.
-- [ ] 운영 문서, Review와 lessons를 실제 결과에 맞게 갱신한다.
+- [x] 새 immutable Docker image를 배포하고 candidate·TCP/UDP publish·health·rollback 경계를 검증한다.
+- [x] 브라우저에서 세 카메라가 첫 WebRTC attempt로 즉시 재생되고 info/debug 로그가 맞는지 증명한다.
+- [x] WIN11-DELL Viewer에서 같은 결과와 실제 GUI를 증명하고 evidence harness를 정리한다.
+- [x] 실제 검증에서 드러난 GUI launcher 기본 worker 경로 초기화 결함을 회귀 테스트로 수정한다.
+- [x] 운영 문서, Review와 lessons를 실제 결과에 맞게 갱신한다.
 
 ## 합격 기준
 
-- [ ] Docker 외부 클라이언트가 private bridge 주소를 받지 않고 관리망에서 도달 가능한 candidate를 받는다.
-- [ ] 세 카메라 모두 initial WebRTC attempt에서 5초 timeout 없이 재생되며 MSE fallback은 발생하지 않는다.
-- [ ] 기본 info 로그만으로 attempt 시작·성공/실패·transport·stream·elapsed time을 상관관계로 복원할 수 있다.
-- [ ] debug 로그는 signaling과 첫 미디어 진행을 보이되 URL, SDP, ICE 원문, 자격증명을 남기지 않는다.
-- [ ] 실제 stream candidate가 바뀌지 않으면 `대체 스트림` 문구·badge·counter가 나타나지 않는다.
-- [ ] 카나리 health/restart, 녹화기, 기존 1.0 서비스, Windows Viewer Service와 interactive session이 유지된다.
+- [x] Docker 외부 클라이언트가 private bridge 주소를 받지 않고 관리망에서 도달 가능한 candidate를 받는다.
+- [x] 세 카메라 모두 initial WebRTC attempt에서 5초 timeout 없이 재생되며 MSE fallback은 발생하지 않는다.
+- [x] 기본 info 로그만으로 attempt 시작·성공/실패·transport·stream·elapsed time을 상관관계로 복원할 수 있다.
+- [x] debug 로그는 signaling과 첫 미디어 진행을 보이되 URL, SDP, ICE 원문, 자격증명을 남기지 않는다.
+- [x] 실제 stream candidate가 바뀌지 않으면 `대체 스트림` 문구·badge·counter가 나타나지 않는다.
+- [x] 카나리 health/restart, 녹화기, 기존 1.0 서비스, Windows Viewer Service와 interactive session이 유지된다.
 
 ## Review
 
-- 구현 진행 중.
+- 근본 원인은 Docker가 HTTP만 publish한 상태에서 go2rtc가 bridge 내부 WebRTC candidate를
+  광고한 것이다. `/live`와 설치형 Viewer가 도달 불가능한 WebRTC/live를 두 번 5초씩 실제
+  timeout한 뒤, 다른 카메라 stream이 아닌 같은 `live` stream의 MSE로 성공했다. 동시에 UI가
+  이 transport 전환을 `대체 스트림`으로 잘못 표시했다.
+- revision `dd619b5990b4f05a2b6b56a969acdffd39c97f40`은 검증된 명시 WebRTC candidate,
+  secret-safe bounded playback diagnostics, transport/stream fallback 표현 분리, Docker
+  TCP·UDP publish를 구현한다. native 실행은 명시 candidate가 없을 때 기존 local-interface
+  자동 발견을 유지한다.
+- 운영에는 immutable `camstation:2.0.0-rc.20260812.11-canary`, image ID
+  `sha256:b4e5fe10099bcd167c34925ac178d2951d2ad01c120e0af77858365dcae5259a`를 배포했다.
+  host `10.0.0.26:18555/tcp+udp`가 container `8555`에 매핑되고 생성 설정은 candidate
+  `10.0.0.26:18555`만 포함한다. API `1984`와 RTSP `8554`는 계속 내부 전용이다.
+- 운영 브라우저의 세 session은 WebRTC attempt 1에서 각각 2.917~4.352초에 재생됐고,
+  WIN11-DELL Viewer의 세 session은 3.209~4.210초에 재생됐다. 두 실행 모두 retry 0,
+  MSE fallback 0, stream fallback 0이며 `대체 스트림` 문구·badge도 나타나지 않았다.
+- debug에서 두 실제 클라이언트의 구조화 event 36건이 attempt, socket, signaling answer,
+  first track, playback start를 연결했다. URL/SDP/ICE 원문/자격증명 금지 패턴은 0이었다.
+  canary는 진단을 위해 debug를 유지하며 Compose 기본값은 info다.
+- Windows session 1의 실제 `CamStation 2.0` 창은 PrintWindow PNG와 17개 UIA 요소로
+  검증했다. PNG SHA-256은 `7b58feed11f17db87700e70c3c21bd585beba6705bd76dea0823c2c39419b562`,
+  UIA SHA-256은 `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`다.
+  GUI harness의 `$PSScriptRoot` parameter-default 결함은 failing-first 테스트 후 param 이후
+  초기화로 고쳤고, WorkerScript를 생략한 실제 Capture도 성공했다. 최종 scheduled task와
+  worker는 0, Explorer는 정확히 session 1 하나, Viewer Service는 running이다.
+- 카나리는 healthy/restart 0, camera 3/3 streaming, recorder 3/3 running이다. 세 active
+  recording 파일은 같은 inode에서 모두 5초간 1,048,576 bytes 증가했다. 기존 1.0 핵심
+  서비스 5개의 PID와 restart 0은 기준선 그대로이며 mount fingerprint, 권한, resource limit도
+  변하지 않았다.
+- 최종 `./scripts/check-dev.sh`는 전체 Go package, Web 64 tests·lint·build, Viewer 38
+  tests·build와 daemon build를 통과했다. production policy, 변경 문서 상대 링크 10개,
+  changed-diff secret pattern, `git diff --check`도 모두 통과했다.
+- 즉시 rollback용 `.10-canary` image ID
+  `sha256:19954a0ff6a2ea89a7453ce2af0975d03e7c52f9e26cc3ca4f227e9ce8c1ccc9`와 root 전용
+  `.env.pre-webrtc-20260812-113427.bak`, `compose.yaml.pre-webrtc-20260812-113427.bak`을
+  보존했다. 첫 재생은 5초 timeout 전 단일 attempt로 복구됐지만 on-demand public output과
+  keyframe 준비 때문에 측정상 2.9~4.4초는 남는다.
