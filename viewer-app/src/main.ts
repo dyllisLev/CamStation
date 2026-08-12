@@ -97,6 +97,7 @@ async function showLive(status: ViewerStatus): Promise<void> {
       return showSetup(status);
     }
   }
+  cancelScheduledReconnect();
   startHeartbeat();
   currentLiveURL = viewerURL(status.config.serverUrl);
   connection.reportViewer(lease.leaseId, "running");
@@ -225,6 +226,12 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+function cancelScheduledReconnect(): void {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  reconnectAttempt = 0;
+}
+
 function hardenSession(target: BrowserWindow): void {
   target.webContents.on("will-navigate", (event, candidate) => {
     if (!currentLiveURL || !isNavigationAllowed(candidate, currentLiveURL)) event.preventDefault();
@@ -242,7 +249,7 @@ app.on("window-all-closed", () => app.quit());
 app.once("before-quit", () => {
   explicitShutdown = true;
   stopHeartbeat();
-  if (reconnectTimer) clearTimeout(reconnectTimer);
+  cancelScheduledReconnect();
   if (lease) connection?.release(lease.leaseId);
   connection?.close();
   for (const resolve of rendererCommandResults.values()) resolve(false);

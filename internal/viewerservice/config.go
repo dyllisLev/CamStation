@@ -51,6 +51,7 @@ type ConfigManager struct {
 	Store     ConfigStore
 	Validator ConnectionValidator
 	NewID     func() (string, error)
+	OnCommit  func(MachineConfig)
 }
 
 func BuildConfig(draft ConfigDraft, current MachineConfig, newID func() (string, error)) (MachineConfig, error) {
@@ -101,6 +102,9 @@ func (manager ConfigManager) Commit(ctx context.Context, draft ConfigDraft) (Mac
 	}
 	if err := manager.Store.Save(ctx, candidate); err != nil {
 		return MachineConfig{}, storageError(err)
+	}
+	if manager.OnCommit != nil {
+		manager.OnCommit(candidate)
 	}
 	return candidate, nil
 }

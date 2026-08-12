@@ -51,6 +51,11 @@ test("Viewer owns fullscreen through native BrowserWindow IPC", async () => {
   assert.match(source, /window\.on\("leave-full-screen"/u);
 });
 
+test("entering live cancels a pending setup reconnect", async () => {
+  const source = await readFile(path.resolve(import.meta.dirname, "../src/main.ts"), "utf8");
+  assert.match(source, /async function showLive[\s\S]+?cancelScheduledReconnect\(\);[\s\S]+?loadURL\(currentLiveURL\)/u);
+});
+
 test("setup document loads its renderer as an ES module", async () => {
   const document = await readFile(path.resolve(import.meta.dirname, "../assets/setup.html"), "utf8");
   assert.match(document, /<script type="module" src="\.\.\/build\/setupRenderer\.js"><\/script>/u);

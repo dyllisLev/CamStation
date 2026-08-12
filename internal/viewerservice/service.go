@@ -49,6 +49,7 @@ type Service struct {
 	reporter       CommandReporter
 	commandQueue   chan Command
 	commandResults map[string]chan LocalCommandResult
+	configChanges  chan struct{}
 	handlers       sync.WaitGroup
 }
 
@@ -228,7 +229,10 @@ func (service *Service) server() *Server {
 	if service.Server != nil {
 		return service.Server
 	}
-	manager := ConfigManager{Store: service.Store, Validator: deferredConnectionValidator{}, NewID: newLeaseID}
+	manager := ConfigManager{
+		Store: service.Store, Validator: deferredConnectionValidator{}, NewID: newLeaseID,
+		OnCommit: service.signalConfigChange,
+	}
 	var logError func(context.Context, error) string
 	if service.Logs != nil {
 		logError = service.Logs.ErrorLogger
@@ -249,16 +253,43 @@ func (service *Service) runControl(ctx context.Context, server *Server) {
 	if loop == nil {
 		loop = HTTPControlLoop{}
 	}
+	configChanges := service.configChangeChannel()
 	for {
 		config, err := loadOrEmpty(ctx, service.Store)
 		if err == nil && config.SchemaVersion != 0 && strings.TrimSpace(config.ClientID) != "" {
-			if runErr := loop.Run(ctx, config, server, service); runErr != nil && ctx.Err() == nil {
+			runCtx, cancel := context.WithCancel(ctx)
+			reloaded := make(chan struct{}, 1)
+			loopDone := make(chan struct{})
+			go func() {
+				select {
+				case <-configChanges:
+					reloaded <- struct{}{}
+					cancel()
+				case <-ctx.Done():
+					cancel()
+				case <-loopDone:
+				}
+			}()
+			runErr := loop.Run(runCtx, config, server, service)
+			close(loopDone)
+			cancel()
+			select {
+			case <-reloaded:
+				server.SetConnection("connecting")
+				continue
+			default:
+			}
+			if runErr != nil && ctx.Err() == nil {
 				server.SetConnection("degraded")
 				timer := time.NewTimer(250 * time.Millisecond)
 				select {
 				case <-ctx.Done():
 					timer.Stop()
 					return
+				case <-configChanges:
+					timer.Stop()
+					server.SetConnection("connecting")
+					continue
 				case <-timer.C:
 				}
 			}
@@ -272,8 +303,27 @@ func (service *Service) runControl(ctx context.Context, server *Server) {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-configChanges:
+			timer.Stop()
+			server.SetConnection("connecting")
 		case <-timer.C:
 		}
+	}
+}
+
+func (service *Service) configChangeChannel() chan struct{} {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.configChanges == nil {
+		service.configChanges = make(chan struct{}, 1)
+	}
+	return service.configChanges
+}
+
+func (service *Service) signalConfigChange(MachineConfig) {
+	select {
+	case service.configChangeChannel() <- struct{}{}:
+	default:
 	}
 }
 
