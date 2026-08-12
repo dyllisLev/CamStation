@@ -1,5 +1,19 @@
 # Lessons
 
+## 2026-08-12 — 노출된 media transport와 플레이어 기본 경로를 일치시킨다
+
+- HTTP-only Docker 배포에서 go2rtc WebRTC candidate가 bridge 내부 주소뿐이면 WebRTC는
+  signaling 성공 여부와 무관하게 재생 경로가 될 수 없다. 배포 계약이 MSE를 정상 경로로
+  정했다면 클라이언트도 MSE를 먼저 선택해야 하며, 매 로드마다 도달 불가능한 WebRTC timeout을
+  복구 절차처럼 소비하게 두지 않는다.
+- transport fallback과 stream-role fallback은 서로 다른 상태다. 동일한 `live` stream을
+  WebRTC에서 MSE로 바꾸는 동안 `대체 스트림`이라고 표시하지 말고, 실제 candidate가
+  `live`에서 `focus`로 바뀐 경우에만 대체 스트림 문구·badge·counter를 사용한다.
+- 컨테이너 로그가 조용하다는 사실은 브라우저 연결 시도가 없었다는 증거가 아니다. player
+  attempt, transport, error category, elapsed time을 구조화해 보존하고 Viewer 종료 뒤에도 마지막
+  bounded telemetry를 유지해야 사후 진단이 가능하다. 그 전에는 DOM/video 타임라인, 배포 포트,
+  ICE candidate, public stream consumer를 같은 시각축으로 대조한다.
+
 ## 2026-08-10 — 최신 Docker 코드와 Viewer 설치파일 포인터를 함께 검증한다
 
 - Viewer 기능을 서버에 배포할 때 Docker 이미지 revision과 Windows MSI release catalog는

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -475,6 +477,52 @@ func TestEnsureFailsClosedWithoutRestartingDisabledLastGood(t *testing.T) {
 	}
 	if strings.Contains(string(config), "disabled") || strings.Contains(string(config), "192.0.2.2") {
 		t.Fatalf("unsafe config restored: %s", config)
+	}
+}
+
+func TestParseWebRTCCandidatesAcceptsReachableLiteralAddresses(t *testing.T) {
+	candidates, err := ParseWebRTCCandidates("10.0.0.26:18555, [fd00::26]:18555,10.0.0.26:18555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.26:18555", "[fd00::26]:18555"}
+	if !reflect.DeepEqual(candidates, want) {
+		t.Fatalf("candidates = %#v, want %#v", candidates, want)
+	}
+}
+
+func TestParseWebRTCCandidatesRejectsUnsafeOrUnreachableValues(t *testing.T) {
+	for _, value := range []string{
+		"172.18.0.2",
+		"camera.internal:8555",
+		"127.0.0.1:8555",
+		"0.0.0.0:8555",
+		"169.254.1.2:8555",
+		"255.255.255.255:8555",
+		"10.0.0.26:0",
+		"10.0.0.26:65536",
+	} {
+		if _, err := ParseWebRTCCandidates(value); err == nil {
+			t.Fatalf("candidate %q was accepted", value)
+		}
+	}
+}
+
+func TestExplicitWebRTCCandidateReplacesRuntimeInterfaceDiscovery(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = []store.CameraOutput{output}
+	g := NewGo2RTC(filepath.Join(t.TempDir(), "go2rtc.yaml"), WithWebRTCCandidates([]string{"10.0.0.26:18555"}))
+
+	config, _, err := g.renderPolicyConfig([]store.Camera{camera}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(config)
+	if !strings.Contains(text, `- "10.0.0.26:18555"`) {
+		t.Fatalf("explicit candidate missing: %s", text)
+	}
+	if strings.Contains(text, "172.18.0.2:8555") {
+		t.Fatalf("runtime bridge candidate leaked into explicit config: %s", text)
 	}
 }
 

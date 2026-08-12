@@ -49,5 +49,11 @@ grep -Fq 'CAMSTATION_ADDR: 0.0.0.0:18080' "$ROOT_DIR/packaging/docker/compose.ca
 grep -Fq 'target: 18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
 grep -Fq 'published: "${CANARY_HTTP_PORT:-18081}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
 grep -Fq 'host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_PLAYBACK_LOG_LEVEL: "${CAMSTATION_PLAYBACK_LOG_LEVEL:-info}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+test "$(grep -Fc 'target: 8555' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
+test "$(grep -Fc 'published: "${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
+grep -A5 -F 'name: webrtc-tcp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: tcp'
+grep -A5 -F 'name: webrtc-udp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: udp'
 
 printf 'production policy checks passed\n'

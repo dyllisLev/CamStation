@@ -1857,3 +1857,107 @@
   then metadata, length, disposition, complete content hash, and source contract proved publication
   correct. A later `docker top -eo comm` portability assumption was replaced by a read-only in-
   container process-name check; neither diagnostic mismatch changed runtime state.
+
+---
+
+# 2026-08-12 운영 Docker 라이브 초기 연결 상태 진단
+
+## 범위와 진단 사양
+
+- 사용자가 방금 재현한 운영 Docker 2.0 라이브 화면의 최근 로그를 읽기 전용으로 조사한다.
+- `연결 중` → `영상 재연결 중` → `대체 스트림 연결 중` → 재생 전이를 만드는 프런트엔드
+  조건·타이머·transport fallback과 같은 시각대의 HTTP/WebSocket/go2rtc 로그를 대조한다.
+- 표시 문구만 빠르게 바뀌는 정상 초기화인지, 실제 WebSocket/미디어 연결 실패와 재시도가
+  있었는지 구분하고 카메라별·transport별 증거를 제시한다.
+- 진단 중 운영 컨테이너, 카메라, 설정, DB, 녹화기, Viewer에는 어떤 변경·재시작·명령도
+  수행하지 않는다. 재현이 필요하면 읽기 전용 상태 확인 또는 일반 라이브 접속만 사용한다.
+
+## 계획
+
+- [x] 현재 운영 컨테이너 identity/health와 최근 라이브 관련 로그의 UTC·KST 범위를 수집한다.
+- [x] 라이브 플레이어 문구별 발생 조건, timeout, primary/fallback transport 전이를 추적한다.
+- [x] 브라우저 요청 및 go2rtc 로그를 코드 상태 전이와 맞춰 실제 실패·재시도 횟수를 판정한다.
+- [x] 필요한 최소 검증을 수행하고 비밀정보 없는 타임라인, 결론, 권고를 Review에 기록한다.
+
+## 합격 기준
+
+- [x] 각 사용자 문구가 어떤 코드 상태에서 표시되는지 확인된다.
+- [x] 최근 시도에서 primary 연결이 성공했는지 실패했는지, fallback이 실제 사용됐는지 로그로
+      판정된다.
+- [x] 영상이 나오기까지의 지연이 정상 설계 지연인지 결함인지 근거와 함께 설명된다.
+- [x] 운영 상태를 변경하지 않았고, 결과에 원시 카메라 URL·자격증명·민감 경로가 노출되지 않는다.
+
+## Review
+
+- 대상은 revision `f9f43b7bafa6157b8d3fd32562f378f060689c26`의
+  `camstation:2.0.0-rc.20260810.10-canary`다. 컨테이너는 2026-08-10 기동 뒤
+  `healthy`, restart 0을 유지했고 2026-08-12 09:05 KST 사용자 재현 및 09:11 KST 독립
+  재현 시각의 컨테이너 로그에는 player/WebSocket 오류가 기록되지 않았다.
+- WIN11-DELL Viewer 2.0.24는 09:04:53 KST에 Service가 정상 재시작됐고 오류 code는 없었다.
+  서버에는 09:04:03~09:10:56 KST Viewer heartbeat 43건과 09:05:12.742 KST 마지막 영상
+  진행이 남았다. Viewer 전용 로그는 비어 있고 화면 종료 후 streams snapshot도 비워지므로,
+  원래 재현의 attempt counter 자체는 사후 로그로 복구할 수 없었다.
+- 같은 운영 `/live`를 격리 브라우저로 reload해 DOM/video 상태를 50 ms 간격으로 측정했다.
+  세 카메라 모두 `연결 중`에서 4.911초에 `영상 입력 재연결 중`, 9.901초에
+  `대체 스트림 연결 중`으로 바뀌었고 각각 10.051초, 10.201초, 10.351초에 `playing`과
+  `readyState=4`에 도달했다. 이 전이는 코드의 5초 setup timeout 두 번과 정확히 일치한다.
+- 복구 순서는 initial WebRTC/live → WebRTC/live retry → MSE/live → 필요할 때만 MSE/focus다.
+  재현 중 public stream status는 세 `live` output이 각각 viewer 1로 running이고 모든
+  `focus` output이 viewer 0으로 idle이었다. 따라서 이번 성공은 카메라 대체 스트림이 아니라
+  동일한 primary live 스트림의 MSE transport 성공이다.
+- Docker는 HTTP `18080/tcp`만 host에 publish한다. 생성된 go2rtc WebRTC candidate는 bridge
+  내부 주소의 `8555` 한 개이고 외부에 publish되지 않는다. 운영 문서도 same-origin
+  `/player/api/ws` MSE를 정상 경로로 지정한다. 따라서 direct WebRTC가 성립하지 않는 배포에서
+  UI가 WebRTC를 기본으로 두 번 시도하는 것이 약 10초 지연의 근본 원인이다.
+- `fallback` phase를 무조건 `대체 스트림 연결 중`으로 번역해 transport fallback과 stream
+  fallback도 혼동한다. 결론은 실제 연결 실패·재시도가 두 번 있고, 마지막 문구도 부정확하다는
+  것이다. 카메라 RTSP나 컨테이너 재시작 장애로 인한 지연은 아니다.
+- 격리 브라우저를 닫은 뒤 세 live viewer count가 모두 0으로 돌아왔고 컨테이너는 계속
+  healthy/restart 0이었다. focused recovery/selection 테스트 17개도 통과했다. 진단 범위에서는
+  소스, 컨테이너, 설정, DB, 카메라, 녹화기 및 Viewer에 변경이나 제어 명령을 수행하지 않았다.
+
+---
+
+# 2026-08-12 Docker WebRTC 즉시 연결 및 재생 진단 로그
+
+## 범위와 구현 사양
+
+- 기존 1.0과 병행 중인 Docker 2.0 카나리에 외부 도달 가능한 WebRTC TCP·UDP 경로를 추가한다.
+  관리망 주소에만 bind하고, 기존 1.0의 host port 점유를 확인해 충돌 없는 카나리 포트를 쓴다.
+- go2rtc가 자동 발견한 Docker bridge candidate 대신 명시적으로 검증된 외부 candidate를
+  광고할 수 있게 한다. 비 Docker 실행의 기존 자동 발견 동작은 그대로 보존한다.
+- 라이브 재생 attempt에 correlation ID, stream role, transport, attempt, phase, elapsed time,
+  failure category, media readiness를 포함한 secret-safe 구조화 로그를 추가한다. 로그 레벨은
+  `off/error/warn/info/debug`로 설정하고, 서버가 레벨을 필터링·크기 제한·rate limit한다.
+- WebRTC→MSE transport 전환과 `live`→`focus` stream 전환을 서로 다른 상태로 표현한다.
+  실제 두 번째 stream candidate를 사용할 때만 `대체 스트림` 문구와 badge를 표시한다.
+- 소스 변경은 테스트 후 새 immutable image로 카나리만 교체한다. 기존 이미지와 root 전용
+  Compose 포인터 백업을 유지하고, 실패 시 직전 카나리로 되돌린다.
+- WIN11-DELL의 기존 Viewer 2.0 설치·Service·RDP 세션·저장 설정을 보존하면서 정상 사용자
+  실행 경로로 첫 WebRTC 재생과 구조화 로그를 확인하고, 프로젝트 GUI evidence loop로 실제
+  영상 창을 검증한다.
+
+## 계획
+
+- [x] 현재 host TCP/UDP 포트 점유, firewall, Docker 경계, Viewer 세션, rollback 기준선을 확인한다.
+- [x] 외부 WebRTC candidate 설정과 유효성 검사를 failing-first Go 테스트로 구현한다.
+- [x] playback 구조화 로그 endpoint, 레벨 필터, redaction/bounds/rate limit를 failing-first로 구현한다.
+- [x] 프런트엔드 attempt 계측과 transport/stream fallback 표현 분리를 failing-first로 구현한다.
+- [x] 전체 Go/Web/Viewer 테스트와 lint/build를 통과하고, 배포 전 secret scan과 diff 검증을 완료한다.
+- [ ] 새 immutable Docker image를 배포하고 candidate·TCP/UDP publish·health·rollback 경계를 검증한다.
+- [ ] 브라우저에서 세 카메라가 첫 WebRTC attempt로 즉시 재생되고 info/debug 로그가 맞는지 증명한다.
+- [ ] WIN11-DELL Viewer에서 같은 결과와 실제 GUI를 증명하고 evidence harness를 정리한다.
+- [ ] 운영 문서, Review와 lessons를 실제 결과에 맞게 갱신한다.
+
+## 합격 기준
+
+- [ ] Docker 외부 클라이언트가 private bridge 주소를 받지 않고 관리망에서 도달 가능한 candidate를 받는다.
+- [ ] 세 카메라 모두 initial WebRTC attempt에서 5초 timeout 없이 재생되며 MSE fallback은 발생하지 않는다.
+- [ ] 기본 info 로그만으로 attempt 시작·성공/실패·transport·stream·elapsed time을 상관관계로 복원할 수 있다.
+- [ ] debug 로그는 signaling과 첫 미디어 진행을 보이되 URL, SDP, ICE 원문, 자격증명을 남기지 않는다.
+- [ ] 실제 stream candidate가 바뀌지 않으면 `대체 스트림` 문구·badge·counter가 나타나지 않는다.
+- [ ] 카나리 health/restart, 녹화기, 기존 1.0 서비스, Windows Viewer Service와 interactive session이 유지된다.
+
+## Review
+
+- 구현 진행 중.

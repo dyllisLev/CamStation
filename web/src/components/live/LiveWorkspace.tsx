@@ -28,6 +28,7 @@ import {
   type VideoViewport,
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
+import { playbackStatusCopy } from "./playbackPresentation";
 import { playbackStreamCandidates, shouldRenderLiveTile } from "./streamSelection";
 import { hasViewerFullscreenBridge, reportViewerStream, requestViewerFullscreen, subscribeViewerCommands, subscribeViewerFullscreen } from "./viewerBridge";
 import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
@@ -685,18 +686,7 @@ function LiveVideo({
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
   const zoomed = currentViewport.scale > 1.001;
-  const statusCopy =
-    phase === "fallback"
-      ? "대체 스트림 연결 중..."
-      : phase === "retrying"
-        ? "영상 입력 재연결 중..."
-        : phase === "recovering"
-          ? "영상 입력을 다시 구독하는 중..."
-          : phase === "cooldown"
-            ? "자동 복구 한도에 도달했습니다."
-        : phase === "unsupported"
-          ? "이 브라우저는 라이브 재생을 지원하지 않습니다."
-          : "연결 중...";
+  const statusCopy = playbackStatusCopy(phase, transport);
 
   useEffect(() => {
     const candidates = streamKey.split("\u001f").filter(Boolean);

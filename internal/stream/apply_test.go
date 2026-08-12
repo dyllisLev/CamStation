@@ -91,6 +91,22 @@ func TestApplyCoordinatorContinuesWhenNewerRevisionIsSaved(t *testing.T) {
 	}
 }
 
+func TestApplyCoordinatorUsesRuntimeConfigRenderer(t *testing.T) {
+	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
+	camera.Outputs = threeOutputs(output)
+	camera.PolicyState = store.CameraPolicyState{CameraID: 1, DesiredRevision: 1}
+	db := &fakePolicyStore{camera: camera}
+	runtime := &candidatePolicyRuntime{candidate: "10.0.0.26:18555"}
+
+	result := NewApplyCoordinator(db, runtime, &fakeRecorderHandoff{}).Apply(t.Context())
+	if !result.Applied || result.Error != "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(runtime.configs) != 1 || !strings.Contains(string(runtime.configs[0]), runtime.candidate) {
+		t.Fatalf("runtime config did not use candidate renderer: %q", runtime.configs)
+	}
+}
+
 func TestApplyCoordinatorExpectedRevisionCheckRunsInsideApplyLock(t *testing.T) {
 	camera, output := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
 	camera.Outputs = threeOutputs(output)
@@ -407,6 +423,15 @@ type fakePolicyRuntime struct {
 	rollbacks   int
 	commitErr   error
 	rollbackErr error
+}
+
+type candidatePolicyRuntime struct {
+	fakePolicyRuntime
+	candidate string
+}
+
+func (f *candidatePolicyRuntime) renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
+	return renderPolicyConfigWithCandidates(cameras, applied, []string{f.candidate})
 }
 
 func (f *fakePolicyRuntime) PrepareConfig(_ context.Context, config []byte) (runtimeConfigTransaction, error) {

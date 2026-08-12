@@ -115,6 +115,10 @@ func resolveOutputWithEffective(camera store.Camera, output store.CameraOutput, 
 }
 
 func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
+	return renderPolicyConfigWithCandidates(cameras, applied, localCandidates(8555))
+}
+
+func renderPolicyConfigWithCandidates(cameras []store.Camera, applied bool, candidates []string) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
 	cameras = enabledCameras(cameras)
 	resolved := make(map[int64][]resolvedOutput, len(cameras))
 	results := make(map[int64][]store.CameraOutputApplyResult, len(cameras))
@@ -137,7 +141,6 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 	}
 
 	var buf bytes.Buffer
-	candidates := localCandidates(8555)
 	buf.WriteString("api:\n  listen: 127.0.0.1:1984\n")
 	buf.WriteString("rtsp:\n  listen: 127.0.0.1:8554\n")
 	buf.WriteString("webrtc:\n  listen: 0.0.0.0:8555\n")
@@ -212,6 +215,14 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 	return buf.Bytes(), results, nil
 }
 
+func (g *Go2RTC) renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
+	candidates := g.webrtcCandidates
+	if len(candidates) == 0 {
+		candidates = localCandidates(8555)
+	}
+	return renderPolicyConfigWithCandidates(cameras, applied, candidates)
+}
+
 func enabledCameras(cameras []store.Camera) []store.Camera {
 	enabled := make([]store.Camera, 0, len(cameras))
 	for _, camera := range cameras {
@@ -233,6 +244,11 @@ func privateInputProducer(rawURL string) string {
 
 func renderStartupConfig(cameras []store.Camera) ([]byte, error) {
 	config, _, err := renderPolicyConfig(cameras, true)
+	return config, err
+}
+
+func (g *Go2RTC) renderStartupConfig(cameras []store.Camera) ([]byte, error) {
+	config, _, err := g.renderPolicyConfig(cameras, true)
 	return config, err
 }
 

@@ -11,6 +11,21 @@ export type PlaybackRecoveryStep =
   | { readonly action: "resubscribe"; readonly attempt: number }
   | { readonly action: "cooldown"; readonly until: number };
 
+type PlaybackTransportStep = Extract<PlaybackRecoveryStep, { readonly transport: PlaybackTransport }>;
+
+export function recoveryAttemptPresentation(
+  step: PlaybackTransportStep,
+  primaryStreamName: string,
+  previousTransport: PlaybackTransport,
+) {
+  const usingFallback = step.streamName !== primaryStreamName;
+  return {
+    phase: usingFallback ? "fallback" as const : "retrying" as const,
+    usingFallback,
+    transportChanged: step.transport !== previousTransport,
+  };
+}
+
 export class PlaybackRecovery {
   readonly streamNames: readonly string[];
   private episodeStartedAt: number | null = null;

@@ -34,10 +34,15 @@ func main() {
 		recordingsDir     = flag.String("recordings-dir", getenv("CAMSTATION_RECORDINGS_DIR", "./data/recordings"), "final recording directory")
 		tempDir           = flag.String("temp-dir", getenv("CAMSTATION_TEMP_DIR", "./data/temp"), "temporary recording directory")
 		viewerReleasesDir = flag.String("viewer-releases-dir", getenv("CAMSTATION_VIEWER_RELEASES_DIR", "./data/viewer-releases"), "Windows Viewer release directory")
+		webrtcCandidates  = flag.String("webrtc-candidates", getenv("CAMSTATION_WEBRTC_CANDIDATES", ""), "comma-separated external WebRTC IP:port candidates")
 		segmentMinutes    = flag.Int("segment-minutes", getenvInt("CAMSTATION_SEGMENT_MINUTES", 30), "recording segment length in minutes")
 		maxStorageGB      = flag.Float64("max-storage-gb", getenvFloat("CAMSTATION_MAX_STORAGE_GB", 0), "maximum recording storage in GB; 0 disables automatic cleanup")
 	)
 	flag.Parse()
+	parsedWebRTCCandidates, err := stream.ParseWebRTCCandidates(*webrtcCandidates)
+	if err != nil {
+		log.Fatalf("parse WebRTC candidates: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -61,7 +66,7 @@ func main() {
 	}
 
 	prober := camera.NewFFProbe()
-	streamer := stream.NewGo2RTC("./data/go2rtc.yaml")
+	streamer := stream.NewGo2RTC("./data/go2rtc.yaml", stream.WithWebRTCCandidates(parsedWebRTCCandidates))
 	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
 	policyCoordinator := stream.NewApplyCoordinator(db, streamer, recorderManager)
 	cleaner := cleanup.New(db, *recordingsDir)

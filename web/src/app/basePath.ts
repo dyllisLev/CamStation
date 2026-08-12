@@ -1,4 +1,4 @@
-const rawBase = import.meta.env.BASE_URL || "/";
+const rawBase = import.meta.env?.BASE_URL || "/";
 
 export const appBasePath = rawBase.endsWith("/") ? rawBase.slice(0, -1) : rawBase;
 

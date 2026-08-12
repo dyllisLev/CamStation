@@ -59,6 +59,8 @@ type routeDeps struct {
 	cameraController  cameraControlService
 	presetLocks       *cameraPresetLockSet
 	activationMu      *sync.Mutex
+	playbackEvents    *playbackEventSink
+	playbackRateLimit *playbackEventRateLimiter
 }
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunnerOpt ...*backup.Runner) (http.Handler, error) {
@@ -108,6 +110,16 @@ func (d routeDeps) handler() (http.Handler, error) {
 	if d.viewerReleases == nil {
 		d.viewerReleases = viewerrelease.NewCatalog(d.viewerReleasesDir)
 	}
+	if d.playbackEvents == nil {
+		var err error
+		d.playbackEvents, err = defaultPlaybackEventSink()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if d.playbackRateLimit == nil {
+		d.playbackRateLimit = newPlaybackEventRateLimiter(playbackEventDefaultLimit, playbackEventDefaultWindow)
+	}
 	mux := http.NewServeMux()
 	previews := newPreviewRegistry()
 
@@ -122,6 +134,7 @@ func (d routeDeps) handler() (http.Handler, error) {
 	d.registerRecordingRoutes(mux)
 	d.registerBackupRoutes(mux)
 	d.registerEventIncidentRoutes(mux)
+	d.registerPlaybackDiagnosticRoutes(mux)
 	d.registerLegacyViewerCompatibilityRoute(mux)
 
 	liveProxy, err := go2RTCProxy(previews, func(ctx context.Context, streamName string) bool {

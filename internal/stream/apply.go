@@ -21,6 +21,10 @@ type policyRuntime interface {
 	PrepareConfig(context.Context, []byte) (runtimeConfigTransaction, error)
 }
 
+type policyConfigRenderer interface {
+	renderPolicyConfig([]store.Camera, bool) ([]byte, map[int64][]store.CameraOutputApplyResult, error)
+}
+
 type runtimeConfigTransaction interface {
 	Commit() error
 	Rollback(context.Context) error
@@ -89,6 +93,9 @@ func (c *ApplyCoordinator) apply(ctx context.Context, expected *expectedCameraRe
 		}
 		cameras := enabledCameras(allCameras)
 		config, results, err := renderPolicyConfig(cameras, false)
+		if renderer, ok := c.runtime.(policyConfigRenderer); ok {
+			config, results, err = renderer.renderPolicyConfig(cameras, false)
+		}
 		if err != nil {
 			c.markFailed(ctx, cameras, err)
 			return PolicyApplyResult{Pending: true, Error: err.Error()}

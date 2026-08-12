@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { withAppBase } from "../../app/basePath";
+import {
+  reportPlaybackDiagnostic,
+  type PlaybackDiagnosticEvent,
+} from "../../app/playbackDiagnosticsApi";
 import { parseMseControlMessage } from "./msePlayback";
 import {
   PLAYBACK_COOLDOWN_MS,
   PLAYBACK_SETUP_MS,
   PLAYBACK_STALL_MS,
   PlaybackRecovery,
+  recoveryAttemptPresentation,
   type PlaybackRecoveryStep,
   type PlaybackTransport,
 } from "./playbackRecovery";
@@ -73,6 +78,8 @@ export function useWebRtcMseStream(
     const video: HTMLVideoElement = videoElement;
 
     const recovery = new PlaybackRecovery(candidates);
+    const sessionId = newPlaybackSessionId();
+    const sessionStartedAt = Date.now();
     let destroyed = false;
     let generation = 0;
     let ws: WebSocket | null = null;
@@ -88,6 +95,9 @@ export function useWebRtcMseStream(
     let lastVideoTime = -1;
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
+    let attemptStartedAt = sessionStartedAt;
+    let diagnosticPhase: PlaybackPhase = "connecting";
+    const attemptEvents = new Set<PlaybackDiagnosticEvent>();
     let activeAttempt: AttemptOptions = {
       transport: preferredTransport,
       streamName: candidates[0],
@@ -95,6 +105,44 @@ export function useWebRtcMseStream(
       phase: "connecting",
     };
     const counts = { reconnect: 0, fallback: 0, resubscribe: 0 };
+
+    function emitDiagnostic(
+      event: PlaybackDiagnosticEvent,
+      override: {
+        readonly phase?: PlaybackPhase;
+        readonly errorCategory?: PlaybackErrorCategory;
+        readonly streamName?: string;
+        readonly transport?: PlaybackTransport;
+        readonly attempt?: number;
+      } = {},
+    ) {
+      const now = Date.now();
+      const streamName = override.streamName ?? activeAttempt.streamName;
+      reportPlaybackDiagnostic({
+        sessionId,
+        event,
+        streamName,
+        transport: override.transport ?? activeAttempt.transport,
+        phase: override.phase ?? diagnosticPhase,
+        attempt: override.attempt ?? activeAttempt.attempt,
+        elapsedMs: now - sessionStartedAt,
+        attemptElapsedMs: now - attemptStartedAt,
+        errorCategory: override.errorCategory ?? "none",
+        readyState: video.readyState,
+        usingFallback: streamName !== candidates[0],
+        reconnectCount: counts.reconnect,
+        fallbackCount: counts.fallback,
+      });
+    }
+
+    function emitAttemptDiagnosticOnce(
+      event: PlaybackDiagnosticEvent,
+      override?: Parameters<typeof emitDiagnostic>[1],
+    ) {
+      if (attemptEvents.has(event)) return;
+      attemptEvents.add(event);
+      emitDiagnostic(event, override);
+    }
 
     function clearTimers() {
       if (setupTimer) clearTimeout(setupTimer);
@@ -164,6 +212,11 @@ export function useWebRtcMseStream(
     }
 
     function enterCooldown(until: number, scheduleProbe = true) {
+      diagnosticPhase = "cooldown";
+      emitDiagnostic("episode_exhausted", {
+        phase: "cooldown",
+        errorCategory: "episode_exhausted",
+      });
       generation++;
       teardownAttempt();
       setPlayback((current) => ({
@@ -202,17 +255,27 @@ export function useWebRtcMseStream(
         }, errorCategory);
         return;
       }
-      if (step.transport === "webrtc") counts.reconnect++;
-      else counts.fallback++;
+      const presentation = recoveryAttemptPresentation(
+        step,
+        candidates[0],
+        activeAttempt.transport,
+      );
+      if (presentation.usingFallback) counts.fallback++;
+      else counts.reconnect++;
       beginAttempt({
         ...step,
-        phase: step.transport === "webrtc" ? "retrying" : "fallback",
+        phase: presentation.phase,
       }, errorCategory);
     }
 
     function failAttempt(token: number, errorCategory: PlaybackErrorCategory) {
       if (destroyed || token !== generation) return;
       const now = Date.now();
+      const failurePhase = errorCategory === "media_stall" ? "stalled" : diagnosticPhase;
+      emitDiagnostic("attempt_failed", { phase: failurePhase, errorCategory });
+      if (errorCategory === "unsupported") {
+        emitDiagnostic("unsupported", { phase: "unsupported", errorCategory });
+      }
       recovery.recordFailure(now);
       generation++;
       teardownAttempt();
@@ -234,6 +297,11 @@ export function useWebRtcMseStream(
       if (setupTimer) clearTimeout(setupTimer);
       setupTimer = null;
       resetStallTimer(token);
+      diagnosticPhase = "playing";
+      emitAttemptDiagnosticOnce("playback_started", {
+        phase: "playing",
+        errorCategory: "none",
+      });
       const budgetReset = recovery.recordProgress(now);
       if (budgetReset) {
         counts.reconnect = 0;
@@ -280,8 +348,15 @@ export function useWebRtcMseStream(
       }
       const token = ++generation;
       activeAttempt = options;
+      attemptStartedAt = now;
+      diagnosticPhase = options.phase;
+      attemptEvents.clear();
       terminalAttempt = terminal;
       publishAttempt(options, previousError);
+      emitDiagnostic("attempt_started", {
+        phase: options.phase,
+        errorCategory: previousError,
+      });
       setupTimer = setTimeout(
         () => failAttempt(token, "setup_timeout"),
         terminal ? PLAYBACK_SETUP_MS : recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
@@ -301,6 +376,7 @@ export function useWebRtcMseStream(
       connection.addTransceiver("audio", { direction: "recvonly" });
       connection.ontrack = (event) => {
         if (destroyed || token !== generation) return;
+        emitAttemptDiagnosticOnce("first_track");
         const media = video.srcObject instanceof MediaStream ? video.srcObject : new MediaStream();
         if (!media.getTracks().some((track) => track.id === event.track.id)) media.addTrack(event.track);
         video.srcObject = media;
@@ -326,6 +402,7 @@ export function useWebRtcMseStream(
           if (token !== generation) return;
           if (receiptAdvanced(previousReceipt, receipt)) {
             const now = Date.now();
+            emitAttemptDiagnosticOnce("first_media");
             setPlayback((current) => ({ ...current, lastBinaryAt: now, readyState: video.readyState }));
           }
           previousReceipt = receipt;
@@ -338,6 +415,7 @@ export function useWebRtcMseStream(
 
       ws = openPlayerSocket(streamName);
       ws.onopen = async () => {
+        emitAttemptDiagnosticOnce("socket_open");
         try {
           const offer = await connection.createOffer();
           await connection.setLocalDescription(offer);
@@ -357,6 +435,7 @@ export function useWebRtcMseStream(
           return;
         }
         if (message.type === "webrtc/answer" && typeof message.value === "string") {
+          emitAttemptDiagnosticOnce("signaling_answer");
           void connection.setRemoteDescription({ type: "answer", sdp: message.value }).catch(() => failAttempt(token, "signaling"));
         } else if (message.type === "webrtc/candidate" && typeof message.value === "string") {
           void connection.addIceCandidate({ candidate: message.value, sdpMid: "0" }).catch(() => failAttempt(token, "signaling"));
@@ -411,9 +490,11 @@ export function useWebRtcMseStream(
       source.addEventListener("error", () => failAttempt(token, "media"), { once: true });
       source.addEventListener("sourceopen", () => {
         if (destroyed || token !== generation) return;
+        emitAttemptDiagnosticOnce("media_source_open");
         ws = openPlayerSocket(streamName);
         ws.binaryType = "arraybuffer";
         ws.onopen = () => {
+          emitAttemptDiagnosticOnce("socket_open");
           ws?.send(JSON.stringify({ type: "mse", value: supportedCodecs(MediaSourceClass) }));
         };
         ws.onmessage = (event) => {
@@ -429,6 +510,7 @@ export function useWebRtcMseStream(
               sourceBuffer.mode = "segments";
               sourceBuffer.addEventListener("error", () => failAttempt(token, "media"));
               sourceBuffer.addEventListener("updateend", handleUpdateEnd);
+              emitAttemptDiagnosticOnce("mse_ready");
             } catch {
               failAttempt(token, "media");
             }
@@ -436,6 +518,7 @@ export function useWebRtcMseStream(
           }
 
           const now = Date.now();
+          emitAttemptDiagnosticOnce("first_media");
           if (now - lastBinaryStateAt >= 1_000) {
             lastBinaryStateAt = now;
             setPlayback((current) => ({ ...current, lastBinaryAt: now, readyState: video.readyState }));
@@ -464,6 +547,7 @@ export function useWebRtcMseStream(
     video.addEventListener("timeupdate", handleTimeUpdate);
     beginAttempt(activeAttempt);
     return () => {
+      emitDiagnostic("session_closed");
       destroyed = true;
       generation++;
       video.removeEventListener("timeupdate", handleTimeUpdate);
@@ -519,4 +603,11 @@ function openPlayerSocket(streamName: string) {
   return new WebSocket(
     `${protocol}://${location.host}${withAppBase(`/player/api/ws?src=${encodeURIComponent(streamName)}`)}`,
   );
+}
+
+function newPlaybackSessionId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `playback-${crypto.randomUUID()}`;
+  }
+  return `playback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
 }

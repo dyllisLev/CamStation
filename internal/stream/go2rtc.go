@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -19,14 +20,17 @@ import (
 )
 
 type Go2RTC struct {
-	binary     string
-	configPath string
-	apiURL     string
+	binary           string
+	configPath       string
+	apiURL           string
+	webrtcCandidates []string
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	applyMu sync.Mutex
 }
+
+type Go2RTCOption func(*Go2RTC)
 
 type Status struct {
 	Installed bool                     `json:"installed"`
@@ -43,12 +47,54 @@ type StreamRuntime struct {
 	ViewerCount   int    `json:"viewerCount"`
 }
 
-func NewGo2RTC(configPath string) *Go2RTC {
-	return &Go2RTC{
+func NewGo2RTC(configPath string, options ...Go2RTCOption) *Go2RTC {
+	g := &Go2RTC{
 		binary:     "go2rtc",
 		configPath: configPath,
 		apiURL:     "http://127.0.0.1:1984",
 	}
+	for _, option := range options {
+		if option != nil {
+			option(g)
+		}
+	}
+	return g
+}
+
+func WithWebRTCCandidates(candidates []string) Go2RTCOption {
+	return func(g *Go2RTC) {
+		g.webrtcCandidates = append([]string(nil), candidates...)
+	}
+}
+
+func ParseWebRTCCandidates(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 8 {
+		return nil, fmt.Errorf("at most 8 WebRTC candidates are allowed")
+	}
+	seen := make(map[string]bool, len(parts))
+	candidates := make([]string, 0, len(parts))
+	for index, part := range parts {
+		candidate := strings.TrimSpace(part)
+		address, err := netip.ParseAddrPort(candidate)
+		if err != nil || address.Port() == 0 {
+			return nil, fmt.Errorf("invalid WebRTC candidate at position %d", index+1)
+		}
+		ip := address.Addr().Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return nil, fmt.Errorf("WebRTC candidate at position %d is not externally reachable", index+1)
+		}
+		address = netip.AddrPortFrom(ip, address.Port())
+		canonical := address.String()
+		if !seen[canonical] {
+			seen[canonical] = true
+			candidates = append(candidates, canonical)
+		}
+	}
+	return candidates, nil
 }
 
 func (g *Go2RTC) Ensure(ctx context.Context, cameras []store.Camera) error {
@@ -100,7 +146,7 @@ func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
 		}
 	}
 	if !preserve {
-		config, err := renderStartupConfig(cameras)
+		config, err := g.renderStartupConfig(cameras)
 		return config, false, err
 	}
 	if hadDisabled {
@@ -110,7 +156,7 @@ func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
 				applied = append(applied, camera)
 			}
 		}
-		config, err := renderStartupConfig(applied)
+		config, err := g.renderStartupConfig(applied)
 		return config, false, err
 	}
 	for _, path := range []string{g.configPath + ".last-good", g.configPath} {
@@ -166,7 +212,7 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 }
 
 func (g *Go2RTC) Restart(ctx context.Context, cameras []store.Camera) error {
-	config, _, err := renderPolicyConfig(cameras, false)
+	config, _, err := g.renderPolicyConfig(cameras, false)
 	if err != nil {
 		return err
 	}

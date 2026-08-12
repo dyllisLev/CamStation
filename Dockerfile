@@ -79,7 +79,7 @@ ENV HOME=/var/lib/camstation \
     CAMSTATION_VIEWER_RELEASES_DIR=/var/lib/camstation/data/viewer-releases \
     CAMSTATION_RECORDING_ENABLED=false
 
-EXPOSE 18080/tcp
+EXPOSE 18080/tcp 8555/tcp 8555/udp
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:18080/api/health || exit 1
 
