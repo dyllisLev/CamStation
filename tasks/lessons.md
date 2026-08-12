@@ -1,5 +1,112 @@
 # Lessons
 
+## 2026-08-12 — 1.x→2.0 전환에서 보존 범위와 화면 합격 기준을 별개로 확인한다
+
+- 사용자가 “기존 데이터는 필요 없고 카메라 연결정보만 가져온다”고 말해도 최종 목표가 “현재
+  화면처럼 모든 카메라를 본다”면 표시 레이아웃은 별도의 필수 제품 상태다. recordings metadata,
+  일반 settings, backup mark/history, Viewer registry는 제외하되 카메라 identity/enabled/input과
+  현재 승인된 layout geometry는 함께 이관한다.
+- rollback을 위한 1.x DB/media 보존과 2.0 데이터 이관은 별개다. 원본 snapshot은 보존하되 2.0 DB에
+  섞지 않으며, camera+layout import 후 녹화·backup·Viewer 이력이 유입되지 않았음을 명시적으로
+  검증한다. 최종 acceptance는 row 수가 아니라 모니터링 PC 전체 화면에서 활성 카메라가 기존과 같은
+  배치로 모두 실제 재생되는지로 판정한다.
+- 모니터링 PC의 현재 1.0 프로세스 집합은 전환 전 관찰값이지 새 PC profile의 영구 불변식이 아니다.
+  사용자가 clean 2.0 전환을 승인하면, profile은 여전히 machine/user/session만 식별하고 별도 전환
+  runbook이 1.0 정상 종료·자동시작/제품 잔여물 제거와 Viewer 2.0 단독 실행 상태를 검증해야 한다.
+- "카메라 연결정보만"은 URL 문자열만 복사한다는 뜻으로 축소하지 않는다. 카메라 identity/name,
+  stable stream key, enabled 상태와 입력 정의가 하나의 연결 graph이며, 현재 화면을 유지하라는 요구가
+  있으면 layout geometry는 별도의 명시적 이관 대상이다. 반대로 녹화·일반 설정·backup·Viewer
+  history를 편의상 함께 복사해서는 안 된다.
+
+## 2026-08-12 — 빠른 WinPC 제어는 정상 경로뿐 아니라 실패 복구와 결과 경계까지 정규화한다
+
+- PowerShell 5.1에서는 JSON 배열이 원소 하나일 때 함수 경계를 지나 스칼라로 풀리고,
+  `Get-Process`와 WMI 프로세스 객체의 PID 속성도 각각 `Id`와 `ProcessId`로 다르다. plan reference는
+  숫자 segment를 항상 컬렉션 인덱스로 해석하고, launcher가 관리자 권한으로 경로·세션을 검증한
+  뒤 worker에는 정규화한 PID만 넘겨야 한다.
+- PowerShell 5.1의 success pipeline에서 `if { @() } else { @() }` 결과를 바로 대입하면 빈 배열이
+  `$null`로 사라져 StrictMode의 `.Count`가 실패할 수 있다. fresh-install처럼 빈 컬렉션이 정상인
+  경로는 먼저 `@()`로 초기화하고 조건문 안에서만 다시 대입하며, 실제 5.1 호스트에서 검증한다.
+- 설치 파일의 전체 SHA가 고정돼도 fresh-install 추출 구조를 테스트하지 않으면 최상위 디렉터리를
+  예상하지 못해 배포 현장에서 실패할 수 있다. 고정 ZIP의 정확한 root 이름, 직속 6개 파일 이름,
+  하위 디렉터리 0개와 개별 해시를 함께 검사하고 그 payload 디렉터리만 원자적으로 승격한다.
+- 대화형 세션 설정을 여러 Scheduled Task action으로 한꺼번에 묶으면 어떤 공급자 명령이 실패했는지
+  결과 경계가 흐려진다. 특히 임시 Scheduled Task 안에서 공급자의 `autostart enable`을 실행하면
+  Windows 11에서 작업 스케줄러를 재진입해 교착될 수 있다. 사용자별 `telemetry disable`만 단일
+  임시 작업으로 실행하고, 고정 버전의 정상 PC에서 확인한 정확한 vendor task 정의는 관리자
+  세션에서 등록·검증한 뒤 그 작업을 직접 시작한다.
+- idempotent setup이 이미 `telemetry_enabled=false`인 PC에서도 공급자 명령을 다시 실행하면 NUC에서
+  약 55초가 걸리고 임시 작업 정리에 추가 시간이 든다. 현재 사용자 설정이 이미 목표값이면 이
+  mutation을 생략하고, 같은 실행에서 검증한 파일 보고서는 이동 뒤 다시 전부 해시하지 않고 최종
+  파일 수와 함께 재사용한다. 상세 진단은 고정 경로의 선택형 progress marker로만 켠다.
+- native driver stdout이 JSON으로 파싱되더라도 UIA title/value에 비정상 Unicode가 섞이면
+  PowerShell 재직렬화 결과가 깨질 수 있다. driver stdout은 raw bytes로 읽어 strict UTF-8 우선,
+  Windows ANSI fallback과 SHA를 기록하고, `complete.json`에는 UIA tree/value 대신 숫자·geometry·
+  effect 중심의 안전한 요약만 보존한다.
+- `effect=unverifiable`은 screenshot 또는 filtered assertion으로만 성공 판정한다. 단순히
+  `verifyWith` 이름이 있다는 것으로 부족하며, 그 관찰 단계에 실제 screenshot이나 assertion이
+  연결돼 있어야 한다.
+- 실패 시 task/run만 지우면 충분하지 않다. `launch_app` 이후 중간 단계가 실패하면 창 자체가
+  남을 수 있고 UWP는 WM_CLOSE 뒤 HWND를 바꾸기도 한다. disposable launch에 명시적으로
+  `closeWindowOnFailure`를 설정하고 fresh UIA titlebar close, 원래 geometry와 새 HWND까지 재검사한
+  뒤 `RemainingWindowIds=[]`를 요구한다.
+- 매번 전체 방화벽·예약 작업 store를 열거하면 간단한 제어의 preflight가 느려진다. 정상 경로는
+  COM task 조회, netstat, 고정 firewall registry 범위로 빠르게 검사하고, 전체 ActiveStore 감사는
+  명시적인 `FullAudit` 모드로 분리하되 둘의 결과가 같은지 실제 PC에서 주기적으로 대조한다.
+
+## 2026-08-12 — 동일한 WinPC 제어 경로를 Viewer와 범용 조작으로 분리하지 않는다
+
+- Viewer 캡처와 일반 PC 조작은 모두 pinned SSH, active Explorer session, InteractiveToken task,
+  interactive driver, observe/act/verify, cleanup이라는 같은 기반을 쓴다. 트리거만 다른 스킬 두
+  개로 나누면 세션·보안·실패 처리 규칙이 갈라지고 단순 조작 때 하네스를 다시 발명하게 된다.
+- 기존 프로젝트 스킬을 범용 WinPC 제어 스킬로 승격하고 Viewer exact-window 검증은 그 안의
+  제한된 모드로 유지한다. 설치, 진단, 화면 조회, 입력, 창 제어와 Viewer 증거 수집은 같은
+  launcher/worker 경계를 재사용해야 한다.
+- 단순 PC 조작에 51분이 걸렸다면 개별 명령을 더 잘 외우는 것이 해결책이 아니다. 반복되는
+  예약 작업·JSON quoting·UTF-8·Session 0/1·결과 회수·정리를 결정론적 batch runner로 숨기고,
+  agent는 짧은 plan과 사후 화면 판정에만 집중하게 만든다.
+
+## 2026-08-12 — Windows computer-use는 세션 경계와 사후 화면을 함께 검증한다
+
+- 테스트 PC 전 권한 승인은 대상 VM 안의 정상 조작 범위를 넓혀 주지만, 외부 listener·방화벽
+  규칙·저장 자격증명이나 보호 해제를 자동으로 허용한다는 뜻은 아니다. host-key 고정 SSH와
+  로그인된 대화형 세션의 local named pipe를 유지하고, 일반 조작에는 driver의 `standard` 모드를
+  사용한다.
+- SSH 유지보수 계정과 대화형 사용자가 다르면 사용자별 named pipe ACL을 약화하지 않는다.
+  공급자 daemon은 정확한 interactive session에서 실행하고, SSH 쪽 명령은 사용자·세션을 고정한
+  일회성 `InteractiveToken` 작업으로 전달한 뒤 반드시 삭제한다.
+- Windows PowerShell 5.1은 여러 필드가 있는 positional JSON 인수의 field-name 따옴표를 제거할 수
+  있다. `cua-driver call` JSON은 stdin으로 전달하고, 명령 경계를 넘길 때는 identity/session/exit
+  code를 같이 회수한다.
+- native driver가 UTF-8 JSON 안에 한글 창 제목을 반환할 때 Windows PowerShell 5.1의 기본 console
+  encoding으로 받으면 문자열과 JSON closing quote가 손상될 수 있다. 호출 worker의
+  `Console.InputEncoding`, `Console.OutputEncoding`, `$OutputEncoding`을 UTF-8로 먼저 고정한다.
+- driver의 `effect=unverifiable`과 프로세스 종료 코드 0은 실제 조작 성공이 아니다. 이번에는
+  desktop-scope `Win+R`과 문자 입력이 0을 반환했지만 화면에는 아무 변화가 없었다. 클릭·키·창
+  전환 뒤에는 새 UIA snapshot 또는 실제 screenshot을 반드시 취하고, 검증된 실패일 때만
+  foreground나 다른 정상 Windows 경로로 올린다.
+- UIA의 `max_elements`는 반환 노드 수만 제한할 뿐 탐색 순서나 `value` 속성 수집을 제목 표시줄로
+  제한하지 않는다. 기존 문서가 열릴 수 있는 앱에서는 `get_window_state`를 안전한 title-bar
+  조회로 가정하지 말고 `list_windows`나 정확한 창 캡처를 우선한다. 예상 밖의 값이 반환되면
+  즉시 조회를 멈추고 산출물을 삭제한다.
+- RDP 화면 크기는 reconnect 이벤트 없이도 동적으로 바뀔 수 있다. 과거 캡처의 해상도나 창
+  좌표를 재사용하지 말고 매 동작 직전에 현재 화면·창 geometry를 다시 읽는다.
+- mutable 설치 스크립트를 바로 실행하지 않는다. 공식 릴리스 버전과 전체 archive SHA-256을
+  고정하고 설치 후 개별 파일 해시를 다시 확인한다. Authenticode가 `NotSigned`이면 공식 archive
+  해시 일치와 별개로 그 제한을 사용자에게 명시한다.
+
+## 2026-08-12 — WinPC 유지보수 제어와 Viewer 제품 명령을 구분한다
+
+- 사용자가 WinPC 제어·캡처 문맥에서 창 최대화나 전체화면 제어를 묻는 경우, 서버의 Viewer
+  원격 명령 기능으로 해석하지 않는다. Windows 대화형 세션의 검증된 창 핸들과 제한된 UI
+  Automation 조작으로 가능한지 먼저 판단한다.
+- `SW_MAXIMIZE`/`SW_RESTORE`로 다루는 Windows 최대화와 Electron 애플리케이션의 전체화면은
+  별개다. 전체화면은 검증된 Viewer 창 안의 명시적 전체화면 컨트롤을 제한적으로 호출한다.
+- 캡처 절차가 무조건 `SW_RESTORE`를 호출하면 관찰하려는 최대화 상태를 훼손한다. 창 상태를
+  제어·검증할 때는 목표 모드를 설정한 뒤 그 상태를 보존하는 캡처 경로와 사후 화면 증거를 쓴다.
+- 최대화처럼 명백한 일회성 PC 조작을 Viewer 제품 기능이나 영구적인 캡처 도구 기능 개발로
+  확대하지 않는다. 기존 대화형 세션에서 검증된 한 창에 Windows 명령 한 번만 적용하고 정리한다.
+
 ## 2026-08-12 — 최종 반영은 실제 package·runtime 경계로 판정한다
 
 - Viewer 관련 파일이 바뀌었다는 이유만으로 MSI 버전을 올리지 않는다. 수락한 게시 revision과
@@ -602,3 +709,71 @@
 - A successful feature-branch suite is not merge proof. Rerun the complete repository check after
   conflict resolution; this also proves target-only tests for read-only registry and Settings MSI
   delivery coexist with the new Viewer command tests.
+
+## 2026-08-12 — Separate Windows CPU saturation from zombie suspicion
+
+- Windows does not have the Unix zombie-process state. Diagnose the operator's "zombie" suspicion
+  with the focused process tree, parent PID presence, one-shot scheduled tasks, run artifacts, and
+  application responsiveness; an intentionally detached session daemon is not a zombie merely
+  because its launcher has exited.
+- Normalize `Win32_PerfFormattedData_PerfProc_Process.PercentProcessorTime` by the number of logical
+  processors and corroborate it with repeated `_Total` samples. Do not report an unnormalized sum of
+  `Get-Process` CPU deltas as machine utilization.
+- Capacity and pressure are different. Free disk space does not rule out an I/O bottleneck, and
+  installed RAM does not rule out memory pressure; verify disk busy time/queue, available/committed
+  memory, and paging alongside CPU.
+- On a four-logical-CPU monitoring PC, video renderer/GPU work plus active remote-screen encoding can
+  saturate the machine while every control process is healthy. Establish this resource baseline
+  before attributing slow SSH, PowerShell, or Task Scheduler responses to the control harness.
+- On a saturated Windows target, prefer one bounded encoded PowerShell diagnostic with focused CIM
+  queries over broad `tasklist` or repeated Task Scheduler enumeration. Record and distinguish an
+  empty interrupted-run directory from an executing task or process.
+
+## 2026-08-12 — Make Windows UI selection tolerant but exact
+
+- A selector over a heterogeneous accessibility collection must treat a candidate that lacks one
+  requested property as a non-match, not abort the entire selection. Keep zero and multiple matches
+  fail-closed, and protect the missing-property behavior with a regression test.
+- Before writing a control plan, read the exact driver output contract or the already-proven
+  canonical cleanup code. Do not infer property names such as `index`; the title-bar contract here
+  is `element_index`. Likewise, do not infer a localized close label when a stable role/index token
+  is available.
+- Match every observation option used by a proven cleanup path. `include_screenshot`, element limit,
+  and depth can change the returned accessibility subset, so a selector is only reusable when its
+  observation contract is the same.
+- A successful window close can leave a disposable UWP `ApplicationFrameHost` alive without a
+  window. Record the exact launch PID, verify the target window count is zero, and clean only that
+  PID before declaring the control host residue-free.
+- On this four-logical-CPU monitoring PC, ending the active AnyDesk session and stopping its service
+  reduced repeated total CPU from 100% to roughly one third and cut standard control Status from
+  about 20 seconds to about 2.2 seconds. Always measure the same counters before and after changing
+  a remote-display workload.
+
+## 2026-08-12 — Keep application rollout policy out of the PC-control skill
+
+- Do not encode a Viewer version, migration stage, or application rollout goal in a generic Windows
+  PC target profile. Those belong to the deployment request and its runbook. The control profile
+  should contain only stable connection, machine identity, interactive-session, and display facts;
+  observe application state fresh for each request.
+- Enforce that boundary across the skill description, trigger phrases, loaded references, target
+  notes, and regression tests—not only the profile JSON. A rollout runbook linked from a generic
+  control skill still mixes deployment policy into PC control even if the profile itself is neutral.
+- Do not pass growing preflight/status programs as a Windows OpenSSH `-EncodedCommand`. Adding only a
+  few canonical file checks can cross the Windows remote-command length limit and make every target
+  fail before identity verification. Keep the SSH command fixed and short with an encoded bootstrap
+  that reads all of stdin, and send the trusted script source over stdin. Plain `-Command -` is not a
+  drop-in replacement on Windows PowerShell 5.1 because it can emit interactive prompts around JSON.
+- A Windows-control skill must preserve the technical execution contract, not only policy prose.
+  Document exact target resolution, pinned SSH and identity/session preflight, interactive-token
+  execution, Cua/UIA selector contracts, background-to-foreground escalation, screenshot scope,
+  process ownership, artifact hashes, and exact cleanup so a later agent can operate quickly without
+  re-deriving the machinery.
+- The same Cua binary can enumerate windows on two PCs while `get_desktop_state` serializes correctly
+  only on the physical-display host and returns non-JSON on a VM's Basic Display Adapter. Narrow a
+  failure with `get_screen_size`/`list_windows`, compare driver hashes and display adapters, then use
+  an interactive-session GDI fallback only for the known invalid desktop-JSON response. Record the
+  fallback capture mode and keep all other driver, identity, timeout, and session failures closed.
+- Explorer/session IDs alone do not prove an operable desktop: a disconnected RDP session retains
+  Explorer and UIA-visible windows while desktop serialization returns non-JSON and GDI capture fails
+  with an invalid handle. Read the locale-independent WTS connection-state enum and require `Active`
+  before screenshot, foreground input, or visually verified GUI control.

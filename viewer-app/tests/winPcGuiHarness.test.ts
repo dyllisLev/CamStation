@@ -29,6 +29,10 @@ test("Windows GUI worker captures only the verified Viewer window and omits fiel
   assert.match(source, /C:\\Program Files\\CamStation Viewer\\CamStationViewer\.exe/u);
   assert.match(source, /SessionId\s*-ne\s*\$sessionId/u);
   assert.match(source, /GetWindowRect/u);
+  assert.match(source, /IsIconic/u);
+  assert.match(source, /IsZoomed/u);
+  assert.match(source, /exact capture refuses to change its placement/u);
+  assert.doesNotMatch(source, /ShowWindowAsync\(\$handle,\s*9\)/u);
   assert.match(source, /PrintWindow/u);
   assert.match(source, /CopyFromScreen\(\$rectangle\.Left, \$rectangle\.Top/u);
   assert.match(source, /UIAutomationClient/u);

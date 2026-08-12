@@ -1,4 +1,0 @@
-interface:
-  display_name: "CamStation Windows GUI Verification"
-  short_description: "Capture and verify the CamStation Viewer GUI"
-  default_prompt: "Use $verify-windows-viewer-gui to launch or recapture CamStation Viewer on an authorized Windows host and inspect the returned GUI evidence."

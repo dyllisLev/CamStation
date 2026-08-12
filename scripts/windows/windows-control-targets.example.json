@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "test-pc": {
+      "host": "test-pc-ssh.invalid",
+      "port": 22,
+      "maintenanceUser": "CamStationBuildOps",
+      "identityFile": "/secure/keys/test-pc-ed25519",
+      "knownHostsFile": "/secure/known-hosts/test-pc",
+      "expectedMachine": "WIN11-DELL",
+      "expectedMaintenanceIdentity": "WIN11-DELL\\CamStationBuildOps",
+      "targetUser": "WIN11-DELL\\dyllislev",
+      "expectedSessionId": 1,
+      "remoteProjectRoot": "C:\\CamStationDev\\src\\CamStation"
+    },
+    "monitoring-pc": {
+      "host": "monitoring-pc-ssh.invalid",
+      "port": 22,
+      "maintenanceUser": "CamStationOps",
+      "identityFile": "/secure/keys/monitoring-pc-ed25519",
+      "knownHostsFile": "/secure/known-hosts/monitoring-pc",
+      "expectedMachine": "NUC",
+      "expectedMaintenanceIdentity": "NUC\\CamStationOps",
+      "targetUser": "NUC\\dyllislev",
+      "expectedSessionId": 1,
+      "remoteProjectRoot": "C:\\CamStationDev\\src\\CamStation"
+    }
+  }
+}
