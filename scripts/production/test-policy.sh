@@ -46,14 +46,18 @@ grep -Fq 'CAMSTATION_ADDR=127.0.0.1:18080' "$ROOT_DIR/packaging/systemd/camstati
 grep -Fq 'CAMSTATION_RECORDINGS_DIR=/mnt/hdd/camstation2/recordings' "$ROOT_DIR/packaging/systemd/camstationd-2x.env.example"
 grep -Fq 'include /etc/nginx/camstation/active-backend.inc;' "$ROOT_DIR/packaging/nginx/camstation-server.conf"
 grep -Fq 'CAMSTATION_ADDR: 0.0.0.0:18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
-grep -Fq 'target: 18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
-grep -Fq 'published: "${CANARY_HTTP_PORT:-18081}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
-grep -Fq 'host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
-grep -Fq 'CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+test "$(grep -Fc 'target: 18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
+test "$(grep -Fc 'published: "${CANARY_HTTP_PORT:-18081}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
+test "$(grep -Fc 'host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 1
+test "$(grep -Fc 'host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 3
+grep -Fq 'CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
 grep -Fq 'CAMSTATION_PLAYBACK_LOG_LEVEL: "${CAMSTATION_PLAYBACK_LOG_LEVEL:-info}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
 test "$(grep -Fc 'target: 8555' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 test "$(grep -Fc 'published: "${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 grep -A5 -F 'name: webrtc-tcp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: tcp'
 grep -A5 -F 'name: webrtc-udp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: udp'
+grep -A5 -F 'name: http-management' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"'
+grep -A5 -F 'name: http-monitor' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"'
+grep -Fq 'CANARY_MONITOR_BIND_IP=192.168.0.160' "$ROOT_DIR/packaging/docker/canary.env.example"
 
 printf 'production policy checks passed\n'

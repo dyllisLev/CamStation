@@ -22,23 +22,28 @@ services:
       CAMSTATION_RECORDING_ENABLED: "true"
       CAMSTATION_SEGMENT_MINUTES: "1"
       CAMSTATION_MAX_STORAGE_GB: "20"
-      CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"
+      CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"
       CAMSTATION_PLAYBACK_LOG_LEVEL: "${CAMSTATION_PLAYBACK_LOG_LEVEL:-info}"
     ports:
-      - name: http
+      - name: http-management
         target: 18080
         published: "${CANARY_HTTP_PORT:-18081}"
         host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"
         protocol: tcp
+      - name: http-monitor
+        target: 18080
+        published: "${CANARY_HTTP_PORT:-18081}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
+        protocol: tcp
       - name: webrtc-tcp
         target: 8555
         published: "${CANARY_WEBRTC_PORT:-18555}"
-        host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
         protocol: tcp
       - name: webrtc-udp
         target: 8555
         published: "${CANARY_WEBRTC_PORT:-18555}"
-        host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
         protocol: udp
     volumes:
       - type: bind

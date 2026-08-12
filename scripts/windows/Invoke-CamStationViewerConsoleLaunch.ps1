@@ -8,7 +8,11 @@ param(
   [ValidateLength(1, 128)]
   [string]$DisplayName,
 
-  [string]$ResultPath
+  [bool]$AutoStart = $true,
+
+  [string]$ResultPath,
+
+  [switch]$ConfigureOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +42,7 @@ try {
     payload = [ordered]@{
       serverUrl = $ServerUrl
       displayName = $DisplayName
-      autoStart = $true
+      autoStart = $AutoStart
     }
   }
   $writer.WriteLine(($request | ConvertTo-Json -Compress -Depth 4))
@@ -47,6 +51,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($responseLine)) { Complete-ConsoleLaunch 30 }
   $response = $responseLine | ConvertFrom-Json
   if (-not $response.ok) { Complete-ConsoleLaunch 31 }
+  if ($ConfigureOnly) { Complete-ConsoleLaunch 0 }
 
   $phase = 40
   $viewerPath = Join-Path $env:ProgramFiles "CamStation Viewer\\CamStationViewer.exe"

@@ -1997,3 +1997,60 @@
   `.env.pre-webrtc-20260812-113427.bak`, `compose.yaml.pre-webrtc-20260812-113427.bak`을
   보존했다. 첫 재생은 5초 timeout 전 단일 attempt로 복구됐지만 on-demand public output과
   keyframe 준비 때문에 측정상 2.9~4.4초는 남는다.
+
+---
+
+# 2026-08-12 Docker WebRTC 192 대역 경로 교정
+
+## 범위와 계획
+
+- [x] 기존 검증이 10 대역 candidate에 한정됐음을 확인하고 서버의 192 대역 주소·포트 기준선을 수집한다.
+- [x] 기존 WIN11-DELL 테스트 PC의 192 대역 주소와 source route를 확인한다.
+- [x] Docker Compose가 10/192 HTTP bind와 단일 192 WebRTC candidate를 명시적으로 지원하도록
+      failing-first policy test와 최소 변경을 구현한다.
+- [x] 카나리만 재생성하고 192 대역 publish, candidate, health, rollback과 1.0 연속성을 검증한다.
+- [x] WIN11-DELL의 192 인터페이스와 192 서버 주소로 첫 WebRTC attempt·구조화 로그·실제 GUI를 검증한다.
+- [x] 운영 문서와 lessons를 교정하고 전체 회귀 검사·최종 커밋을 완료한다.
+
+## 합격 기준
+
+- [x] 192 대역 전용 클라이언트가 `192.168.0.160:18081`에 접속하고
+      `192.168.0.160:18555` WebRTC candidate로 재생한다.
+- [x] 테스트 PC의 실제 source address가 192 대역인 상태에서 세 카메라가 첫 WebRTC attempt로 재생된다.
+- [x] 10 대역 관리 경로, Docker 보안·저장소 경계, 녹화기와 기존 1.0 서비스가 유지된다.
+- [x] Windows Viewer 설정·Service·interactive session을 보존하고 GUI harness task/worker를 모두 정리한다.
+
+## Review
+
+- WIN11-DELL의 실제 주소는 `192.168.0.178/24`이고 source-bound probe로 서버
+  `192.168.0.160:18081` health 및 18081/18555 TCP 도달성을 확인했다. 서버 `eth1`에서는
+  이 source가 `192.168.0.160:18555/udp`로 만든 실제 흐름 세 개가 관측됐다.
+- 카나리의 최종 publish는 HTTP `10.0.0.26:18081`·`192.168.0.160:18081`, WebRTC
+  `192.168.0.160:18555/tcp+udp`이며 candidate는 192 주소 한 개다. API `1984`와 RTSP
+  `8554`, 10 대역 WebRTC는 공개하지 않는다.
+- 첫 배포는 BusyBox `grep` 검증기 사용 오류로 실패했으며 자동 롤백 뒤 이전 port/candidate,
+  health, restart 0과 stage 정리를 증명했다. 검증기를 교정한 두 번째 배포는 성공했고 root 전용
+  `.env.pre-monitor-192-20260812-125110.bak`과
+  `compose.yaml.pre-monitor-192-20260812-125110.bak`을 보존했다.
+- Viewer의 저장 주소만 `http://192.168.0.160:18081`로 바꾸고 ID·표시명·AutoStart=false,
+  Service와 session 1을 보존했다. 기존 Viewer가 새 주소를 읽도록 `restart_viewer` 한 건을
+  실행해 최종 `succeeded`를 확인했다.
+- 최종 세 session은 모두 WebRTC attempt 1에서 0.712~1.102초에 재생됐고 retry, MSE,
+  stream fallback은 각각 0이었다. 구조화 event 18건의 금지 URL/SDP/ICE/자격증명 패턴과
+  error/fatal/panic도 0이었다.
+- 실제 GUI 원본에서 영상과 카메라 control 3개, 재연결·대체 스트림 overlay 부재를 확인했다.
+  최종 evidence SHA-256은 PNG
+  `57918f52dd239bbc8b22905af2b8c3d14ce0aa3e95f086777044a5fe8bfc40fa`, UIA
+  `489ef95db9896e2c07b9418dc275c6c7ed2a4d5fb5df7e880660aa223bc05a6f`, complete JSON
+  `e8d43baaa9aff09ed1c3f1138608dcafbcad3a40979d0dfd4979eb058e59e94b`이며 capture/config
+  task와 worker는 모두 0으로 정리됐다.
+- 컨테이너 healthy/restart 0, 카메라 3/3 streaming, recorder 3/3 running, active 녹화 3개
+  증가, UID/GID·read-only·PID/memory/CPU·mount 경계와 기존 1.0 핵심 5개 service PID/restart
+  기준을 유지했다.
+- `./scripts/check-dev.sh`의 Go 전 패키지, Web 64 tests·lint·build, Viewer 38 tests·build,
+  production policy, exact Compose JSON render, 변경 문서 link, diff secret-pattern 및
+  `git diff --check`를 통과했다. 로컬에 `pwsh`가 없어 PowerShell AST 검사는 생략했지만 같은
+  helper의 원격 parser error 0과 실제 `ConfigureOnly` 성공을 확인했다.
+- 지연 재점검에서도 운영 container는 healthy/restart 0이고 정확한 dual HTTP·192 WebRTC
+  publish/candidate와 보안 한계를 유지했다. 테스트 PC도 source-bound 192 health 성공,
+  Viewer Service running, Viewer process 4, Explorer session 1, capture/config task 0이었다.
