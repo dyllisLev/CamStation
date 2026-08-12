@@ -1,0 +1,187 @@
+package viewerrelease
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode"
+)
+
+var (
+	ErrUnavailable = errors.New("viewer release unavailable")
+	ErrInvalid     = errors.New("viewer release invalid")
+)
+
+const (
+	MSIInstallerFilename       = "CamStationViewer.msi"
+	LegacyEXEInstallerFilename = "CamStationViewerSetup.exe"
+)
+
+type Release struct {
+	Version             string    `json:"version"`
+	Filename            string    `json:"filename"`
+	SizeBytes           int64     `json:"sizeBytes"`
+	SHA256              string    `json:"sha256"`
+	PublishedAt         time.Time `json:"publishedAt"`
+	DevelopmentUnsigned bool      `json:"developmentUnsigned"`
+	rootDir             string
+	releaseDir          string
+}
+
+func Load(rootDir string) (Release, error) {
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		return Release{}, ErrUnavailable
+	}
+	defer root.Close()
+	releaseDir, err := selectedReleaseDir(root)
+	if err != nil {
+		return Release{}, err
+	}
+	current, err := root.OpenRoot(releaseDir)
+	if err != nil {
+		return Release{}, currentRootError(err)
+	}
+	defer current.Close()
+	manifest, err := current.Open("release.json")
+	if err != nil {
+		return Release{}, ErrUnavailable
+	}
+	defer manifest.Close()
+
+	var release Release
+	decoder := json.NewDecoder(manifest)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&release); err != nil {
+		return Release{}, ErrInvalid
+	}
+	if err := ensureJSONEnd(decoder); err != nil || !release.validManifest() {
+		return Release{}, ErrInvalid
+	}
+	release.rootDir = rootDir
+	release.releaseDir = releaseDir
+
+	file, err := release.OpenVerified()
+	if err != nil {
+		return Release{}, err
+	}
+	_ = file.Close()
+	return release, nil
+}
+
+func (r Release) DownloadURL() string {
+	return "/api/viewers/app/download"
+}
+
+func (r Release) SupportsAgentUpdate() bool {
+	return r.Filename == LegacyEXEInstallerFilename
+}
+
+func (r Release) OpenVerified() (*os.File, error) {
+	if !r.validManifest() {
+		return nil, ErrInvalid
+	}
+	root, err := os.OpenRoot(r.rootDir)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer root.Close()
+	releaseDir := r.releaseDir
+	if releaseDir == "" {
+		releaseDir = "current"
+	}
+	current, err := root.OpenRoot(releaseDir)
+	if err != nil {
+		return nil, currentRootError(err)
+	}
+	defer current.Close()
+	file, err := current.Open(r.Filename)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	valid := false
+	defer func() {
+		if !valid {
+			_ = file.Close()
+		}
+	}()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	if !info.Mode().IsRegular() || info.Size() != r.SizeBytes {
+		return nil, ErrInvalid
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return nil, ErrUnavailable
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != r.SHA256 {
+		return nil, ErrInvalid
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, ErrUnavailable
+	}
+	valid = true
+	return file, nil
+}
+
+func selectedReleaseDir(root *os.Root) (string, error) {
+	info, err := root.Lstat("current/active")
+	if errors.Is(err, os.ErrNotExist) {
+		return "current", nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", ErrInvalid
+	}
+	target, err := root.Readlink("current/active")
+	if err != nil || filepath.IsAbs(target) {
+		return "", ErrInvalid
+	}
+	releaseDir := filepath.Clean(filepath.Join("current", target))
+	if filepath.Dir(releaseDir) != "releases" {
+		return "", ErrInvalid
+	}
+	info, err = root.Lstat(releaseDir)
+	if err != nil || !info.Mode().IsDir() {
+		return "", ErrInvalid
+	}
+	return releaseDir, nil
+}
+
+func (r Release) validManifest() bool {
+	if !validInstallerFilename(r.Filename) || filepath.IsAbs(r.Filename) || strings.ContainsAny(r.Filename, `/\`) || strings.IndexFunc(r.Filename, unicode.IsControl) >= 0 {
+		return false
+	}
+	if r.SizeBytes <= 0 || len(r.SHA256) != sha256.Size*2 || strings.ToLower(r.SHA256) != r.SHA256 {
+		return false
+	}
+	_, err := hex.DecodeString(r.SHA256)
+	return err == nil
+}
+
+func validInstallerFilename(filename string) bool {
+	return filename == MSIInstallerFilename || filename == LegacyEXEInstallerFilename
+}
+
+func currentRootError(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return ErrInvalid
+}
+
+func ensureJSONEnd(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return ErrInvalid
+	}
+	return nil
+}

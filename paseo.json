@@ -1,0 +1,27 @@
+{
+  "worktree": {
+    "setup": "./scripts/setup-dev.sh",
+    "servicePorts": {
+      "range": "20000-20999"
+    }
+  },
+  "scripts": {
+    "setup": {
+      "command": "./scripts/setup-dev.sh"
+    },
+    "daemon": {
+      "type": "service",
+      "command": "./scripts/dev-daemon.sh"
+    },
+    "web": {
+      "type": "service",
+      "command": "./scripts/dev-web.sh"
+    },
+    "test": {
+      "command": "./scripts/test-dev.sh"
+    },
+    "check": {
+      "command": "./scripts/check-dev.sh"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# Preserved CamStation 1.x routes. This include is the immediate rollback target.
+location /api/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout 60s;
+}
+
+location /go2rtc/ {
+    proxy_pass http://127.0.0.1:1984/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection upgrade;
+}
+
+# hashed assets: cache indefinitely
+location /assets/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+location / {
+    try_files $uri $uri/ /index.html;
+    # index.html must never be cached so browsers always get the latest
+    add_header Cache-Control "no-cache";
+}

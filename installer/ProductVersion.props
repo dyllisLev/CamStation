@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <ViewerMsiVersion Condition="'$(ViewerMsiVersion)' == ''"></ViewerMsiVersion>
+  </PropertyGroup>
+</Project>

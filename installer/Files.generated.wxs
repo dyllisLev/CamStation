@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Directory Id="Dir_B278DC2E7AF92CC214A1003E" Name="locales">
+      </Directory>
+      <Directory Id="Dir_8236F21803C3DAD1FC4B4769" Name="resources">
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="Cmp_A651751F7218E2A3FAF5677F" Guid="{119A76FC-2188-51F6-8837-04E3DE5132CA}">
+        <File Id="File_A651751F7218E2A3FAF5677F" Source="$(var.ViewerPayloadDir)\chrome_100_percent.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_5478CBDC65B42A0AAE4F6884" Guid="{DD9A4438-52F1-5A99-B1A4-0BA2C89B99D8}">
+        <File Id="File_5478CBDC65B42A0AAE4F6884" Source="$(var.ViewerPayloadDir)\chrome_200_percent.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_E8D1D60590D9E8DF4749467B" Guid="{9FB957C5-2980-5F22-902F-07EEFE537F2C}">
+        <File Id="File_E8D1D60590D9E8DF4749467B" Source="$(var.ViewerPayloadDir)\d3dcompiler_47.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_7A633C75C4CB1F27DAE8F6E9" Guid="{66408BC2-BC91-516A-8B68-5D7F3B9297FF}">
+        <File Id="File_7A633C75C4CB1F27DAE8F6E9" Source="$(var.ViewerPayloadDir)\dxcompiler.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_D23905B163A0F8612642D8E1" Guid="{8FB8B081-AED9-544D-94D0-7C58E2AED0A7}">
+        <File Id="File_D23905B163A0F8612642D8E1" Source="$(var.ViewerPayloadDir)\dxil.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_F4B1C1D005E5ED93E79C0ABE" Guid="{DB54768F-B1D5-504F-A214-27828738171B}">
+        <File Id="File_F4B1C1D005E5ED93E79C0ABE" Source="$(var.ViewerPayloadDir)\ffmpeg.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_A868EEC90D7EA7861FC21BD3" Guid="{0FA40CBD-F95B-5D94-979B-A3A9F6995C57}">
+        <File Id="File_A868EEC90D7EA7861FC21BD3" Source="$(var.ViewerPayloadDir)\icudtl.dat" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_E6F9716A205BD658B270422A" Guid="{74972FDD-8853-5762-A5BA-3C211258DA7B}">
+        <File Id="File_E6F9716A205BD658B270422A" Source="$(var.ViewerPayloadDir)\libegl.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3B7706622A7FEABB32EA2129" Guid="{572B043C-DC41-524E-B131-D07981CC1003}">
+        <File Id="File_3B7706622A7FEABB32EA2129" Source="$(var.ViewerPayloadDir)\libglesv2.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_CC1D3B0234846714B0AEDA6C" Guid="{63E995BD-D56A-53EC-8F84-955F4EEC8397}">
+        <File Id="File_CC1D3B0234846714B0AEDA6C" Source="$(var.ViewerPayloadDir)\license" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_DE0BA654C95C056E8853629F" Guid="{36668FE2-090B-5CC3-8E3E-29166A0D2A7A}">
+        <File Id="File_DE0BA654C95C056E8853629F" Source="$(var.ViewerPayloadDir)\licenses.chromium.html" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_35D1EA993973FB2A9ED700EE" Guid="{D6441151-1985-555F-B68A-3E7931255D37}">
+        <File Id="File_35D1EA993973FB2A9ED700EE" Source="$(var.ViewerPayloadDir)\resources.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_30629F1301282B96A401E6B3" Guid="{BFE4F37B-C110-5146-A01E-EBF12946A762}">
+        <File Id="File_30629F1301282B96A401E6B3" Source="$(var.ViewerPayloadDir)\snapshot_blob.bin" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_06B859C1C40C303BFECCD035" Guid="{EF9372FE-9AC2-58FE-8B62-3464AEE20247}">
+        <File Id="File_06B859C1C40C303BFECCD035" Source="$(var.ViewerPayloadDir)\v8_context_snapshot.bin" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_5CA4F3850CCC331AAF8A257D" Guid="{B4FFBE7C-39C3-55C4-BE00-A98A71C14ACC}">
+        <File Id="File_5CA4F3850CCC331AAF8A257D" Source="$(var.ViewerPayloadDir)\version" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3A8CC4F703FD5B4B7A9FF036" Guid="{66F4CCC2-BD60-5D53-BD80-7DF481587D16}">
+        <File Id="File_3A8CC4F703FD5B4B7A9FF036" Source="$(var.ViewerPayloadDir)\vk_swiftshader_icd.json" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_FAC46C0899D3D318D80B0B88" Guid="{CECBD5F0-E835-5B1E-83AF-33F739C67F0F}">
+        <File Id="File_FAC46C0899D3D318D80B0B88" Source="$(var.ViewerPayloadDir)\vk_swiftshader.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_7408A0ACA7A6662C7BA2F0A7" Guid="{9819FA57-2419-5625-B2B6-05F6B4E7F3A3}">
+        <File Id="File_7408A0ACA7A6662C7BA2F0A7" Source="$(var.ViewerPayloadDir)\vulkan-1.dll" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="Dir_B278DC2E7AF92CC214A1003E">
+      <Component Id="Cmp_EFFAF815C6D29145B3A9AB5D" Guid="{AE533BD9-79AF-5B5A-8F39-336CB14887A2}">
+        <File Id="File_EFFAF815C6D29145B3A9AB5D" Source="$(var.ViewerPayloadDir)\locales\af.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3532040CB54554F771072F2F" Guid="{5D168804-E336-5B40-945A-1BBBF837686A}">
+        <File Id="File_3532040CB54554F771072F2F" Source="$(var.ViewerPayloadDir)\locales\am.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_B5C1785803AE2875E789DCAD" Guid="{60A45B04-B5F0-5018-89FC-CEFAC899396D}">
+        <File Id="File_B5C1785803AE2875E789DCAD" Source="$(var.ViewerPayloadDir)\locales\ar.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8EDB338FF40CE559E87C7CB7" Guid="{65B0A705-3B10-5320-816F-D8F1DDCA5543}">
+        <File Id="File_8EDB338FF40CE559E87C7CB7" Source="$(var.ViewerPayloadDir)\locales\bg.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8605DCE2CB30F17E85B81A1E" Guid="{D5AC6104-507E-59F6-8FBE-9C3FBAC2C8FD}">
+        <File Id="File_8605DCE2CB30F17E85B81A1E" Source="$(var.ViewerPayloadDir)\locales\bn.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_13ADFA99BA06EF3E641A9547" Guid="{218E4758-9D0F-5B45-A7AB-3B6CF8828B9C}">
+        <File Id="File_13ADFA99BA06EF3E641A9547" Source="$(var.ViewerPayloadDir)\locales\ca.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_39CEC9E90796AA9654A8CFAD" Guid="{B6ED568E-17C7-516E-B79A-7D030259419D}">
+        <File Id="File_39CEC9E90796AA9654A8CFAD" Source="$(var.ViewerPayloadDir)\locales\cs.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_9AF17A2E7F5489EFBA881546" Guid="{2ED24E40-33FC-59C0-9682-4F46C84EDE7C}">
+        <File Id="File_9AF17A2E7F5489EFBA881546" Source="$(var.ViewerPayloadDir)\locales\da.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_E0EBA24F572770650D478BBB" Guid="{5DD2E534-9F38-5C1A-B308-4739BBB9140E}">
+        <File Id="File_E0EBA24F572770650D478BBB" Source="$(var.ViewerPayloadDir)\locales\de.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8DDC0D864448BA62B643B0BF" Guid="{54FB5B8A-0DB4-52A6-94E0-D02BA68FFAAD}">
+        <File Id="File_8DDC0D864448BA62B643B0BF" Source="$(var.ViewerPayloadDir)\locales\el.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_845ADA7313A750B7D631BAB9" Guid="{71FD94B2-F54E-5A79-A641-1C4AB5D8A67C}">
+        <File Id="File_845ADA7313A750B7D631BAB9" Source="$(var.ViewerPayloadDir)\locales\en-gb.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8DA0FFDD76D575B3AFE2622A" Guid="{5DAAEDFA-97DF-5903-AE05-EC57F0D2DC03}">
+        <File Id="File_8DA0FFDD76D575B3AFE2622A" Source="$(var.ViewerPayloadDir)\locales\en-us.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_756DFD23AA1A2328AAE01E76" Guid="{B360FB3A-6FE2-5CC4-A171-3364D6C981D2}">
+        <File Id="File_756DFD23AA1A2328AAE01E76" Source="$(var.ViewerPayloadDir)\locales\es-419.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_9C8482258494910D8EC6C284" Guid="{67A7AC58-11FF-5A23-AC16-C45A6779B1AD}">
+        <File Id="File_9C8482258494910D8EC6C284" Source="$(var.ViewerPayloadDir)\locales\es.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_5B1248D38CB50FB3D4845946" Guid="{04DE57D4-050D-54E5-A9EF-31C641A73AE4}">
+        <File Id="File_5B1248D38CB50FB3D4845946" Source="$(var.ViewerPayloadDir)\locales\et.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_EDF8F003EE4ACA85934F748A" Guid="{50629F2C-5212-5726-8603-1FF3603E7E03}">
+        <File Id="File_EDF8F003EE4ACA85934F748A" Source="$(var.ViewerPayloadDir)\locales\fa.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_903B450E146F6F72AD094906" Guid="{15DDDF11-B837-521B-A2A7-5392ADBBA55C}">
+        <File Id="File_903B450E146F6F72AD094906" Source="$(var.ViewerPayloadDir)\locales\fi.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_325F3DA176271311FC2DB0C9" Guid="{3ED36A88-57D1-53CF-90CC-C3168A5F0C58}">
+        <File Id="File_325F3DA176271311FC2DB0C9" Source="$(var.ViewerPayloadDir)\locales\fil.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_9A0C3D10A6FD7274C878F9B3" Guid="{65EA8E54-42CA-569B-AB85-B8E55D444B7D}">
+        <File Id="File_9A0C3D10A6FD7274C878F9B3" Source="$(var.ViewerPayloadDir)\locales\fr.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_EC9F0CA175C7E239CB0BB766" Guid="{E720AB29-AD10-5763-A7FD-AFD24931F66B}">
+        <File Id="File_EC9F0CA175C7E239CB0BB766" Source="$(var.ViewerPayloadDir)\locales\gu.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8BCA1B8E7A5EF64737132939" Guid="{74B11EA2-D3C7-56F6-9BF6-DB21252BD7EC}">
+        <File Id="File_8BCA1B8E7A5EF64737132939" Source="$(var.ViewerPayloadDir)\locales\he.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_A7C29AEACD1C2F54FF936A9C" Guid="{74EBE4FA-DC1B-5716-B2AB-8604E0498111}">
+        <File Id="File_A7C29AEACD1C2F54FF936A9C" Source="$(var.ViewerPayloadDir)\locales\hi.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_24553B0F286A23427F431184" Guid="{AE24E4F8-88F4-56E4-A415-0CEE6CF877FC}">
+        <File Id="File_24553B0F286A23427F431184" Source="$(var.ViewerPayloadDir)\locales\hr.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_1158E37A46985053E6C737E9" Guid="{DBEF482A-637C-540C-9F89-910C60949477}">
+        <File Id="File_1158E37A46985053E6C737E9" Source="$(var.ViewerPayloadDir)\locales\hu.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_48D062B3019FA2B4C8DBC125" Guid="{6CC005C2-05D4-5AB3-81E6-040F1CE73EE4}">
+        <File Id="File_48D062B3019FA2B4C8DBC125" Source="$(var.ViewerPayloadDir)\locales\id.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_6BF5F9977D3AA783C3CAAB87" Guid="{7FCF1C84-A6DA-5810-A0E8-AFA071DB7F0E}">
+        <File Id="File_6BF5F9977D3AA783C3CAAB87" Source="$(var.ViewerPayloadDir)\locales\it.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_22E82315738745D5798C4FD6" Guid="{DCD1C642-C4E5-5B84-A405-2ABF795A3C1D}">
+        <File Id="File_22E82315738745D5798C4FD6" Source="$(var.ViewerPayloadDir)\locales\ja.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_C47031090B129F889C26CFE0" Guid="{E3A8D1E3-8949-56C5-9E7F-CE3184DF8DF4}">
+        <File Id="File_C47031090B129F889C26CFE0" Source="$(var.ViewerPayloadDir)\locales\kn.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_4A7A9304EE1471D5EC6AE670" Guid="{492BCFB5-5F59-52A1-8D76-3F76CD9260D5}">
+        <File Id="File_4A7A9304EE1471D5EC6AE670" Source="$(var.ViewerPayloadDir)\locales\ko.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3B6EE7BA98D00C21577C4573" Guid="{3696CE67-72E3-5C79-AB91-C976B0AA0F11}">
+        <File Id="File_3B6EE7BA98D00C21577C4573" Source="$(var.ViewerPayloadDir)\locales\lt.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_EA1A77641E8779FF746853D1" Guid="{CE6A687D-7F76-5596-9E00-45137898064F}">
+        <File Id="File_EA1A77641E8779FF746853D1" Source="$(var.ViewerPayloadDir)\locales\lv.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_D384787F79AB0903BD6561B9" Guid="{2F95E16D-65BF-5576-9A04-5EF2778A69A2}">
+        <File Id="File_D384787F79AB0903BD6561B9" Source="$(var.ViewerPayloadDir)\locales\ml.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_8DF2DA84A597AAEE858A6E5E" Guid="{EF48ED87-D9AA-57F7-82EC-43FB3816C533}">
+        <File Id="File_8DF2DA84A597AAEE858A6E5E" Source="$(var.ViewerPayloadDir)\locales\mr.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_E468555A394CA4792218B7AC" Guid="{88425622-192F-51CC-998C-34D68FC9A0EC}">
+        <File Id="File_E468555A394CA4792218B7AC" Source="$(var.ViewerPayloadDir)\locales\ms.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_B0B036D0852AE0BA6379292F" Guid="{55569592-647A-50D7-BC54-EDFDF19E48AA}">
+        <File Id="File_B0B036D0852AE0BA6379292F" Source="$(var.ViewerPayloadDir)\locales\nb.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_DA03412C5730AC3382A5D225" Guid="{BE43DA70-85E5-5FB0-844A-BAC9C9431898}">
+        <File Id="File_DA03412C5730AC3382A5D225" Source="$(var.ViewerPayloadDir)\locales\nl.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_647D82A234A2DE85DBC9D294" Guid="{7155C436-6B43-5F60-BAD2-DB30AC44D659}">
+        <File Id="File_647D82A234A2DE85DBC9D294" Source="$(var.ViewerPayloadDir)\locales\pl.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_B6993A2C6D37F0C99ACF1A9A" Guid="{02942AE5-5913-5B8A-B8A8-F1FC00CA0FCE}">
+        <File Id="File_B6993A2C6D37F0C99ACF1A9A" Source="$(var.ViewerPayloadDir)\locales\pt-br.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_25BAE24125519A98A005E74F" Guid="{F64ED40D-7593-5432-A5EE-AB77945C6C01}">
+        <File Id="File_25BAE24125519A98A005E74F" Source="$(var.ViewerPayloadDir)\locales\pt-pt.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_7862CC618A44C38278A8E1E7" Guid="{469F362A-F137-5D96-B7AD-1403BA6838FB}">
+        <File Id="File_7862CC618A44C38278A8E1E7" Source="$(var.ViewerPayloadDir)\locales\ro.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_5F82B5E2F9F2446BBC033770" Guid="{3DA6349C-8D5A-57D1-A9E6-938F27BFAF85}">
+        <File Id="File_5F82B5E2F9F2446BBC033770" Source="$(var.ViewerPayloadDir)\locales\ru.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_270BDA07E4153D500B8B2B43" Guid="{8E0565AD-F3F1-5CEF-AB88-1E9222CED395}">
+        <File Id="File_270BDA07E4153D500B8B2B43" Source="$(var.ViewerPayloadDir)\locales\sk.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_9CCB7521B728B17F7705BE39" Guid="{90F595F2-21C6-5B7B-A89A-04928E8F9BE6}">
+        <File Id="File_9CCB7521B728B17F7705BE39" Source="$(var.ViewerPayloadDir)\locales\sl.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_37A3C885C3CFAD9166BA2A8F" Guid="{19C46227-24BB-5E59-9B36-0BB7C00C6181}">
+        <File Id="File_37A3C885C3CFAD9166BA2A8F" Source="$(var.ViewerPayloadDir)\locales\sr.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_5CDAC66283A293E51C6361F4" Guid="{25A192FF-1655-5FF6-8FB9-44573B554924}">
+        <File Id="File_5CDAC66283A293E51C6361F4" Source="$(var.ViewerPayloadDir)\locales\sv.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3A318EA03A8E22F899D4A46A" Guid="{06C20262-263A-5F47-B9D2-8BF6FBEB0F8C}">
+        <File Id="File_3A318EA03A8E22F899D4A46A" Source="$(var.ViewerPayloadDir)\locales\sw.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_3A4E5EE24A0B9E9D5FFBBD73" Guid="{8E2FDCFE-9879-54FA-ABFC-A72691DA3AAB}">
+        <File Id="File_3A4E5EE24A0B9E9D5FFBBD73" Source="$(var.ViewerPayloadDir)\locales\ta.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_F4A04F6384F45DBEE9934614" Guid="{026160DE-E897-5FC0-92E6-DE3C12524353}">
+        <File Id="File_F4A04F6384F45DBEE9934614" Source="$(var.ViewerPayloadDir)\locales\te.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_665742E6D449B63A34077FFD" Guid="{80BAE2A6-FBF5-5EF6-8E0A-74E54B433B15}">
+        <File Id="File_665742E6D449B63A34077FFD" Source="$(var.ViewerPayloadDir)\locales\th.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_53D6D90FE908FB31BBB390F3" Guid="{0E23A8DC-BD40-5C1A-B370-9AC828F0FF43}">
+        <File Id="File_53D6D90FE908FB31BBB390F3" Source="$(var.ViewerPayloadDir)\locales\tr.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_CA69EDB27EDB49AA90205EA1" Guid="{54112B55-6F3F-5901-B431-2FC92089D82C}">
+        <File Id="File_CA69EDB27EDB49AA90205EA1" Source="$(var.ViewerPayloadDir)\locales\uk.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_064F2A448D3E741104A99C47" Guid="{ABC60AD3-07A5-5C29-BBC4-6C852BA10C1C}">
+        <File Id="File_064F2A448D3E741104A99C47" Source="$(var.ViewerPayloadDir)\locales\ur.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_DEC12E39C1896E31D7D08A8C" Guid="{007A8992-05BC-5344-BD3C-0D1B275AF5D7}">
+        <File Id="File_DEC12E39C1896E31D7D08A8C" Source="$(var.ViewerPayloadDir)\locales\vi.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_B025733D55B46FCD0E786CA0" Guid="{82C0D804-CE0B-5374-B3AA-085F03044128}">
+        <File Id="File_B025733D55B46FCD0E786CA0" Source="$(var.ViewerPayloadDir)\locales\zh-cn.pak" KeyPath="yes" />
+      </Component>
+      <Component Id="Cmp_C3C993729D1B05F6CEB02ED9" Guid="{7FF754AB-96C7-5EA3-8FBE-0ED65C3EEEA5}">
+        <File Id="File_C3C993729D1B05F6CEB02ED9" Source="$(var.ViewerPayloadDir)\locales\zh-tw.pak" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="Dir_8236F21803C3DAD1FC4B4769">
+      <Component Id="Cmp_3629BBAEE38A7DE67259F4D6" Guid="{D62BE943-B8DA-511B-B490-F64D4901E1E6}">
+        <File Id="File_3629BBAEE38A7DE67259F4D6" Source="$(var.ViewerPayloadDir)\resources\app.asar" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="GeneratedViewerPayload">
+      <ComponentRef Id="Cmp_A651751F7218E2A3FAF5677F" />
+      <ComponentRef Id="Cmp_5478CBDC65B42A0AAE4F6884" />
+      <ComponentRef Id="Cmp_E8D1D60590D9E8DF4749467B" />
+      <ComponentRef Id="Cmp_7A633C75C4CB1F27DAE8F6E9" />
+      <ComponentRef Id="Cmp_D23905B163A0F8612642D8E1" />
+      <ComponentRef Id="Cmp_F4B1C1D005E5ED93E79C0ABE" />
+      <ComponentRef Id="Cmp_A868EEC90D7EA7861FC21BD3" />
+      <ComponentRef Id="Cmp_E6F9716A205BD658B270422A" />
+      <ComponentRef Id="Cmp_3B7706622A7FEABB32EA2129" />
+      <ComponentRef Id="Cmp_CC1D3B0234846714B0AEDA6C" />
+      <ComponentRef Id="Cmp_DE0BA654C95C056E8853629F" />
+      <ComponentRef Id="Cmp_EFFAF815C6D29145B3A9AB5D" />
+      <ComponentRef Id="Cmp_3532040CB54554F771072F2F" />
+      <ComponentRef Id="Cmp_B5C1785803AE2875E789DCAD" />
+      <ComponentRef Id="Cmp_8EDB338FF40CE559E87C7CB7" />
+      <ComponentRef Id="Cmp_8605DCE2CB30F17E85B81A1E" />
+      <ComponentRef Id="Cmp_13ADFA99BA06EF3E641A9547" />
+      <ComponentRef Id="Cmp_39CEC9E90796AA9654A8CFAD" />
+      <ComponentRef Id="Cmp_9AF17A2E7F5489EFBA881546" />
+      <ComponentRef Id="Cmp_E0EBA24F572770650D478BBB" />
+      <ComponentRef Id="Cmp_8DDC0D864448BA62B643B0BF" />
+      <ComponentRef Id="Cmp_845ADA7313A750B7D631BAB9" />
+      <ComponentRef Id="Cmp_8DA0FFDD76D575B3AFE2622A" />
+      <ComponentRef Id="Cmp_756DFD23AA1A2328AAE01E76" />
+      <ComponentRef Id="Cmp_9C8482258494910D8EC6C284" />
+      <ComponentRef Id="Cmp_5B1248D38CB50FB3D4845946" />
+      <ComponentRef Id="Cmp_EDF8F003EE4ACA85934F748A" />
+      <ComponentRef Id="Cmp_903B450E146F6F72AD094906" />
+      <ComponentRef Id="Cmp_325F3DA176271311FC2DB0C9" />
+      <ComponentRef Id="Cmp_9A0C3D10A6FD7274C878F9B3" />
+      <ComponentRef Id="Cmp_EC9F0CA175C7E239CB0BB766" />
+      <ComponentRef Id="Cmp_8BCA1B8E7A5EF64737132939" />
+      <ComponentRef Id="Cmp_A7C29AEACD1C2F54FF936A9C" />
+      <ComponentRef Id="Cmp_24553B0F286A23427F431184" />
+      <ComponentRef Id="Cmp_1158E37A46985053E6C737E9" />
+      <ComponentRef Id="Cmp_48D062B3019FA2B4C8DBC125" />
+      <ComponentRef Id="Cmp_6BF5F9977D3AA783C3CAAB87" />
+      <ComponentRef Id="Cmp_22E82315738745D5798C4FD6" />
+      <ComponentRef Id="Cmp_C47031090B129F889C26CFE0" />
+      <ComponentRef Id="Cmp_4A7A9304EE1471D5EC6AE670" />
+      <ComponentRef Id="Cmp_3B6EE7BA98D00C21577C4573" />
+      <ComponentRef Id="Cmp_EA1A77641E8779FF746853D1" />
+      <ComponentRef Id="Cmp_D384787F79AB0903BD6561B9" />
+      <ComponentRef Id="Cmp_8DF2DA84A597AAEE858A6E5E" />
+      <ComponentRef Id="Cmp_E468555A394CA4792218B7AC" />
+      <ComponentRef Id="Cmp_B0B036D0852AE0BA6379292F" />
+      <ComponentRef Id="Cmp_DA03412C5730AC3382A5D225" />
+      <ComponentRef Id="Cmp_647D82A234A2DE85DBC9D294" />
+      <ComponentRef Id="Cmp_B6993A2C6D37F0C99ACF1A9A" />
+      <ComponentRef Id="Cmp_25BAE24125519A98A005E74F" />
+      <ComponentRef Id="Cmp_7862CC618A44C38278A8E1E7" />
+      <ComponentRef Id="Cmp_5F82B5E2F9F2446BBC033770" />
+      <ComponentRef Id="Cmp_270BDA07E4153D500B8B2B43" />
+      <ComponentRef Id="Cmp_9CCB7521B728B17F7705BE39" />
+      <ComponentRef Id="Cmp_37A3C885C3CFAD9166BA2A8F" />
+      <ComponentRef Id="Cmp_5CDAC66283A293E51C6361F4" />
+      <ComponentRef Id="Cmp_3A318EA03A8E22F899D4A46A" />
+      <ComponentRef Id="Cmp_3A4E5EE24A0B9E9D5FFBBD73" />
+      <ComponentRef Id="Cmp_F4A04F6384F45DBEE9934614" />
+      <ComponentRef Id="Cmp_665742E6D449B63A34077FFD" />
+      <ComponentRef Id="Cmp_53D6D90FE908FB31BBB390F3" />
+      <ComponentRef Id="Cmp_CA69EDB27EDB49AA90205EA1" />
+      <ComponentRef Id="Cmp_064F2A448D3E741104A99C47" />
+      <ComponentRef Id="Cmp_DEC12E39C1896E31D7D08A8C" />
+      <ComponentRef Id="Cmp_B025733D55B46FCD0E786CA0" />
+      <ComponentRef Id="Cmp_C3C993729D1B05F6CEB02ED9" />
+      <ComponentRef Id="Cmp_35D1EA993973FB2A9ED700EE" />
+      <ComponentRef Id="Cmp_3629BBAEE38A7DE67259F4D6" />
+      <ComponentRef Id="Cmp_30629F1301282B96A401E6B3" />
+      <ComponentRef Id="Cmp_06B859C1C40C303BFECCD035" />
+      <ComponentRef Id="Cmp_5CA4F3850CCC331AAF8A257D" />
+      <ComponentRef Id="Cmp_3A8CC4F703FD5B4B7A9FF036" />
+      <ComponentRef Id="Cmp_FAC46C0899D3D318D80B0B88" />
+      <ComponentRef Id="Cmp_7408A0ACA7A6662C7BA2F0A7" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

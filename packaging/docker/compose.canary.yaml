@@ -1,0 +1,74 @@
+name: camstation2-canary
+
+services:
+  camstation:
+    image: "${CAMSTATION_IMAGE:?CAMSTATION_IMAGE is required}"
+    pull_policy: never
+    container_name: camstation2-canary
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      TZ: Asia/Seoul
+      CAMSTATION_ADDR: 0.0.0.0:18080
+      CAMSTATION_DB: /var/lib/camstation/data/camstation.db
+      CAMSTATION_RECORDINGS_DIR: /var/lib/camstation/media/recordings
+      CAMSTATION_TEMP_DIR: /var/lib/camstation/media/temp
+      CAMSTATION_VIEWER_RELEASES_DIR: /var/lib/camstation/data/viewer-releases
+      CAMSTATION_RECORDING_ENABLED: "true"
+      CAMSTATION_SEGMENT_MINUTES: "1"
+      CAMSTATION_MAX_STORAGE_GB: "20"
+      CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"
+      CAMSTATION_PLAYBACK_LOG_LEVEL: "${CAMSTATION_PLAYBACK_LOG_LEVEL:-info}"
+    ports:
+      - name: http-management
+        target: 18080
+        published: "${CANARY_HTTP_PORT:-18081}"
+        host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"
+        protocol: tcp
+      - name: http-monitor
+        target: 18080
+        published: "${CANARY_HTTP_PORT:-18081}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
+        protocol: tcp
+      - name: webrtc-tcp
+        target: 8555
+        published: "${CANARY_WEBRTC_PORT:-18555}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
+        protocol: tcp
+      - name: webrtc-udp
+        target: 8555
+        published: "${CANARY_WEBRTC_PORT:-18555}"
+        host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"
+        protocol: udp
+    volumes:
+      - type: bind
+        source: "${CANARY_STATE_DIR:?CANARY_STATE_DIR is required}"
+        target: /var/lib/camstation/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${CANARY_MEDIA_DIR:?CANARY_MEDIA_DIR is required}"
+        target: /var/lib/camstation/media
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    pids_limit: 1024
+    cpus: 4.0
+    mem_limit: 3g
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  default:
+    name: camstation2-canary-net
+    driver: bridge

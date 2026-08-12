@@ -1,0 +1,19 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+  <Import Project="ProductVersion.props" />
+  <PropertyGroup>
+    <Platform>x64</Platform>
+    <OutputName>CamStationViewer</OutputName>
+    <OutputType>Package</OutputType>
+    <SuppressValidation>false</SuppressValidation>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <DefineConstants>ViewerMsiVersion=$(ViewerMsiVersion);ViewerPayloadDir=$(ViewerPayloadDir);ServicePayloadPath=$(ServicePayloadPath)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="6.0.2" />
+  </ItemGroup>
+  <Target Name="ValidateViewerMsiVersion" BeforeTargets="Build">
+    <Error Condition="'$(ViewerMsiVersion)' == ''" Text="ViewerMsiVersion is required." />
+    <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(ViewerMsiVersion)', '^\d+\.\d+\.\d+(\.\d+)?$')) == 'False'" Text="ViewerMsiVersion must be a numeric MSI version." />
+  </Target>
+</Project>

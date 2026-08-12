@@ -1,36 +1,19 @@
 {
-  "name": "camviewer",
-  "version": "1.0.4",
-  "description": "CamStation 라이브 뷰어",
-  "main": "dist-electron/main.js",
+  "name": "camstation-viewer",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "build/main.js",
   "scripts": {
-    "build:ts": "tsc",
-    "build": "tsc && electron-builder",
-    "build:portable": "tsc && electron-builder --win portable",
-    "pack": "tsc && electron-builder --dir",
-    "test": "tsc && node --test tests/*.test.cjs"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "build": "node scripts/build-files.mjs prepare && tsc -p tsconfig.json && tsc -p tsconfig.preload.json && node scripts/build-files.mjs finalize",
+    "package:win": "npm run build && node scripts/package-win.mjs",
+    "generate:msi-files": "node ../scripts/generate-viewer-msi-files.mjs"
   },
   "devDependencies": {
-    "electron": "^31.7.7",
-    "electron-builder": "^24.13.3",
-    "@types/node": "^20.14.0",
-    "typescript": "^5.4.5"
-  },
-  "build": {
-    "appId": "com.camstation.viewer",
-    "productName": "CamViewer",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "dist-electron/**/*",
-      "src/**/*"
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        { "target": "portable", "arch": ["x64"] }
-      ]
-    }
+    "@electron/packager": "20.0.2",
+    "@types/node": "24.13.2",
+    "electron": "43.1.1",
+    "typescript": "6.0.2"
   }
 }

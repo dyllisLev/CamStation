@@ -1,0 +1,167 @@
+package store
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/url"
+	"strings"
+	"time"
+)
+
+func scanCamera(row scanner, includeSecrets bool) (Camera, error) {
+	var camera Camera
+	var enabled int
+	var createdAt, updatedAt, probeJSON, scanJSON, controlCapabilitiesJSON string
+	var channelIndex sql.NullInt64
+	var profileTemplateID sql.NullInt64
+	if err := row.Scan(
+		&camera.ID,
+		&camera.Name,
+		&camera.URL,
+		&camera.StreamName,
+		&camera.LayoutKey,
+		&camera.RecordingStreamName,
+		&camera.LiveStreamName,
+		&camera.State,
+		&enabled,
+		&profileTemplateID,
+		&camera.Manufacturer,
+		&camera.Model,
+		&camera.ProfileAdapter,
+		&camera.Host,
+		&camera.RTSPPort,
+		&camera.HTTPPort,
+		&camera.ONVIFPort,
+		&channelIndex,
+		&probeJSON,
+		&scanJSON,
+		&controlCapabilitiesJSON,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return Camera{}, err
+	}
+	camera.Enabled = enabled != 0
+	if camera.LayoutKey == "" {
+		camera.LayoutKey = camera.StreamName
+	}
+	if camera.RecordingStreamName == "" {
+		camera.RecordingStreamName = camera.StreamName
+	}
+	if camera.LiveStreamName == "" {
+		camera.LiveStreamName = camera.StreamName
+	}
+	if channelIndex.Valid {
+		value := int(channelIndex.Int64)
+		camera.ChannelIndex = &value
+	}
+	if profileTemplateID.Valid {
+		value := profileTemplateID.Int64
+		camera.ProfileTemplateID = &value
+	}
+	camera.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	camera.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	_ = json.Unmarshal([]byte(probeJSON), &camera.LastProbeJSON)
+	if camera.LastProbeJSON == nil {
+		camera.LastProbeJSON = map[string]any{}
+	}
+	_ = json.Unmarshal([]byte(scanJSON), &camera.LastScanJSON)
+	if camera.LastScanJSON == nil {
+		camera.LastScanJSON = map[string]any{}
+	}
+	var controlCapabilities CameraControlCapabilities
+	_ = json.Unmarshal([]byte(controlCapabilitiesJSON), &controlCapabilities)
+	camera.ControlCapabilities = normalizeControlCapabilities(controlCapabilities)
+	camera.RedactedURL = RedactURL(camera.URL)
+	if !includeSecrets {
+		camera.URL = ""
+	}
+	return camera, nil
+}
+
+func scanCameraStream(row scanner, includeSecrets bool) (CameraStream, error) {
+	var stream CameraStream
+	var createdAt, updatedAt string
+	var detectedAt sql.NullString
+	if err := row.Scan(
+		&stream.ID,
+		&stream.CameraID,
+		&stream.Role,
+		&stream.SourceKey,
+		&stream.Label,
+		&stream.Source,
+		&stream.URL,
+		&stream.Go2RTCStreamName,
+		&stream.Codec,
+		&stream.Width,
+		&stream.Height,
+		&stream.FPS,
+		&stream.BitrateKbps,
+		&stream.ProfileToken,
+		&stream.State,
+		&stream.DetectedVideoCodec,
+		&stream.DetectedAudioCodec,
+		&stream.DetectedProfile,
+		&stream.DetectedLevel,
+		&stream.DetectedPixelFormat,
+		&stream.DetectedBitDepth,
+		&stream.DetectedWidth,
+		&stream.DetectedHeight,
+		&stream.DetectedFPS,
+		&detectedAt,
+		&stream.DetectedError,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return CameraStream{}, err
+	}
+	stream.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	stream.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	stream.DetectedCheckedAt, _ = time.Parse(time.RFC3339Nano, detectedAt.String)
+	stream.RedactedURL = RedactURL(stream.URL)
+	if !includeSecrets {
+		stream.URL = ""
+		stream.DetectedError = redactString(stream.DetectedError)
+	}
+	return stream, nil
+}
+
+func applyOutputStreamNames(camera *Camera) {
+	for _, output := range camera.Outputs {
+		switch output.Purpose {
+		case CameraOutputRecording:
+			camera.RecordingStreamName = output.StreamName
+		case CameraOutputLive:
+			camera.LiveStreamName = output.StreamName
+		case CameraOutputFocus:
+			camera.FocusStreamName = output.StreamName
+		}
+	}
+}
+
+func RedactURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	if parsed.User != nil {
+		parsed.User = url.UserPassword("redacted", "redacted")
+	}
+	query := parsed.Query()
+	for key := range query {
+		if isCredentialQueryKey(key) {
+			query.Set(key, "redacted")
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func isCredentialQueryKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "user", "username", "password", "passwd", "pwd", "token":
+		return true
+	default:
+		return false
+	}
+}

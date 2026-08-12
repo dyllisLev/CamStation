@@ -1,14 +1,15 @@
-.worktrees/
-.venv/
-__pycache__/
-*.pyc
+data/
+dist/
 node_modules/
-*.xlsx
-*.xls
-*.apk
-.superpowers/
-
-# Local secrets and generated state
+.tools/
+/viewer-app/build/
+/viewer-app/dist/
+/artifacts/
+/work/
+/cmd/camstation-viewer-installer/payload/release.zip
+.worktrees/
+/camstationd
+*.log
 .env
 *.local
 *.secret

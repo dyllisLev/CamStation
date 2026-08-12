@@ -1,0 +1,164 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"camstation/internal/cameraprofile"
+	"camstation/internal/store"
+	"camstation/internal/stream"
+)
+
+func TestConsoleLayoutKeepsDesktopSidebar(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "layouts", "ConsoleLayout.tsx"))
+	if err != nil {
+		t.Fatalf("read console layout: %v", err)
+	}
+	content := string(source)
+
+	if !strings.Contains(content, `className="new-console-sidebar`) {
+		t.Fatalf("ConsoleLayout must keep the desktop left sidebar")
+	}
+	if strings.Contains(content, `className="new-command new-console-command"`) {
+		t.Fatalf("ConsoleLayout should not use the live top command bar for console navigation")
+	}
+	if strings.Contains(content, `location.pathname === "/" || location.pathname === "/live"`) {
+		t.Fatalf("ConsoleLayout must not treat the control room route as a fullscreen live workspace")
+	}
+	if !strings.Contains(content, `const isLiveWorkspace = location.pathname === "/live";`) {
+		t.Fatalf("ConsoleLayout should only fullscreen the live route")
+	}
+}
+
+func TestConsolePagesKeepSeparateRoles(t *testing.T) {
+	t.Parallel()
+
+	controlRoom, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "pages", "ControlRoomPage.tsx"))
+	if err != nil {
+		t.Fatalf("read control room page: %v", err)
+	}
+	live, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "pages", "LivePage.tsx"))
+	if err != nil {
+		t.Fatalf("read live page: %v", err)
+	}
+
+	if strings.Contains(string(controlRoom), "LiveWorkspace") {
+		t.Fatalf("ControlRoomPage must not render LiveWorkspace directly")
+	}
+	if !strings.Contains(string(controlRoom), "ControlRoomDashboard") {
+		t.Fatalf("ControlRoomPage must render ControlRoomDashboard")
+	}
+	if !strings.Contains(string(live), "LiveWorkspace") {
+		t.Fatalf("LivePage must keep rendering LiveWorkspace")
+	}
+	for _, required := range []string{
+		"useCameras",
+		"useStreamStatus",
+		"useRecorderStatus",
+		"useRecordingStorage",
+		"useEvents",
+		"new-control-summary",
+		"시청 연결",
+		"저장공간",
+	} {
+		if !strings.Contains(string(controlRoom), required) {
+			t.Fatalf("ControlRoomPage missing dashboard requirement %q", required)
+		}
+	}
+	for _, required := range []string{
+		"new-control-table",
+		"카메라 연결",
+		"스트림 상태",
+		"녹화",
+		"최근 오류",
+		"new-control-ops",
+		"Recorder workers",
+		"Recent events",
+	} {
+		if !strings.Contains(string(controlRoom), required) {
+			t.Fatalf("ControlRoomPage missing table or operations requirement %q", required)
+		}
+	}
+	for _, required := range []string{
+		"CameraPreviewModal",
+		"previewCamera",
+		"new-preview-modal",
+		"useMseStream",
+	} {
+		if !strings.Contains(string(controlRoom), required) {
+			t.Fatalf("ControlRoomPage missing preview modal requirement %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"useRestartStreams",
+		"RotateCw",
+		"재시작",
+		"스트림 재시작",
+	} {
+		if strings.Contains(string(controlRoom), forbidden) {
+			t.Fatalf("ControlRoomPage should not expose restart controls; found %q", forbidden)
+		}
+	}
+}
+
+func TestAnnotateCameraRuntimeStatusPrefersRunningRoleStream(t *testing.T) {
+	t.Parallel()
+
+	cameras := []store.Camera{{
+		Name:                "염소장",
+		StreamName:          "goat-yard",
+		RecordingStreamName: "goat-yard-recording",
+		LiveStreamName:      "goat-yard-live",
+		State:               "offline",
+		Streams: []store.CameraStream{{
+			Role:             store.CameraStreamRoleRecording,
+			Go2RTCStreamName: "goat-yard-recording",
+			State:            "offline",
+		}},
+	}}
+
+	annotateCameraRuntimeStatus(cameras, stream.Status{Streams: map[string]stream.StreamRuntime{
+		"goat-yard-recording": {State: "running", ProducerCount: 1, ConsumerCount: 1},
+		"goat-yard-live":      {State: "running", ProducerCount: 1},
+	}})
+
+	if cameras[0].State != "streaming" {
+		t.Fatalf("camera state = %q, want streaming", cameras[0].State)
+	}
+	if cameras[0].Streams[0].State != "running" {
+		t.Fatalf("role stream state = %q, want running", cameras[0].Streams[0].State)
+	}
+}
+
+func TestSelectProfileCandidatesKeepsSelectedRoles(t *testing.T) {
+	t.Parallel()
+
+	profile := cameraprofile.DeviceProfile{
+		Channels: []cameraprofile.ChannelProfile{{
+			Index: 0,
+			Candidates: []cameraprofile.StreamCandidate{
+				{RoleHint: cameraprofile.StreamRoleRecording, Label: "main", URL: "rtsp://camera/main", ProfileToken: "main"},
+				{RoleHint: cameraprofile.StreamRoleLive, Label: "sub", URL: "rtsp://camera/sub", ProfileToken: "sub"},
+			},
+		}},
+	}
+
+	selected := selectProfileCandidates(profile, 0, []cameraStreamSelection{
+		{Role: cameraprofile.StreamRoleRecording, ProfileToken: "main"},
+		{Role: cameraprofile.StreamRoleLive, ProfileToken: "sub"},
+	})
+
+	if len(selected) != 2 {
+		t.Fatalf("selected candidates = %d, want 2", len(selected))
+	}
+	if selected[0].RoleHint != cameraprofile.StreamRoleRecording || selected[0].URL != "rtsp://camera/main" {
+		t.Fatalf("recording selection = %#v", selected[0])
+	}
+	if selected[1].RoleHint != cameraprofile.StreamRoleLive || selected[1].URL != "rtsp://camera/sub" {
+		t.Fatalf("live selection = %#v", selected[1])
+	}
+}

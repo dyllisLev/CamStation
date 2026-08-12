@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="CamStation Viewer"
+           Manufacturer="CamStation"
+           Version="$(var.ViewerMsiVersion)"
+           Scope="perMachine"
+           UpgradeCode="{7D4769BB-89EF-4C36-B4F2-52E33BF8BE87}">
+    <MajorUpgrade Schedule="afterInstallValidate" DowngradeErrorMessage="A newer version of CamStation Viewer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <ui:WixUI Id="WixUI_Minimal" />
+    <Feature Id="MainFeature" Title="CamStation Viewer" Level="1">
+      <ComponentGroupRef Id="ViewerRuntime" />
+    </Feature>
+  </Package>
+</Wix>
