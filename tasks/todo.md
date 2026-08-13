@@ -1,3 +1,40 @@
+# 2026-08-13 Viewer 재시작 시 최대화 시작
+
+## 사양과 경계
+
+- `monitoring-pc`의 Viewer가 설치 직후, Viewer Service 재시작 뒤 자동 실행, 일반 재실행에서 처음 보이는
+  순간부터 Windows 최대화 상태여야 한다. 현재 2.0.26 소스는 hidden `BrowserWindow`를 만든 뒤
+  `ready-to-show`에서 `show()`만 호출해 Electron 기본 창 크기로 시작할 수 있다.
+- 요구 상태는 Windows `maximize`이며 Viewer native fullscreen이 아니다. 제목 표시줄·작업 표시줄과
+  사용자의 이후 복원/크기 조절은 유지하고, 매 순간 최대화를 강제하거나 저장된 설정을 추가하지 않는다.
+- setup/live가 공유하는 하나의 top-level window에 적용하고, renderer load가 끝날 때마다 재최대화하지
+  않는다. 첫 `ready-to-show`에서만 `maximize()` 후 `show()`해 깜빡이는 초기 작은 창을 노출하지 않는다.
+- 새 MSI는 2.0.27로 만들고 현재 2.0.26 MSI, config/client identity, Service logging environment를 rollback
+  기준으로 보존한다. 운영 서버·카메라·Viewer 연결 설정은 변경하지 않는다.
+
+## 계획
+
+- [x] 공식 wrapper status와 read-only audit/capture로 `monitoring-pc`, Viewer 2.0.26, Service Running/Auto,
+      session 1, 현재 수동 최대화 창과 기존 설정 hash를 고정한다.
+- [x] first-show 최대화 순서를 회귀 테스트로 고정한 뒤 최소한의 Viewer main-process 변경을 구현한다.
+- [ ] Viewer 전체 테스트·빌드와 관련 정적 검사를 통과하고 깨끗한 exact commit에서 2.0.27 MSI를 생성한다.
+- [ ] MSI hash/ProductCode/UpgradeCode를 검증하고 `monitoring-pc`에 공식 artifact 전송·업그레이드를 수행한다.
+- [ ] Service가 자동 실행한 새 Viewer를 exact-window capture로 확인해 `WasMaximized=true`, 실제 8타일 진행,
+      config/client/log policy 보존, task/run/listener/firewall 잔여 0을 증명한다.
+- [ ] 검토·교훈·구현 상태를 갱신하고 완료 커밋을 feature branch와 `main`에 force 없이 게시한다.
+
+## 검토
+
+- 배포 전 exact-window capture `20260813T120410787Z-e4c48b5c9b4f4bfca5b2168d8bdfc938`은
+  2576×1408, `WasMaximized=true`였지만 이미 떠 있던 창의 현재 상태일 뿐 시작 동작을 증명하지 않는다.
+  코드에는 `maximize()` 호출이 없으므로 재실행 직후 창모드가 되는 사용자 관찰과 일치한다.
+- 배포 전 Viewer는 2.0.26 ProductCode `{998E7181-5567-4973-AD1F-0A8361798B32}`, Service Running/Auto,
+  config SHA-256 `da085b9b...e8710`, client identity SHA-256 `0f5101ea...f323`, warn·5 MiB×3이다.
+- `ready-to-show` handler가 `maximize()` 후 `show()`를 한 번만 호출하도록 변경했다. 변경 전 회귀 테스트는
+  48/49로 정확히 실패했고 구현 후 Viewer 49 tests와 TypeScript/package build가 통과했다.
+
+---
+
 # 2026-08-13 운영 로그 배포·실시간 추이 관찰
 
 ## 범위와 불변 기준

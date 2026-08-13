@@ -38,9 +38,12 @@ test("BrowserWindow uses the hardened renderer boundary", () => {
   });
 });
 
-test("Viewer shows once without taking focus again after the document loads", async () => {
+test("Viewer maximizes before its first show without taking focus again after the document loads", async () => {
   const source = await readFile(path.resolve(import.meta.dirname, "../src/main.ts"), "utf8");
-  assert.match(source, /window\.once\("ready-to-show", \(\) => window\?\.show\(\)\);/u);
+  assert.match(
+    source,
+    /window\.once\("ready-to-show", \(\) => \{\s*window\?\.maximize\(\);\s*window\?\.show\(\);\s*\}\);/u,
+  );
   assert.doesNotMatch(source, /webContents\.on\("did-finish-load", \(\) => \{\s*window\?\.show\(\);/u);
 });
 

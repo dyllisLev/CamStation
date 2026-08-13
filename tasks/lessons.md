@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-08-13 — 현재 최대화 화면과 최대화 시작 동작을 구분한다
+
+- 운영 캡처에서 `WasMaximized=true`여도 사용자가 실행 뒤 수동으로 최대화했을 수 있으므로 시작 동작의
+  증거가 아니다. `BrowserWindow` 생성과 first-show 코드를 확인하고, 수정 후에는 기존 창을 캡처하는 데서
+  끝내지 말고 Service가 새로 실행한 PID의 첫 창 상태를 검증한다.
+- “최대화로 시작”은 native fullscreen이나 영구적인 크기 잠금이 아니다. hidden window의 첫 표시 전에
+  Windows maximize를 적용하되 제목 표시줄, 작업 표시줄과 사용자의 이후 restore/resize는 유지한다.
+
 ## 2026-08-13 — ignored 운영 프로필은 현재 worktree 밖의 승인 원본까지 먼저 찾는다
 
 - Paseo worktree에 ignored 파일이 없다는 사실만으로 운영 대상 접근이 막혔다고 결론내리지 않는다.

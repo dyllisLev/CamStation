@@ -40,7 +40,10 @@ function createWindow(): BrowserWindow {
   if (window) return window;
   window = new BrowserWindow(browserWindowOptions(path.join(directory, "preload.cjs"), app.isPackaged));
   hardenSession(window);
-  window.once("ready-to-show", () => window?.show());
+  window.once("ready-to-show", () => {
+    window?.maximize();
+    window?.show();
+  });
   window.on("closed", () => app.quit());
   window.webContents.on("did-finish-load", () => {
     reportRenderer(rendererStateForEvent("did-finish-load"));
