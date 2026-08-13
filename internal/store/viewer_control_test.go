@@ -544,6 +544,50 @@ func TestPrepareOperatorViewerCommandAcceptsOnlyNarrowSchemas(t *testing.T) {
 	}
 }
 
+func TestCreateOperatorViewerCommandAllowsConfiguredPlaybackStreamWithoutTelemetry(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.UpsertCamera(t.Context(), Camera{
+		Name: "Gate", URL: "rtsp://camera.invalid/live", StreamName: "gate",
+		RecordingStreamName: "gate-recording", LiveStreamName: "gate-live", State: "streaming",
+	})
+	if err != nil {
+		t.Fatalf("seed camera: %v", err)
+	}
+	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{
+		ID: "viewer-missing-telemetry", DisplayName: "Missing telemetry", Route: "/live?viewer=1", Mode: "live",
+	})
+	if err != nil {
+		t.Fatalf("seed viewer: %v", err)
+	}
+
+	for _, streamName := range []string{camera.StreamName, camera.LiveStreamName, camera.FocusStreamName} {
+		if streamName == "" {
+			t.Fatalf("configured playback stream is empty: camera=%#v", camera)
+		}
+		command, err := db.CreateOperatorViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{
+			Type: "resubscribe_stream", StreamName: streamName,
+		})
+		if err != nil || command.StreamName != streamName {
+			t.Fatalf("configured playback command=%#v stream=%q err=%v", command, streamName, err)
+		}
+	}
+	for _, streamName := range []string{"unknown-live", camera.RecordingStreamName} {
+		if _, err := db.CreateOperatorViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{
+			Type: "resubscribe_stream", StreamName: streamName,
+		}); !errors.Is(err, ErrValidation) {
+			t.Fatalf("unapproved stream %q error=%v", streamName, err)
+		}
+	}
+	if err := db.SetCameraEnabled(t.Context(), camera.StreamName, false); err != nil {
+		t.Fatalf("disable camera: %v", err)
+	}
+	if _, err := db.CreateOperatorViewerCommand(t.Context(), viewer.ID, ViewerCommandCreate{
+		Type: "resubscribe_stream", StreamName: camera.LiveStreamName,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("disabled stream error=%v", err)
+	}
+}
+
 func TestViewerCommandCannotBeCancelledOrDeletedAfterDelivery(t *testing.T) {
 	db := openMigratedStore(t)
 	viewer, err := db.UpsertViewerHeartbeat(t.Context(), ViewerHeartbeat{

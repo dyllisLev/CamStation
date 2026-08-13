@@ -3013,3 +3013,79 @@
   SHA-256 `20e1f6b19eef4acb2d585afd9c20c2cd26f731a6eb8e55cbf1b208a2230b8c4a`다.
   최종 status는 NUC/session 1 Active, 제어·설정·캡처 task 0, Cua TCP/firewall 0,
   telemetry disabled였으며 모든 원격 run/staging은 정리됐다. 재부팅·로그오프는 수행하지 않았다.
+
+# 2026-08-13 Viewer 카메라 수신 현황·미수신 개별 복구
+
+## 범위와 구현 계획
+
+- [x] Viewer가 표시해야 하는 활성 카메라와 `live`/`focus` 후보 스트림을 카메라 단위로 묶는 순수 모델을 추가한다.
+- [x] 실제 영상 진행이 확인된 최신 telemetry만 `수신 중`으로 판정하고, 과거 후보 스트림 행은 현재 상태로 오인하지 않게 한다.
+- [x] Viewer 레지스트리에 `수신 중/전체` 카운트와 미수신 카메라 이름을 함께 표시한다.
+- [x] 선택한 Viewer의 원격 제어 영역에 카메라별 수신 상태를 표시하고, 미수신 항목에서 해당 카메라만 `resubscribe_stream`으로 다시 수신시킨다.
+- [x] 기존 재연결 선택 목록을 카메라 단위로 정리하고 상태·사람용 카메라 이름을 함께 표시한다.
+- [x] 판정 모델의 정상·부분 장애·fallback·오래된 telemetry·Viewer 오프라인 회귀 테스트를 추가한다.
+- [x] Web tests/lint/build, Go tests/build, embedded asset과 diff hygiene를 검증한다.
+
+## 합격 기준
+
+- Viewer 목록의 각 행에서 `8/8`, `7/8`, `1/8` 형식으로 활성 카메라 실제 수신 수를 즉시 확인할 수 있다.
+- 일부 카메라만 미수신이면 같은 행과 하단 원격 제어에서 카메라 이름이 명시되어 숫자만 보고 추측할 필요가 없다.
+- 원격 제어의 `다시 수신`은 미수신 카메라 한 대의 기본 live 후보만 대상으로 하며 정상 카메라와 Viewer 전체를 재시작하지 않는다.
+- live 대신 focus fallback이 실제 진행 중이면 해당 카메라는 정상 수신으로 계산한다.
+- `playing` 문자열만 남은 오래된 telemetry나 영상 진행 시각이 없는 행은 정상 수신으로 계산하지 않는다.
+- Viewer 제어 채널·Viewer 프로세스·renderer가 재연결 가능 상태가 아니면 기존 안전 사유를 보여 주고 실행을 막는다.
+
+## Review
+
+- 활성 카메라를 분모로 삼고 `live`/`focus`를 카메라 한 대의 후보로 묶었다. Viewer와 renderer가
+  준비된 상태에서 최신 후보가 `playing`이며 최근 15초 안에 telemetry와 실제 영상 진행을 함께
+  보고한 경우만 수신 중으로 센다. 더 오래된 후보의 과거 `playing` 행은 현재 상태를 가리지 않는다.
+- Viewer 레지스트리는 `7/8` 같은 카운트와 `미수신: 소방서5`처럼 이름을 함께 표시한다. 원격 제어에는
+  활성 카메라별 상태 카드가 생기며 미수신 카드에만 `이 카메라 다시 수신`을 제공한다. 이 작업은
+  기본 live 후보 하나에 기존 `resubscribe_stream` 명령만 보내고 정상 타일이나 Viewer 전체는 재시작하지 않는다.
+- 아직 telemetry를 한 번도 내지 못한 카메라도 복구할 수 있도록 서버 명령 경계를 Viewer의 과거 보고가
+  아닌 현재 활성 카메라 설정으로 바꿨다. 안정 stream과 live/focus 출력만 허용하고 recording 출력,
+  비활성 카메라, 알 수 없는 stream은 거부한다. 진행 중인 동일 재수신 명령도 UI에서 중복 전송하지 않는다.
+- Web 78 tests, `oxlint`, TypeScript/Vite production build와 고정 Go 1.25.12 전체 패키지 테스트가
+  통과했고 최종 embedded asset은 `index-CEviY5hP.js`다. 해당 asset을 포함한 `camstationd` 빌드와
+  `git diff --check`도 통과했다.
+- 격리한 브라우저 fixture를 2048px와 1366px viewport에서 확인해 `7/8`, 미수신 카메라명, 8개 상태
+  카드, 미수신 한 대에만 활성화된 재수신 버튼, 미수신 우선 카메라 선택 목록을 확인했고 콘솔 오류는
+  없었다. 검증 브라우저와 개발 서버는 종료했으며 운영 배포·서비스 제어·실제 재수신 명령은 수행하지 않았다.
+
+# 2026-08-13 Viewer 카메라 수신 현황 main 머지·운영 반영
+
+## 범위와 실행 계획
+
+- [ ] 기능 브랜치의 변경 범위와 생성 Web asset을 다시 검증하고 하나의 기능 커밋으로 고정한다.
+- [ ] 현재 운영 revision `3256be4`의 always-hot 영상 동작을 통합해 이번 배포가 운영 기능을
+  되돌리지 않도록 하고, 통합 상태에서 회귀 검증을 다시 수행한다.
+- [ ] 원격 `main`이 작업 기준점에서 이동하지 않았는지 fetch 후 확인하고, 전용 main worktree에서
+  `--ff-only`로 머지해 원격에 게시한다.
+- [ ] 배포 직전 운영 컨테이너의 image/revision/health/restart, Compose 위치·hash, 카메라·녹화·Viewer
+  진행 상태를 허용 필드만으로 고정하고 즉시 복귀할 이전 immutable image를 확인한다.
+- [ ] 깨끗한 `main`에서 새 immutable Docker image를 빌드하고 로컬 smoke에서 health, revision,
+  embedded Web asset, non-root/read-only 보안 경계를 검증한다.
+- [ ] 운영 Compose를 root 전용 timestamp 백업으로 보존하고 image 참조 한 곳만 새 태그로 바꾼 뒤,
+  Compose 검증을 통과한 경우에만 CamStation 컨테이너 하나를 재생성한다.
+- [ ] 배포 후 container health/restart/revision/image, HTTP health, 활성 카메라 8대, 녹화 worker 8대,
+  Viewer 서비스·renderer와 카메라별 실제 `lastProgressAt` 증가를 반복 검증한다.
+- [ ] 브라우저에서 실제 `/viewers`의 `8/8`·카메라별 카드와 재수신 선택 목록을 확인하고,
+  모니터링 PC의 정확한 Viewer 창에서 8개 영상이 보이는지 캡처·hash·정리 상태까지 검증한다.
+- [ ] 결과와 rollback 자산을 Review에 기록하고 필요하면 배포 기록만 별도 커밋으로 main에 게시한다.
+
+## 합격 기준과 중단·복귀 조건
+
+- 머지는 force 없이 fast-forward이며 원격 main은 검증한 기능 커밋을 가리킨다.
+- 운영은 새 immutable image와 정확한 source revision을 보고하고, container는 healthy/restart 0,
+  기존 non-root/read-only/network/mount 경계를 유지한다.
+- 활성 카메라와 녹화 worker가 모두 8/8이고, 설치 Viewer에서 8개 카메라의 실제 영상 진행 시각이
+  최소 두 표본 사이에서 증가한다.
+- `/viewers`는 운영 데이터로 `8/8`을 표시하고 8개 카메라 상태를 이름과 함께 보여 준다.
+- 카메라·녹화·Viewer·HTTP health 또는 보안 경계가 유한 대기 뒤 회복되지 않으면 새 컨테이너를
+  계속 두지 않고 보존한 직전 immutable image/Compose로 즉시 복귀한 뒤 상태를 다시 검증한다.
+- 검증 중 실제 재수신 버튼은 누르지 않고, 정상 Viewer 전체 재시작이나 카메라 설정 변경도 하지 않는다.
+
+## Review
+
+- 머지·배포·운영 검증 후 기록한다.

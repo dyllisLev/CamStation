@@ -33,7 +33,12 @@ export function viewerCommandIsActive(state: ViewerCommandState): boolean {
   return !terminalStates.has(state);
 }
 
-export function viewerCommandUnavailableReason(viewer: Viewer | undefined, action: ViewerCommandAction, streamName: string): string {
+export function viewerCommandUnavailableReason(
+  viewer: Viewer | undefined,
+  action: ViewerCommandAction,
+  streamName: string,
+  configuredStreamNames?: ReadonlySet<string>,
+): string {
   if (!viewer) return "대상 Viewer를 선택하세요.";
   if (viewer.status === "offline" || viewer.status === "stale") return "Viewer 관리 서비스가 오프라인입니다.";
   if (viewer.control?.state !== "online") return "Viewer 제어 채널이 온라인 상태가 아닙니다.";
@@ -44,7 +49,10 @@ export function viewerCommandUnavailableReason(viewer: Viewer | undefined, actio
     return "Viewer 화면이 준비되지 않았습니다.";
   }
   if (action.requiresStream && !streamName) return "다시 연결할 카메라를 선택하세요.";
-  if (action.requiresStream && !viewer.streams?.some((stream) => stream.streamName === streamName)) {
+  const streamIsRegistered = configuredStreamNames !== undefined
+    ? configuredStreamNames.has(streamName)
+    : viewer.streams?.some((stream) => stream.streamName === streamName);
+  if (action.requiresStream && !streamIsRegistered) {
     return "선택한 카메라가 이 Viewer에 등록되어 있지 않습니다.";
   }
   return "";

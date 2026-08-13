@@ -108,24 +108,20 @@ func (d *DB) CreateViewerCommand(ctx context.Context, viewerID string, req Viewe
 // surface. Internal update orchestration uses CreateViewerCommand or
 // EnsureViewerUpdateCommand and is not exposed through this boundary.
 func (d *DB) CreateOperatorViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate) (ViewerCommand, error) {
-	viewer, err := d.GetViewer(ctx, viewerID, 90*time.Second)
-	if err != nil {
+	if _, err := d.GetViewer(ctx, viewerID, 90*time.Second); err != nil {
 		return ViewerCommand{}, err
 	}
-	req, err = PrepareOperatorViewerCommand(req)
+	req, err := PrepareOperatorViewerCommand(req)
 	if err != nil {
 		return ViewerCommand{}, err
 	}
 	if req.Type == "resubscribe_stream" {
-		registered := false
-		for _, stream := range viewer.Streams {
-			if stream.StreamName == req.StreamName {
-				registered = true
-				break
-			}
+		configured, err := d.isConfiguredViewerPlaybackStream(ctx, req.StreamName)
+		if err != nil {
+			return ViewerCommand{}, err
 		}
-		if !registered {
-			return ViewerCommand{}, fmt.Errorf("stream is not registered for this Viewer: %w", ErrValidation)
+		if !configured {
+			return ViewerCommand{}, fmt.Errorf("stream is not configured for enabled Viewer playback: %w", ErrValidation)
 		}
 	}
 	req, payloadHash, err := prepareViewerCommand(req)
@@ -133,6 +129,40 @@ func (d *DB) CreateOperatorViewerCommand(ctx context.Context, viewerID string, r
 		return ViewerCommand{}, err
 	}
 	return d.createPreparedViewerCommand(ctx, viewerID, req, payloadHash)
+}
+
+// isConfiguredViewerPlaybackStream intentionally excludes recording outputs.
+// A missing camera may have no Viewer telemetry yet, so current enabled camera
+// configuration—not historical Viewer stream reports—is the command boundary.
+func (d *DB) isConfiguredViewerPlaybackStream(ctx context.Context, streamName string) (bool, error) {
+	var configured int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			FROM cameras c
+			WHERE c.enabled = 1
+			  AND (
+				c.stream_name = ?
+				OR c.live_stream_name = ?
+				OR EXISTS (
+					SELECT 1
+					FROM camera_outputs o
+					WHERE o.camera_id = c.id
+					  AND o.purpose IN (?, ?)
+					  AND o.stream_name = ?
+				)
+			  )
+		)`,
+		streamName,
+		streamName,
+		CameraOutputLive,
+		CameraOutputFocus,
+		streamName,
+	).Scan(&configured)
+	if err != nil {
+		return false, fmt.Errorf("check configured Viewer playback stream: %w", err)
+	}
+	return configured != 0, nil
 }
 
 func (d *DB) createPreparedViewerCommand(ctx context.Context, viewerID string, req ViewerCommandCreate, payloadHash string) (ViewerCommand, error) {

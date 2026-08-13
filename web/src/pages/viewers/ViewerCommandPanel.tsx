@@ -1,6 +1,7 @@
 import { Loader2, RefreshCw, Send, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { ViewerCommand, ViewerCommandInput } from "../../app/api";
+import { useCameras } from "../../app/queries";
 import {
   useCancelViewerCommand,
   useCreateViewerCommand,
@@ -16,9 +17,15 @@ import {
   type OperatorViewerCommand,
   viewerCommandAction,
   viewerCommandErrorLabel,
+  viewerCommandIsActive,
   viewerCommandTypeLabel,
   viewerCommandUnavailableReason,
 } from "./viewerCommandModel";
+import {
+  viewerCameraReceptionSummary,
+  type ViewerCameraReception,
+  type ViewerCameraReceptionSummary,
+} from "./viewerCameraReception";
 import { canCancelViewerCommand, commandBadgeState, displayViewer, errorMessage, formatDate } from "./viewerFormat";
 
 type Props = {
@@ -33,6 +40,7 @@ type ConfirmState = {
 
 export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) {
   const viewers = useViewers();
+  const cameras = useCameras();
   const commands = useViewerCommands(selectedViewerId);
   const createCommand = useCreateViewerCommand();
   const cancelCommand = useCancelViewerCommand();
@@ -40,6 +48,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
   const [type, setType] = useState<OperatorViewerCommand>("ping");
   const [reason, setReason] = useState("");
   const [streamName, setStreamName] = useState("");
+  const [pendingRetryStreamName, setPendingRetryStreamName] = useState("");
   const [armedAction, setArmedAction] = useState<OperatorViewerCommand | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const selectedViewer = useMemo(
@@ -48,15 +57,41 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
   );
   const viewerOptions = viewers.data ?? [];
   const action = viewerCommandAction(type);
-  const unavailableReason = viewerCommandUnavailableReason(selectedViewer, action, streamName);
-  const commandRows = commands.data ?? [];
+  const commandRows = useMemo(() => commands.data ?? [], [commands.data]);
+  const cameraReception = useMemo(
+    () => viewerCameraReceptionSummary(selectedViewer, cameras.data ?? []),
+    [cameras.data, selectedViewer],
+  );
+  const cameraOptions = useMemo(
+    () => [...cameraReception.missing, ...cameraReception.receiving],
+    [cameraReception],
+  );
+  const configuredStreamNames = useMemo(
+    () => new Set(cameraReception.receptions.map((reception) => reception.resubscribeStreamName)),
+    [cameraReception],
+  );
+  const unavailableReason = viewerCommandUnavailableReason(
+    selectedViewer,
+    action,
+    streamName,
+    configuredStreamNames,
+  );
+  const activeResubscribeStreams = useMemo(
+    () => new Set(commandRows
+      .filter((command) => command.type === "resubscribe_stream" && viewerCommandIsActive(command.state))
+      .map((command) => command.streamName)
+      .filter((value): value is string => Boolean(value))),
+    [commandRows],
+  );
   const commandsLoading = viewers.isLoading
     || (selectedViewerId !== "" && (commands.isLoading || (commands.data === undefined && !commands.error)));
+  const camerasLoading = cameras.isLoading || (cameras.data === undefined && !cameras.error);
 
   useEffect(() => {
     setArmedAction(null);
     setConfirm(null);
     setStreamName("");
+    setPendingRetryStreamName("");
   }, [selectedViewerId]);
 
   function selectViewer(id: string) {
@@ -118,6 +153,31 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
     );
   }
 
+  function retryCamera(reception: ViewerCameraReception) {
+    const retryAction = viewerCommandAction("resubscribe_stream");
+    const retryUnavailableReason = viewerCommandUnavailableReason(
+      selectedViewer,
+      retryAction,
+      reception.resubscribeStreamName,
+      configuredStreamNames,
+    );
+    if (!selectedViewer || retryUnavailableReason || createCommand.isPending
+      || activeResubscribeStreams.has(reception.resubscribeStreamName)) {
+      return;
+    }
+    setType("resubscribe_stream");
+    setStreamName(reception.resubscribeStreamName);
+    setArmedAction(null);
+    setPendingRetryStreamName(reception.resubscribeStreamName);
+    createCommand.mutate(
+      {
+        id: selectedViewer.id,
+        command: { type: "resubscribe_stream", streamName: reception.resubscribeStreamName },
+      },
+      { onSettled: () => setPendingRetryStreamName("") },
+    );
+  }
+
   return (
     <Panel>
       <PanelHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -166,7 +226,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
               <label className="block space-y-2">
                 <span className="text-xs font-medium text-slate-400">3. 다시 연결할 카메라</span>
                 <select
-                  className="new-form-control font-mono"
+                  className="new-form-control"
                   value={streamName}
                   onChange={(event) => {
                     setStreamName(event.target.value);
@@ -174,8 +234,10 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
                   }}
                 >
                   <option value="">카메라를 선택하세요</option>
-                  {(selectedViewer?.streams ?? []).map((stream) => (
-                    <option key={stream.streamName} value={stream.streamName}>{stream.streamName}</option>
+                  {cameraOptions.map((reception) => (
+                    <option key={reception.cameraStreamName} value={reception.resubscribeStreamName}>
+                      {reception.cameraName} · {reception.receiving ? "수신 중" : "미수신"}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -220,6 +282,22 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
             </div>
           )}
         </form>
+
+        <ViewerCameraReceptionPanel
+          activeResubscribeStreams={activeResubscribeStreams}
+          loading={camerasLoading}
+          pending={createCommand.isPending}
+          pendingRetryStreamName={pendingRetryStreamName}
+          selected={selectedViewer !== undefined}
+          summary={cameraReception}
+          unavailableReason={(targetStreamName) => viewerCommandUnavailableReason(
+            selectedViewer,
+            viewerCommandAction("resubscribe_stream"),
+            targetStreamName,
+            configuredStreamNames,
+          )}
+          onRetry={retryCamera}
+        />
 
         <div className="new-table-wrap">
           <table className="new-table">
@@ -293,6 +371,7 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
         </div>
 
         {commands.error && <div className="text-xs text-red-300">{errorMessage(commands.error)}</div>}
+        {cameras.error && <div className="text-xs text-red-300">카메라 수신 기준을 불러오지 못했습니다: {errorMessage(cameras.error)}</div>}
         {createCommand.error && <div className="text-xs text-red-300">{errorMessage(createCommand.error)}</div>}
         {cancelCommand.error && <div className="text-xs text-red-300">{errorMessage(cancelCommand.error)}</div>}
         {deleteCommand.error && <div className="text-xs text-red-300">{errorMessage(deleteCommand.error)}</div>}
@@ -301,6 +380,117 @@ export function ViewerCommandPanel({ selectedViewerId, onSelectViewer }: Props) 
         )}
       </PanelBody>
     </Panel>
+  );
+}
+
+function ViewerCameraReceptionPanel({
+  activeResubscribeStreams,
+  loading,
+  pending,
+  pendingRetryStreamName,
+  selected,
+  summary,
+  unavailableReason,
+  onRetry,
+}: {
+  readonly activeResubscribeStreams: ReadonlySet<string>;
+  readonly loading: boolean;
+  readonly pending: boolean;
+  readonly pendingRetryStreamName: string;
+  readonly selected: boolean;
+  readonly summary: ViewerCameraReceptionSummary;
+  readonly unavailableReason: (targetStreamName: string) => string;
+  readonly onRetry: (reception: ViewerCameraReception) => void;
+}) {
+  const allReceiving = summary.totalCount > 0 && summary.receivingCount === summary.totalCount;
+  const countColor = summary.totalCount === 0
+    ? "text-slate-400"
+    : allReceiving
+      ? "text-emerald-300"
+      : summary.receivingCount > 0
+        ? "text-amber-300"
+        : "text-red-300";
+
+  return (
+    <section className="rounded-[7px] border border-slate-800 bg-slate-950/40 p-3" aria-label="Viewer 카메라 수신 상태">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-200">카메라 수신 상태</h3>
+          <p className="mt-1 text-xs text-slate-500">실제 영상 진행이 확인된 카메라만 수신 중으로 계산합니다.</p>
+        </div>
+        {selected && !loading && (
+          <div className={`text-lg font-semibold tabular-nums ${countColor}`}>
+            {summary.receivingCount}/{summary.totalCount}
+            <span className="ml-1.5 text-xs font-normal text-slate-500">수신 중</span>
+          </div>
+        )}
+      </div>
+
+      {!selected ? (
+        <div className="mt-3 text-xs text-slate-500">대상 Viewer를 선택하면 카메라별 수신 상태를 표시합니다.</div>
+      ) : loading ? (
+        <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+          <Loader2 className="animate-spin text-cyan-300" size={14} />
+          활성 카메라 목록을 불러오는 중입니다.
+        </div>
+      ) : summary.receptions.length === 0 ? (
+        <div className="mt-3 text-xs text-slate-500">활성 카메라가 없습니다.</div>
+      ) : (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {summary.receptions.map((reception) => {
+            const reason = unavailableReason(reception.resubscribeStreamName);
+            const commandActive = activeResubscribeStreams.has(reception.resubscribeStreamName);
+            const retryPending = pendingRetryStreamName === reception.resubscribeStreamName;
+            return (
+              <article
+                key={reception.cameraStreamName}
+                className={`rounded-[7px] border p-3 ${reception.receiving
+                  ? "border-emerald-500/25 bg-emerald-500/5"
+                  : "border-red-500/30 bg-red-500/5"}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 font-medium text-slate-200">{reception.cameraName}</div>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${reception.receiving
+                    ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
+                    : "border-red-500/40 bg-red-500/15 text-red-200"}`}
+                  >
+                    {reception.receiving ? "수신 중" : "미수신"}
+                  </span>
+                </div>
+                <div className="mt-2 truncate font-mono text-[11px] text-slate-500" title={reception.activeStreamName ?? reception.resubscribeStreamName}>
+                  {reception.activeStreamName ?? reception.resubscribeStreamName}
+                  {reception.transport ? ` · ${reception.transport.toUpperCase()}` : ""}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600">
+                  최근 진행 {formatDate(reception.lastProgressAt)}
+                </div>
+                {!reception.receiving && (
+                  <div className="mt-3">
+                    <Button
+                      className="w-full"
+                      disabled={pending || commandActive || Boolean(reason)}
+                      size="sm"
+                      title={reason || undefined}
+                      type="button"
+                      variant="secondary"
+                      onClick={() => onRetry(reception)}
+                    >
+                      {retryPending || commandActive ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                      {retryPending
+                        ? "다시 수신 요청 중"
+                        : commandActive
+                          ? "다시 수신 처리 중"
+                          : "이 카메라 다시 수신"}
+                    </Button>
+                    {reason && <div className="mt-1.5 text-[11px] leading-4 text-amber-300">{reason}</div>}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

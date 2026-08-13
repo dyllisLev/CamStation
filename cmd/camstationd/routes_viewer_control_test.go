@@ -417,9 +417,13 @@ func TestViewerOfflineRegistryEntryCanBeDeleted(t *testing.T) {
 
 func TestViewerOperatorCommandEndpointEnforcesSchemaAndCanonicalName(t *testing.T) {
 	server := newTestRouteServer(t)
+	if _, err := server.db.UpsertCamera(t.Context(), store.Camera{
+		Name: "Gate", StreamName: "gate-main", URL: routeSyntheticRTSPURL("viewer-schema"), State: "streaming",
+	}); err != nil {
+		t.Fatalf("seed schema camera: %v", err)
+	}
 	if _, err := server.db.UpsertViewerHeartbeat(t.Context(), store.ViewerHeartbeat{
 		ID: "viewer-schema", DisplayName: "viewer-schema", Route: "/live?viewer=1", Mode: "live",
-		Streams: []store.ViewerStreamHealth{{StreamName: "gate-main", State: "playing"}},
 	}); err != nil {
 		t.Fatalf("seed schema viewer: %v", err)
 	}

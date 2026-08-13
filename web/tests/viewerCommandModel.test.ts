@@ -43,6 +43,39 @@ test("command availability follows independent control, Viewer, renderer, and st
   assert.match(viewerCommandUnavailableReason({ ...viewer, renderer: { state: "failed" } }, viewerCommandAction("reload_live"), ""), /화면/);
 });
 
+test("allows an enabled configured camera to be resubscribed before it has emitted telemetry", () => {
+  const viewerWithoutStreams = { ...viewer, streams: [] };
+  const configuredStreams = new Set(["missing-camera-live"]);
+
+  assert.equal(
+    viewerCommandUnavailableReason(
+      viewerWithoutStreams,
+      viewerCommandAction("resubscribe_stream"),
+      "missing-camera-live",
+      configuredStreams,
+    ),
+    "",
+  );
+  assert.match(
+    viewerCommandUnavailableReason(
+      viewerWithoutStreams,
+      viewerCommandAction("resubscribe_stream"),
+      "unknown-camera-live",
+      configuredStreams,
+    ),
+    /등록/,
+  );
+  assert.match(
+    viewerCommandUnavailableReason(
+      viewer,
+      viewerCommandAction("resubscribe_stream"),
+      "gate-main",
+      configuredStreams,
+    ),
+    /등록/,
+  );
+});
+
 test("only nonterminal commands trigger active polling", () => {
   assert.equal(viewerCommandIsActive("pending"), true);
   assert.equal(viewerCommandIsActive("delivered"), true);
