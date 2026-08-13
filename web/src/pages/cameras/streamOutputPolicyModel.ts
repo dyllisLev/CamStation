@@ -36,7 +36,7 @@ export function cameraPolicySurfaceKey(mode: "create" | "edit", streamName?: str
 export function recommendedStreamOutputs(hasLiveSource: boolean): StreamOutputSettingsTuple {
   return [
     output("recording", "recording", "copy", null, null, null, "source", "on_demand"),
-    output("live", hasLiveSource ? "live" : "recording", "auto", null, null, null, "none", "on_demand"),
+    output("live", hasLiveSource ? "live" : "recording", "h264", 1280, 720, 15, "none", "always"),
     output("focus", "recording", "auto", 1920, 1080, null, "none", "on_demand"),
   ];
 }

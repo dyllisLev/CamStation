@@ -29,7 +29,7 @@ import {
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
 import { playbackStatusCopy } from "./playbackPresentation";
-import { playbackStreamCandidates, shouldRenderLiveTile } from "./streamSelection";
+import { playbackStreamCandidates, tileFocusPresentation } from "./streamSelection";
 import { hasViewerFullscreenBridge, reportViewerStream, requestViewerFullscreen, subscribeViewerCommands, subscribeViewerFullscreen } from "./viewerBridge";
 import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
 
@@ -548,6 +548,8 @@ function CameraGrid({
           margin={GRID_MARGIN}
           containerPadding={[0, 0]}
           maxRows={GRID_ROWS}
+          isDraggable={!zoomedCamera}
+          isResizable={!zoomedCamera}
           isBounded
           autoSize={false}
           style={{ height: "100%" }}
@@ -555,34 +557,22 @@ function CameraGrid({
           {layout.map((item) => {
             const camera = cameraByStream.get(item.i);
             if (!camera) return <div key={item.i} className="new-grid-item" />;
+            const presentation = tileFocusPresentation(camera.streamName, zoomedCamera?.streamName ?? null);
             return (
-              <div key={item.i} className="new-grid-item">
+              <div key={item.i} className={cn("new-grid-item", `new-grid-item-${presentation}`)}>
                 <CameraTile
                   camera={camera}
                   selected={camera.streamName === selectedStream}
+                  zoomed={presentation === "focused"}
                   onSelect={() => onSelectCamera(camera)}
                   onToggleZoom={() => onToggleZoom(camera)}
                   videoViewport={item.videoZoom}
                   onVideoViewportChange={(viewport) => onVideoViewportChange(camera.streamName, viewport)}
-                  suspended={!shouldRenderLiveTile(camera.streamName, zoomedCamera?.streamName ?? null)}
                 />
               </div>
             );
           })}
         </GridLayout>
-      )}
-      {zoomedCamera && (
-        <div className="new-zoom-layer">
-          <CameraTile
-            camera={zoomedCamera}
-            selected
-            zoomed
-            onSelect={() => onSelectCamera(zoomedCamera)}
-            onToggleZoom={() => onToggleZoom(zoomedCamera)}
-            videoViewport={layout.find((item) => item.i === zoomedCamera.streamName)?.videoZoom}
-            onVideoViewportChange={(viewport) => onVideoViewportChange(zoomedCamera.streamName, viewport)}
-          />
-        </div>
       )}
     </div>
   );
@@ -596,7 +586,6 @@ function CameraTile({
   onToggleZoom,
   videoViewport,
   onVideoViewportChange,
-  suspended = false,
 }: {
   camera: Camera;
   selected: boolean;
@@ -605,14 +594,13 @@ function CameraTile({
   onToggleZoom: () => void;
   videoViewport?: VideoViewport;
   onVideoViewportChange: (viewport: VideoViewport) => void;
-  suspended?: boolean;
 }) {
   const [playback, setPlayback] = useState<{ phase: PlaybackPhase; usingFallback: boolean }>({
     phase: "connecting",
     usingFallback: false,
   });
   const browserPlaying = playback.phase === "playing";
-  const playbackUnavailable = !suspended && !browserPlaying;
+  const playbackUnavailable = !browserPlaying;
 
   return (
     <article
@@ -623,16 +611,12 @@ function CameraTile({
         onToggleZoom();
       }}
     >
-      {!suspended ? (
-        <LiveVideo
-          streamNames={playbackStreamCandidates(camera, zoomed)}
-          viewport={videoViewport}
-          onViewportChange={onVideoViewportChange}
-          onPlaybackChange={setPlayback}
-        />
-      ) : (
-        <div className="new-offline-layer">집중보기 중 라이브 연결 중지</div>
-      )}
+      <LiveVideo
+        streamNames={playbackStreamCandidates(camera)}
+        viewport={videoViewport}
+        onViewportChange={onVideoViewportChange}
+        onPlaybackChange={setPlayback}
+      />
       <div className="new-tile-head cam-drag-handle">
         <span className={cn("new-state", playbackUnavailable && "new-danger")} />
         <strong>{camera.name}</strong>

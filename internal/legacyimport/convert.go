@@ -210,7 +210,7 @@ func convertCamera(legacy legacyCamera) (store.Camera, CameraManifest, canonical
 	}
 	outputs := []store.CameraOutput{
 		{Purpose: store.CameraOutputRecording, SourceKey: "recording", VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand},
-		{Purpose: store.CameraOutputLive, SourceKey: liveSource, VideoMode: liveVideoMode, MaxWidth: liveMaxWidth, MaxHeight: liveMaxHeight, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+		{Purpose: store.CameraOutputLive, SourceKey: liveSource, VideoMode: liveVideoMode, MaxWidth: liveMaxWidth, MaxHeight: liveMaxHeight, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationAlways},
 		{Purpose: store.CameraOutputFocus, SourceKey: "recording", VideoMode: store.CameraVideoAuto, MaxWidth: &width, MaxHeight: &height, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
 	}
 	row := store.Camera{

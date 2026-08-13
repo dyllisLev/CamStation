@@ -174,7 +174,7 @@ func renderPolicyConfigWithCandidates(cameras []store.Camera, applied bool, cand
 				continue
 			}
 			if output.Purpose == store.CameraOutputLive {
-				writePreload(resolved[camera.ID][i].SourceName, "video&audio")
+				continue
 			}
 			if output.Activation != store.CameraActivationAlways {
 				continue

@@ -2480,3 +2480,58 @@
 - `./scripts/check-dev.sh`의 Go 전 패키지, Web 64 tests·lint·build, Viewer 38 tests·build,
   daemon build가 통과했다. production policy, `.12` exact Compose JSON render, 변경 문서
   상대 링크 10개, changed-diff secret pattern과 `git diff --check`도 통과했다.
+# 2026-08-13 Always-hot 영상 파이프라인 로컬 개발
+
+## 작업 격리
+
+- [x] 기존 `/workspace/CamStation`의 다른 작업 변경을 확인하고 수정하지 않는다.
+- [x] 기준 commit `491a0f5`에서 branch `feature/always-hot-video`, worktree
+  `/workspace/CamStation-worktrees/always-hot-video`를 생성한다.
+- [x] 운영 서버·운영 Docker·운영 DB·카메라 설정은 읽거나 변경하지 않는 경계를 확정한다.
+
+## 구현과 검증
+
+- [x] 상세 설계와 실행 계획을 `docs/superpowers/specs/`, `docs/superpowers/plans/`에 작성한다.
+- [x] 서버 소유 live warm consumer와 신규/기존 정책 정규화를 실패 우선 테스트로 구현한다.
+- [x] legacy/canary import plan과 staged DB의 live activation 정규화 계약을 일치시킨다.
+- [x] `/live`와 `/viewer` 집중보기에서 playback component/session을 유지한다.
+- [x] Web/Go 전체 검사와 build를 통과한다.
+- [x] 격리 로컬 Docker에 반영하고 health/API/media/runtime 경계를 확인한다.
+- [x] 브라우저에서 실제 연결 시간과 다중↔집중 전환 세션 유지 증거를 수집한다.
+- [x] `mediaReady`는 활성 카메라 8대의 public live producer와 서버 소유 warm consumer가 viewer
+      0명인 상태에서 모두 준비됐을 때만 참으로 판정한다. 단순 daemon health와 혼동하지 않는다.
+- [x] 서버 준비 완료 이후의 클라이언트 접속 시간을 별도로 측정하고, 준비 중 발생한 시간을
+      클라이언트 연결 지연으로 보고하지 않는다.
+- [x] 정적 preload의 순차/실패 동작을 확인하고, 활성 live 8개가 클라이언트 요청과 무관하게
+      병렬로 시작·지속·복구되는 계약을 검증한다. `언젠가 8/8`만으로 합격 처리하지 않는다.
+- [x] 서버 소유 FFmpeg null consumer manager를 실패 우선 테스트로 구현하고, 정적 live preload와
+      API preload 복구 watchdog을 제거한다.
+- [x] `mediaReady`, expected/ready live 수를 공개 stream status에 추가하고 viewer 0명 상태의 8/8을
+      Docker에서 증명한다.
+- [x] 카메라→서버 cold start 및 private relay watchdog 변경은 이번 서버→클라이언트 지연 범위에서
+      제거한다. 합격 판단은 warm 완료 후 브라우저 첫 영상과 집중↔다중 세션 연속성으로만 한다.
+
+## Review
+
+- 설계 재점검으로 정적 go2rtc preload는 폐기 대상으로 판정했다. v1.9.14는 시작 후 config map을
+  순차 순회하며 AddPreload가 동기식 AddConsumer 완료를 기다리므로 private+public 15개를 넣은 현재
+  후보는 느린 항목이 뒤 항목 시작을 막는다. 로컬 10 CPU에서 throttling 0인 상태에서도 8대 준비가
+  85.5초 걸린 결과와 일치한다.
+- 최종 구현은 public live 1개/카메라의 서버 소유 video-copy/null consumer를 독립 관리한다.
+  브라우저를 열기 전에 viewer 0명, public live producer 8개, warm consumer 8개,
+  `mediaReady=8/8`을 확인했다. 소방서4 warm consumer 단일 종료 시험은 다른 7개 producer와
+  동일 go2rtc PID를 유지한 채 해당 worker만 10.465초에 교체했다.
+- 이미 준비된 서버에 새 소비자가 붙은 뒤 첫 `playing`은 일반 브라우저 `/live`에서 소방서4
+  0.945초, 전체 0.331~1.536초였고, 별도 웹 `/viewer`에서는 소방서4 0.683초, 전체
+  0.208~1.550초였다. Windows 클라이언트가 실제 여는 `/live?viewer=1`은 소방서4 1.395초,
+  전체 0.860~2.217초였다. 세 화면 모두 집중→다중 전환 전·중·후 video DOM 8개가 동일했고,
+  video 추가/제거·abort·emptied·error가 없었으며 server viewer count는 8로 유지됐다.
+- Go 전체 패키지와 focused race test, Web 70 tests·lint·build, daemon build,
+  `git diff --check`가 통과했다. image `sha256:4a9d83b3226e7275fd99e2cadc3df006688eec908411c22a6a1058312015738f`를
+  전용 `camstation-always-hot-dev` 컨테이너에 반영했다. HTTP 28080/WebRTC 28555, 임시 DB·media,
+  10 CPU·6 GiB 경계를 유지했고 운영 서버는 수정하지 않았다.
+- 개발 접속 주소는 LAN `http://192.168.0.154:28080`, host network
+  `http://10.0.0.16:28080`이며 `/live`와 `/viewer` 모두 HTTP 200을 확인했다. 검증 탭을 모두
+  닫은 뒤 viewer 0, warm-only 8/8, container healthy 상태로 인계한다.
+
+---

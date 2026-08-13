@@ -265,7 +265,7 @@ func go2RTCCanaryCamera(key, mainURL, subURL string) store.Camera {
 		},
 		Outputs: []store.CameraOutput{
 			{Purpose: store.CameraOutputRecording, SourceKey: "recording", VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand},
-			{Purpose: store.CameraOutputLive, SourceKey: "live", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+			{Purpose: store.CameraOutputLive, SourceKey: "live", VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationAlways},
 			{Purpose: store.CameraOutputFocus, SourceKey: "recording", VideoMode: store.CameraVideoAuto, MaxWidth: &width, MaxHeight: &height, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
 		},
 		LastProbeJSON: map[string]any{}, LastScanJSON: map[string]any{},

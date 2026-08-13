@@ -24,6 +24,7 @@ type Go2RTC struct {
 	configPath       string
 	apiURL           string
 	webrtcCandidates []string
+	liveWarmer       *LiveWarmManager
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -33,11 +34,14 @@ type Go2RTC struct {
 type Go2RTCOption func(*Go2RTC)
 
 type Status struct {
-	Installed bool                     `json:"installed"`
-	Running   bool                     `json:"running"`
-	APIURL    string                   `json:"apiUrl"`
-	Error     string                   `json:"error,omitempty"`
-	Streams   map[string]StreamRuntime `json:"streams,omitempty"`
+	Installed           bool                     `json:"installed"`
+	Running             bool                     `json:"running"`
+	MediaReady          bool                     `json:"mediaReady"`
+	ExpectedLiveStreams int                      `json:"expectedLiveStreams"`
+	ReadyLiveStreams    int                      `json:"readyLiveStreams"`
+	APIURL              string                   `json:"apiUrl"`
+	Error               string                   `json:"error,omitempty"`
+	Streams             map[string]StreamRuntime `json:"streams,omitempty"`
 }
 
 type StreamRuntime struct {
@@ -52,6 +56,7 @@ func NewGo2RTC(configPath string, options ...Go2RTCOption) *Go2RTC {
 		binary:     "go2rtc",
 		configPath: configPath,
 		apiURL:     "http://127.0.0.1:1984",
+		liveWarmer: newLiveWarmManager(),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -219,6 +224,18 @@ func (g *Go2RTC) Restart(ctx context.Context, cameras []store.Camera) error {
 	return g.ApplyConfig(ctx, config)
 }
 
+func (g *Go2RTC) ReconcileLiveWarmers(cameras []store.Camera) {
+	if g.liveWarmer != nil {
+		g.liveWarmer.Reconcile(cameras)
+	}
+}
+
+func (g *Go2RTC) StopLiveWarmers() {
+	if g.liveWarmer != nil {
+		g.liveWarmer.StopAll()
+	}
+}
+
 func (g *Go2RTC) restartProcess(ctx context.Context) error {
 	g.mu.Lock()
 	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
@@ -231,6 +248,11 @@ func (g *Go2RTC) restartProcess(ctx context.Context) error {
 
 func (g *Go2RTC) Status(ctx context.Context) Status {
 	status := Status{APIURL: g.apiURL}
+	snapshot := LiveWarmSnapshot{Active: map[string]bool{}}
+	if g.liveWarmer != nil {
+		snapshot = g.liveWarmer.Snapshot()
+	}
+	status.ExpectedLiveStreams = len(snapshot.Expected)
 	if _, err := exec.LookPath(g.binary); err != nil {
 		status.Error = err.Error()
 		return status
@@ -243,6 +265,7 @@ func (g *Go2RTC) Status(ctx context.Context) Status {
 			status.Error = err.Error()
 		} else {
 			status.Streams = runtime
+			status.ExpectedLiveStreams, status.ReadyLiveStreams, status.MediaReady = liveReadiness(snapshot, runtime)
 		}
 	}
 	return status
@@ -271,16 +294,20 @@ type go2RTCProducer struct {
 	Medias     []string `json:"medias"`
 }
 
+type go2RTCConsumer struct {
+	ID         int    `json:"id"`
+	FormatName string `json:"format_name"`
+	Protocol   string `json:"protocol"`
+	UserAgent  string `json:"user_agent"`
+}
+
+type go2RTCStream struct {
+	Producers []go2RTCProducer `json:"producers"`
+	Consumers []go2RTCConsumer `json:"consumers"`
+}
+
 func parseStreamRuntime(reader io.Reader) (map[string]StreamRuntime, error) {
-	var payload map[string]struct {
-		Producers []go2RTCProducer `json:"producers"`
-		Consumers []struct {
-			ID         int    `json:"id"`
-			FormatName string `json:"format_name"`
-			Protocol   string `json:"protocol"`
-			UserAgent  string `json:"user_agent"`
-		} `json:"consumers"`
-	}
+	var payload map[string]go2RTCStream
 	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
 		return nil, err
 	}

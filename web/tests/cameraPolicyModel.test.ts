@@ -47,10 +47,10 @@ function policyCamera(revision = 7): Camera {
   };
 }
 
-test("recommended policies use recording copy, live auto, and capped focus", () => {
+test("recommended policies keep the browser live output warm with a bounded H.264 profile", () => {
   assert.deepEqual(recommendedStreamOutputs(true), [
     { purpose: "recording", sourceKey: "recording", videoMode: "copy", maxWidth: null, maxHeight: null, maxFPS: null, audioMode: "source", activation: "on_demand" },
-    { purpose: "live", sourceKey: "live", videoMode: "auto", maxWidth: null, maxHeight: null, maxFPS: null, audioMode: "none", activation: "on_demand" },
+    { purpose: "live", sourceKey: "live", videoMode: "h264", maxWidth: 1280, maxHeight: 720, maxFPS: 15, audioMode: "none", activation: "always" },
     { purpose: "focus", sourceKey: "recording", videoMode: "auto", maxWidth: 1920, maxHeight: 1080, maxFPS: null, audioMode: "none", activation: "on_demand" },
   ]);
   assert.equal(recommendedStreamOutputs(false)[1].sourceKey, "recording");
@@ -125,7 +125,8 @@ test("recommended reset creates a local dirty draft without mutating the server 
   camera.streamOutputs[1].desired = { ...camera.streamOutputs[1].desired, videoMode: "h264" };
   const draft = draftFromCamera(camera);
   const reset = { ...draft, outputs: recommendedStreamOutputs(true), dirty: true };
-  assert.equal(reset.outputs[1].videoMode, "auto");
+  assert.equal(reset.outputs[1].videoMode, "h264");
+  assert.equal(reset.outputs[1].activation, "always");
   assert.equal(camera.streamOutputs[1].desired.videoMode, "h264");
 });
 
