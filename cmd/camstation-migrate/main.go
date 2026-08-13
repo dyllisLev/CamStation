@@ -37,6 +37,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	expectedRetentionDays := flags.Int("expect-retention-days", 0, "required recording retention days")
 	expectedMaxStorageGB := flags.Float64("expect-max-storage-gb", 0, "required maximum recording storage GB")
 	selectionPrefix := flags.String("select-prefix", "", "required go2rtc canary stream-key prefix")
+	scope := flags.String("scope", string(legacyimport.ScopeFull), "import scope: full or camera-layout")
+	targetSegmentMinutes := flags.Int("target-segment-minutes", -1, "explicit fresh-target recording segment minutes (camera-layout scope)")
+	targetRetentionDays := flags.Int("target-retention-days", -1, "explicit fresh-target recording retention days (camera-layout scope)")
+	targetMaxStorageGB := flags.Float64("target-max-storage-gb", -1, "explicit fresh-target maximum recording storage GB (camera-layout scope)")
 	if err := flags.Parse(args[1:]); err != nil {
 		fmt.Fprintln(stderr, "invalid command flags")
 		return 2
@@ -56,33 +60,49 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		RetentionDays:   *expectedRetentionDays,
 		MaxStorageGB:    *expectedMaxStorageGB,
 	}
+	importOptions := legacyimport.ImportOptions{Scope: legacyimport.ImportScope(strings.TrimSpace(*scope))}
+	if importOptions.Scope == legacyimport.ScopeCameraLayout && *targetSegmentMinutes >= 0 && *targetRetentionDays >= 0 && *targetMaxStorageGB >= 0 {
+		importOptions.TargetPolicy = &legacyimport.TargetPolicy{
+			SegmentMinutes: *targetSegmentMinutes,
+			RetentionDays:  *targetRetentionDays,
+			MaxStorageGB:   *targetMaxStorageGB,
+		}
+	}
 
 	var manifest legacyimport.Manifest
 	var err error
 	switch operation {
 	case "snapshot":
+		if importOptions.Scope != legacyimport.ScopeFull {
+			fmt.Fprintln(stderr, "snapshot supports only the full scope")
+			return 2
+		}
 		if strings.TrimSpace(*target) == "" {
 			fmt.Fprintln(stderr, "snapshot requires -target")
 			return 2
 		}
 		manifest, err = legacyimport.Snapshot(ctx, *source, *target, expectations)
 	case "inspect":
-		manifest, err = legacyimport.Inspect(ctx, *source, expectations)
+		manifest, err = legacyimport.InspectWithOptions(ctx, *source, expectations, importOptions)
 	case "dry-run":
-		manifest, err = legacyimport.DryRun(ctx, *source, expectations)
+		manifest, err = legacyimport.DryRunWithOptions(ctx, *source, expectations, importOptions)
 	case "import":
 		if strings.TrimSpace(*target) == "" {
 			fmt.Fprintln(stderr, "import requires -target")
 			return 2
 		}
-		manifest, err = legacyimport.Import(ctx, *source, *target, expectations)
+		manifest, err = legacyimport.ImportWithOptions(ctx, *source, *target, expectations, importOptions)
 	case "verify":
 		if strings.TrimSpace(*target) == "" {
 			fmt.Fprintln(stderr, "verify requires -target")
 			return 2
 		}
-		manifest, err = legacyimport.Verify(ctx, *source, *target, expectations)
+		manifest, err = legacyimport.VerifyWithOptions(ctx, *source, *target, expectations, importOptions)
 	case "go2rtc-canary":
+		if importOptions.Scope != legacyimport.ScopeFull {
+			fmt.Fprintln(stderr, "go2rtc-canary supports only the full scope")
+			return 2
+		}
 		if strings.TrimSpace(*target) == "" {
 			fmt.Fprintln(stderr, "go2rtc-canary requires -target")
 			return 2

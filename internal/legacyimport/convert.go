@@ -3,9 +3,11 @@ package legacyimport
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"sort"
@@ -16,19 +18,59 @@ import (
 )
 
 func buildPlan(ctx context.Context, source string, expectations Expectations) (plan, error) {
+	return buildPlanWithOptions(ctx, source, expectations, ImportOptions{Scope: ScopeFull})
+}
+
+func normalizeImportOptions(options *ImportOptions) (ImportScope, []Finding) {
+	scope := options.Scope
+	if scope == "" {
+		scope = ScopeFull
+	}
+	options.Scope = scope
+	if scope != ScopeFull && scope != ScopeCameraLayout {
+		return scope, []Finding{{Code: "IMPORT_SCOPE_INVALID", Message: "import scope must be full or camera-layout"}}
+	}
+	if scope != ScopeCameraLayout {
+		return scope, nil
+	}
+	if options.TargetPolicy == nil {
+		return scope, []Finding{{Code: "TARGET_POLICY_REQUIRED", Message: "camera-layout import requires an explicit target recording policy"}}
+	}
+	policy := options.TargetPolicy
+	var blockers []Finding
+	if policy.SegmentMinutes <= 0 {
+		blockers = append(blockers, Finding{Code: "TARGET_POLICY_SEGMENT_INVALID", Message: "target recording segment minutes must be positive"})
+	}
+	if policy.RetentionDays < 0 {
+		blockers = append(blockers, Finding{Code: "TARGET_POLICY_RETENTION_INVALID", Message: "target recording retention days cannot be negative"})
+	}
+	if policy.MaxStorageGB < 0 || math.IsNaN(policy.MaxStorageGB) || math.IsInf(policy.MaxStorageGB, 0) {
+		blockers = append(blockers, Finding{Code: "TARGET_POLICY_STORAGE_INVALID", Message: "target recording maximum storage must be finite and non-negative"})
+	}
+	return scope, blockers
+}
+
+func buildPlanWithOptions(ctx context.Context, source string, expectations Expectations, options ImportOptions) (plan, error) {
 	result := plan{manifest: Manifest{FormatVersion: ManifestVersion}}
+	scope, blockers := normalizeImportOptions(&options)
+	result.manifest.Scope = string(scope)
+	result.manifest.Blockers = append(result.manifest.Blockers, blockers...)
+	if len(blockers) > 0 {
+		sortFindings(result.manifest.Blockers)
+		return result, nil
+	}
 	db, err := openLegacyReadOnly(ctx, source)
 	if err != nil {
 		return result, err
 	}
 	defer db.Close()
 
-	if !inspectLegacySchema(ctx, db, &result.manifest) {
+	if !inspectLegacySchemaForScope(ctx, db, &result.manifest, scope) {
 		result.manifest.Ready = false
 		return result, nil
 	}
 
-	legacyCameras, archivedCount, err := readLegacyCameras(ctx, db)
+	legacyCameras, archivedCount, err := readLegacyCamerasForScope(ctx, db, scope)
 	if err != nil {
 		return result, err
 	}
@@ -39,9 +81,12 @@ func buildPlan(ctx context.Context, source string, expectations Expectations) (p
 	if err != nil {
 		return result, err
 	}
-	legacySettings, err := readLegacySettings(ctx, db)
-	if err != nil {
-		return result, err
+	var legacySettings map[string]string
+	if scope == ScopeFull {
+		legacySettings, err = readLegacySettings(ctx, db)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	result.manifest.Summary.ArchivedCount = archivedCount
@@ -54,7 +99,7 @@ func buildPlan(ctx context.Context, source string, expectations Expectations) (p
 
 	keys := map[string]bool{}
 	for _, legacy := range legacyCameras {
-		camera, public, canonical, blockers, warnings := convertCamera(legacy)
+		camera, public, canonical, blockers, warnings := convertCameraForScope(legacy, scope)
 		result.manifest.Blockers = append(result.manifest.Blockers, blockers...)
 		result.manifest.Warnings = append(result.manifest.Warnings, warnings...)
 		if keys[legacy.id] {
@@ -94,7 +139,11 @@ func buildPlan(ctx context.Context, source string, expectations Expectations) (p
 		result.manifest.Summary.LayoutItemCount += len(layout.Data)
 	}
 
-	result.settings = convertSettings(legacySettings, &result.manifest)
+	if scope == ScopeCameraLayout {
+		result.settings = convertTargetSettings(*options.TargetPolicy, &result.manifest)
+	} else {
+		result.settings = convertSettings(legacySettings, &result.manifest)
+	}
 	result.canon.Settings = canonicalSettings{
 		Recording: *result.settings.Recording,
 		Backup:    *result.settings.Backup,
@@ -231,6 +280,21 @@ func convertCamera(legacy legacyCamera) (store.Camera, CameraManifest, canonical
 	}
 	canonical := canonicalCameraFromStore(row)
 	return row, public, canonical, blockers, warnings
+}
+
+func convertCameraForScope(legacy legacyCamera, scope ImportScope) (store.Camera, CameraManifest, canonicalCamera, []Finding, []Finding) {
+	if scope == ScopeCameraLayout {
+		// A camera-layout import carries only the stream connection graph,
+		// identity, and enabled state. Do not carry legacy control endpoints or
+		// metadata into the target plan, even when the source has them.
+		legacy.location = sql.NullString{}
+		legacy.notes = sql.NullString{}
+		legacy.onvifHost = sql.NullString{}
+		legacy.onvifPort = sql.NullInt64{}
+		legacy.onvifUsername = sql.NullString{}
+		legacy.onvifPassword = sql.NullString{}
+	}
+	return convertCamera(legacy)
 }
 
 type derivedLiveRecipe struct {
@@ -470,6 +534,32 @@ func convertSettings(values map[string]string, manifest *Manifest) store.Setting
 	}
 	if motionEnabled {
 		manifest.Warnings = append(manifest.Warnings, Finding{Code: "MOTION_SETTINGS_NOT_MAPPED", Message: "legacy motion processing is not part of the approved video-only 2.0 cutover"})
+	}
+	return store.SettingsUpdate{Recording: &recording, Backup: &backup}
+}
+
+func convertTargetSettings(policy TargetPolicy, manifest *Manifest) store.SettingsUpdate {
+	recording := store.RecordingSettings{
+		SegmentMinutes: policy.SegmentMinutes,
+		RetentionDays:  policy.RetentionDays,
+		MaxStorageGB:   policy.MaxStorageGB,
+	}
+	backup := store.BackupSettings{
+		Enabled:         false,
+		Target:          "",
+		RetentionDays:   30,
+		ScheduleEnabled: false,
+		ScheduleCron:    "0 3 * * *",
+		ProtectUnbacked: true,
+	}
+	manifest.Settings = SettingsManifest{
+		SegmentMinutes:       recording.SegmentMinutes,
+		RetentionDays:        recording.RetentionDays,
+		MaxStorageGB:         recording.MaxStorageGB,
+		BackupEnabled:        false,
+		BackupTargetPresent:  false,
+		ProtectUnbacked:      true,
+		MotionSettingsMapped: false,
 	}
 	return store.SettingsUpdate{Recording: &recording, Backup: &backup}
 }

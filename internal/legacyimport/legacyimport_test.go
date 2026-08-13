@@ -154,6 +154,123 @@ func TestDryRunPreservesProductionShapeWithoutLeakingSecrets(t *testing.T) {
 	}
 }
 
+func cameraLayoutImportOptions() ImportOptions {
+	return ImportOptions{
+		Scope: ScopeCameraLayout,
+		TargetPolicy: &TargetPolicy{
+			SegmentMinutes: 7,
+			RetentionDays:  14,
+			MaxStorageGB:   42,
+		},
+	}
+}
+
+func TestCameraLayoutImportUsesTargetPolicyAndLeavesFreshRuntimeEmpty(t *testing.T) {
+	t.Parallel()
+	source, secrets := createLegacyFixture(t, func(db *sql.DB) {
+		// These values must not influence a camera-layout import.
+		if _, err := db.Exec(`UPDATE settings SET value='not-a-target-policy' WHERE key IN ('segment_minutes','retention_days','max_storage_gb','motion_enabled','motion_threshold')`); err != nil {
+			t.Fatalf("poison legacy settings: %v", err)
+		}
+	})
+	target := filepath.Join(t.TempDir(), "camera-layout.db")
+	options := cameraLayoutImportOptions()
+	expectations := productionExpectations()
+	expectations.SegmentMinutes, expectations.RetentionDays, expectations.MaxStorageGB = 0, 0, 0
+
+	created, err := ImportWithOptions(t.Context(), source, target, expectations, options)
+	if err != nil {
+		t.Fatalf("camera-layout import: %v", err)
+	}
+	if !created.Ready || created.TargetStatus != "created" || created.Scope != string(ScopeCameraLayout) {
+		t.Fatalf("created manifest = ready:%v target:%q scope:%q blockers:%#v", created.Ready, created.TargetStatus, created.Scope, created.Blockers)
+	}
+	if created.Summary.CameraCount != 9 || created.Summary.EnabledCount != 8 || created.Summary.DisabledCount != 1 || created.Summary.SubStreamCount != 9 ||
+		created.Summary.LayoutCount != 1 || created.Summary.LayoutItemCount != 8 || created.Summary.DeferredControl != 0 || created.Summary.UnmappedMetadata != 0 {
+		t.Fatalf("camera/layout summary = %#v", created.Summary)
+	}
+	if created.Settings.SegmentMinutes != 7 || created.Settings.RetentionDays != 14 || created.Settings.MaxStorageGB != 42 ||
+		created.Settings.BackupEnabled || created.Settings.BackupTargetPresent || !created.Settings.ProtectUnbacked {
+		t.Fatalf("target policy settings = %#v", created.Settings)
+	}
+	encoded, err := json.Marshal(created)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for _, forbidden := range []string{secrets.mainURL, secrets.subURL, secrets.username, secrets.password, secrets.token, "separate-control-secret", "not-a-target-policy"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("camera-layout manifest leaked source secret or setting %q", forbidden)
+		}
+	}
+
+	db, err := sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatalf("open target for invariant checks: %v", err)
+	}
+	defer db.Close()
+	for _, table := range []string{
+		"events", "incidents", "jobs", "job_events", "recording_segments", "viewers", "viewer_commands",
+		"viewer_update_validations", "diagnostic_artifacts", "camera_preset_names", "camera_profile_templates",
+	} {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("fresh target table %s has %d row(s)", table, count)
+		}
+	}
+	var settingsJSON string
+	if err := db.QueryRow(`SELECT value_json FROM settings WHERE key='console'`).Scan(&settingsJSON); err != nil {
+		t.Fatalf("read target settings: %v", err)
+	}
+	if strings.Contains(settingsJSON, "not-a-target-policy") || strings.Contains(settingsJSON, secrets.password) {
+		t.Fatalf("target settings inherited legacy values")
+	}
+
+	repeated, err := ImportWithOptions(t.Context(), source, target, expectations, options)
+	if err != nil || !repeated.Ready || repeated.TargetStatus != "already-current" || repeated.CanonicalFingerprint != created.CanonicalFingerprint {
+		t.Fatalf("repeat camera-layout import = %#v err=%v", repeated, err)
+	}
+	verified, err := VerifyWithOptions(t.Context(), source, target, expectations, options)
+	if err != nil || !verified.Ready || verified.TargetStatus != "verified" {
+		t.Fatalf("camera-layout verify = %#v err=%v", verified, err)
+	}
+}
+
+func TestCameraLayoutImportRequiresValidTargetPolicy(t *testing.T) {
+	t.Parallel()
+	source, _ := createLegacyFixture(t, nil)
+	missing, err := DryRunWithOptions(t.Context(), source, productionExpectations(), ImportOptions{Scope: ScopeCameraLayout})
+	if err != nil {
+		t.Fatalf("missing target policy infrastructure error: %v", err)
+	}
+	if missing.Ready || len(missing.Blockers) == 0 || missing.Blockers[0].Code != "TARGET_POLICY_REQUIRED" {
+		t.Fatalf("missing target policy was not rejected: %#v", missing)
+	}
+	invalid, err := DryRunWithOptions(t.Context(), source, productionExpectations(), ImportOptions{
+		Scope:        ScopeCameraLayout,
+		TargetPolicy: &TargetPolicy{SegmentMinutes: 0, RetentionDays: -1, MaxStorageGB: -2},
+	})
+	if err != nil {
+		t.Fatalf("invalid target policy infrastructure error: %v", err)
+	}
+	if invalid.Ready || len(invalid.Blockers) != 3 {
+		t.Fatalf("invalid target policy was not rejected: %#v", invalid)
+	}
+	withoutSettings, _ := createLegacyFixture(t, func(db *sql.DB) {
+		if _, err := db.Exec(`DROP TABLE settings`); err != nil {
+			t.Fatalf("drop legacy settings table: %v", err)
+		}
+	})
+	expectations := productionExpectations()
+	expectations.SegmentMinutes, expectations.RetentionDays, expectations.MaxStorageGB = 0, 0, 0
+	withoutLegacySettings, err := DryRunWithOptions(t.Context(), withoutSettings, expectations, cameraLayoutImportOptions())
+	if err != nil || !withoutLegacySettings.Ready {
+		t.Fatalf("camera-layout import incorrectly required legacy settings: %#v err=%v", withoutLegacySettings, err)
+	}
+}
+
 func TestImportVerifyAndRepeatAreDeterministic(t *testing.T) {
 	t.Parallel()
 	source, secrets := createLegacyFixture(t, nil)

@@ -30,6 +30,15 @@ var requiredLegacyColumns = map[string][]string{
 	"settings": {"key", "value"},
 }
 
+var cameraLayoutLegacyColumns = map[string][]string{
+	"cameras": {
+		"id", "display_name", "enabled", "archived_at", "main_stream_url", "sub_stream_url", "sort_order",
+	},
+	"layouts": {
+		"id", "name", "data", "timeline_collapsed", "grid_cols", "grid_rows",
+	},
+}
+
 type legacyCamera struct {
 	id            string
 	displayName   string
@@ -82,6 +91,10 @@ func openLegacyReadOnly(ctx context.Context, path string) (*sql.DB, error) {
 }
 
 func inspectLegacySchema(ctx context.Context, db *sql.DB, manifest *Manifest) bool {
+	return inspectLegacySchemaForScope(ctx, db, manifest, ScopeFull)
+}
+
+func inspectLegacySchemaForScope(ctx context.Context, db *sql.DB, manifest *Manifest, scope ImportScope) bool {
 	var result string
 	if err := db.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&result); err != nil {
 		manifest.Blockers = append(manifest.Blockers, Finding{Code: "SOURCE_QUICK_CHECK_FAILED", Message: "1.x snapshot quick-check could not be completed"})
@@ -93,8 +106,12 @@ func inspectLegacySchema(ctx context.Context, db *sql.DB, manifest *Manifest) bo
 	}
 
 	compatible := true
-	tables := make([]string, 0, len(requiredLegacyColumns))
-	for table := range requiredLegacyColumns {
+	requiredTables := requiredLegacyColumns
+	if scope == ScopeCameraLayout {
+		requiredTables = cameraLayoutLegacyColumns
+	}
+	tables := make([]string, 0, len(requiredTables))
+	for table := range requiredTables {
 		tables = append(tables, table)
 	}
 	sort.Strings(tables)
@@ -106,7 +123,7 @@ func inspectLegacySchema(ctx context.Context, db *sql.DB, manifest *Manifest) bo
 			continue
 		}
 		missing := make([]string, 0)
-		for _, required := range requiredLegacyColumns[table] {
+		for _, required := range requiredTables[table] {
 			if !columns[required] {
 				missing = append(missing, required)
 			}
@@ -143,6 +160,13 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]boo
 }
 
 func readLegacyCameras(ctx context.Context, db *sql.DB) ([]legacyCamera, int, error) {
+	return readLegacyCamerasForScope(ctx, db, ScopeFull)
+}
+
+func readLegacyCamerasForScope(ctx context.Context, db *sql.DB, scope ImportScope) ([]legacyCamera, int, error) {
+	if scope == ScopeCameraLayout {
+		return readCameraLayoutCameras(ctx, db)
+	}
 	rows, err := db.QueryContext(ctx, `SELECT id,display_name,location,enabled,archived_at,main_stream_url,
 		sub_stream_url,onvif_host,onvif_port,onvif_username,onvif_password,sort_order,notes
 		FROM cameras ORDER BY sort_order,id`)
@@ -160,6 +184,33 @@ func readLegacyCameras(ctx context.Context, db *sql.DB) ([]legacyCamera, int, er
 			&row.subURL, &row.onvifHost, &row.onvifPort, &row.onvifUsername, &row.onvifPassword,
 			&row.sortOrder, &row.notes); err != nil {
 			return nil, 0, fmt.Errorf("decode legacy camera row: %w", err)
+		}
+		row.enabled = enabled != 0
+		row.archived = archivedAt.Valid
+		if row.archived {
+			archivedCount++
+			continue
+		}
+		cameras = append(cameras, row)
+	}
+	return cameras, archivedCount, rows.Err()
+}
+
+func readCameraLayoutCameras(ctx context.Context, db *sql.DB) ([]legacyCamera, int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,display_name,enabled,archived_at,main_stream_url,sub_stream_url,sort_order
+		FROM cameras ORDER BY sort_order,id`)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read legacy camera graph: %w", err)
+	}
+	defer rows.Close()
+	var cameras []legacyCamera
+	archivedCount := 0
+	for rows.Next() {
+		var row legacyCamera
+		var enabled int
+		var archivedAt sql.NullFloat64
+		if err := rows.Scan(&row.id, &row.displayName, &enabled, &archivedAt, &row.mainURL, &row.subURL, &row.sortOrder); err != nil {
+			return nil, 0, fmt.Errorf("decode legacy camera graph row: %w", err)
 		}
 		row.enabled = enabled != 0
 		row.archived = archivedAt.Valid

@@ -4,6 +4,35 @@ import "camstation/internal/store"
 
 const ManifestVersion = 1
 
+// ImportScope controls which parts of a legacy snapshot are allowed to
+// contribute to a fresh 2.0 target.
+type ImportScope string
+
+const (
+	// ScopeFull preserves the original importer behavior, including the
+	// documented legacy recording settings conversion.
+	ScopeFull ImportScope = "full"
+	// ScopeCameraLayout imports only the camera connection graph/identity/
+	// enabled state and layouts. Recording policy must be supplied separately.
+	ScopeCameraLayout ImportScope = "camera-layout"
+)
+
+// TargetPolicy contains settings that must be chosen for a fresh target
+// instead of being inherited from a legacy snapshot.
+type TargetPolicy struct {
+	SegmentMinutes int
+	RetentionDays  int
+	MaxStorageGB   float64
+}
+
+// ImportOptions selects an import scope. A nil TargetPolicy is rejected for
+// ScopeCameraLayout so a fresh target cannot silently inherit or default its
+// recording policy.
+type ImportOptions struct {
+	Scope        ImportScope
+	TargetPolicy *TargetPolicy
+}
+
 type Expectations struct {
 	CameraCount     int
 	EnabledCount    int
@@ -19,6 +48,7 @@ type Expectations struct {
 type Manifest struct {
 	FormatVersion        int              `json:"formatVersion"`
 	Operation            string           `json:"operation"`
+	Scope                string           `json:"scope,omitempty"`
 	SourceKind           string           `json:"sourceKind,omitempty"`
 	SourceFingerprint    string           `json:"sourceFingerprint,omitempty"`
 	SelectionPrefix      string           `json:"selectionPrefix,omitempty"`
