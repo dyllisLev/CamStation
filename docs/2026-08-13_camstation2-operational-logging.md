@@ -8,6 +8,21 @@ Windows Viewer 로컬 로그는 서버에 보고할 수 없는 마지막 구간�
 > 확인한다. 설정 변경은 daemon 또는 Viewer Service 재시작이 필요하므로 승인된 배포 절차로 수행한다.
 > 로그에는 raw URL, 자격증명, token, SDP/ICE, 전체 process args와 runtime path를 남기지 않는다.
 
+## 현재 운영 반영 상태
+
+- 서버: `camstation:2.0.0-rc.20260813.18-operational-logging`, source revision `de4938c`,
+  image ID `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`
+- daemon 로그: `/var/lib/camstation2-production/data/logs/camstationd.jsonl`, 64 MiB×32
+- 자동 추이: `/var/lib/camstation2-production/data/logs/operational-watch.jsonl`, 1분, 10 MiB×4;
+  `camstation-log-watch.timer` enabled/active
+- `monitoring-pc`: Viewer 2.0.26, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3
+- 2026-08-13 20:56 KST 최종 표본: container healthy/restart 0, camera·stream·recorder·Viewer 8/8,
+  Viewer progress age 3초, watcher 6개 연속 `ok`, alert/warn/error/persistent-write-failure 0
+
+재시작 직후 public live producer 두 개가 약 6분 동안 늦게 붙은 이력은 전환 구간의 watcher 표본과
+daemon `not_found` retry로 보존돼 있다. 이전 image에서도 같은 지연이 재현됐으므로 이번 logger의
+회귀로 판정하지 않았으며, 운영 중에는 재시작하지 않고 1분 표본의 재발 빈도와 수렴 시간을 관찰한다.
+
 ## 초기 관제를 시작하기
 
 서버의 전역 level은 `info`로 유지하고, 2.0 초기 관제 기간에 필요한 component만 `debug`로 올린다.
@@ -84,7 +99,15 @@ sudo systemctl start camstation-log-watch.service
 systemctl is-enabled camstation-log-watch.timer
 systemctl is-active camstation-log-watch.timer
 systemctl show camstation-log-watch.timer -p LastTriggerUSec -p NextElapseUSecRealtime
-sudo tail -n 2 /var/lib/camstation2-production/data/logs/operational-watch.jsonl | jq -c .
+sudo python3 - <<'PY'
+import json
+from collections import deque
+
+path = "/var/lib/camstation2-production/data/logs/operational-watch.jsonl"
+with open(path, encoding="utf-8") as source:
+    for line in deque(source, maxlen=2):
+        print(json.dumps(json.loads(line), ensure_ascii=False, separators=(",", ":")))
+PY
 ```
 
 watcher만 원복할 때는 제품 container를 건드리지 않는다.
@@ -105,18 +128,39 @@ sudo systemctl daemon-reload
 ```bash
 CAMSTATION_CONTAINER=camstation2
 docker exec "$CAMSTATION_CONTAINER" tail -n 200 -F /var/lib/camstation/data/logs/camstationd.jsonl \
-  | jq -c 'select(.level == "warn" or .level == "error")'
+  | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if record.get("level") in {"warn", "error"}:
+        print(json.dumps(record, ensure_ascii=False, separators=(",", ":")), flush=True)
+'
 ```
 
 특정 카메라의 입력과 녹화를 같이 본다.
 
 ```bash
-CAMSTATION_CONTAINER=camstation2
-CAMSTATION_STREAM='집-마당-live'
-docker exec "$CAMSTATION_CONTAINER" tail -n 500 /var/lib/camstation/data/logs/camstationd.jsonl \
-  | jq -c --arg stream "$CAMSTATION_STREAM" \
-    'select((.streamName // "") == $stream or ((.streamName // "") | startswith($stream | rtrimstr("-live")))) \
-     | select(.component == "stream.live_warm" or .component == "recorder" or .component == "recorder.ffmpeg")'
+CAMSTATION_STREAM='camera-a-live'
+sudo env CAMSTATION_STREAM="$CAMSTATION_STREAM" python3 - <<'PY'
+import json
+import os
+from collections import deque
+
+target = os.environ["CAMSTATION_STREAM"]
+base = target.removesuffix("-live")
+components = {"stream.live_warm", "recorder", "recorder.ffmpeg"}
+path = "/var/lib/camstation2-production/data/logs/camstationd.jsonl"
+with open(path, encoding="utf-8") as source:
+    lines = deque(source, maxlen=500)
+for line in lines:
+    record = json.loads(line)
+    stream = record.get("streamName", "")
+    if record.get("component") in components and (stream == target or stream.startswith(base)):
+        print(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+PY
 ```
 
 서버 로그로 원인이 설명되지 않을 때만 `monitoring-pc`에서 Service와 가장 최근 Viewer 파일을 확인한다.
@@ -141,11 +185,18 @@ Get-Content -LiteralPath $path -Tail 200 -Wait | ForEach-Object {
 
 ```bash
 WATCH_LOG=/var/lib/camstation2-production/data/logs/operational-watch.jsonl
-tail -n 20 "$WATCH_LOG" | jq -c '{timestamp,status,alerts,cameras,streams,recorders,viewers,logs,disk}'
-jq -rs '
-  group_by(.status)
-  | map({status: .[0].status, samples: length})
-' "$WATCH_LOG"
+sudo env WATCH_LOG="$WATCH_LOG" python3 - <<'PY'
+import json
+import os
+from collections import Counter, deque
+
+keys = ("timestamp", "status", "alerts", "cameras", "streams", "recorders", "viewers", "logs", "disk")
+with open(os.environ["WATCH_LOG"], encoding="utf-8") as source:
+    rows = [json.loads(line) for line in source]
+for row in deque(rows, maxlen=20):
+    print(json.dumps({key: row.get(key) for key in keys}, ensure_ascii=False, separators=(",", ":")))
+print(dict(Counter(row.get("status") for row in rows)))
+PY
 ```
 
 `status=ok`는 해당 시점의 camera/stream/recorder/Viewer 수와 media progress, logger, disk가 모두
@@ -157,11 +208,20 @@ Viewer에 경고·오류가 있거나 장애 조사 중 debug를 켰다면 서�
 recovery, close를 한 흐름으로 연결할 수 있다.
 
 ```bash
-CAMSTATION_CONTAINER=camstation2
 PLAYBACK_SESSION='playback-example1234'
-docker exec "$CAMSTATION_CONTAINER" sh -c \
-  'cat /var/lib/camstation/data/logs/camstationd.jsonl*' \
-  | jq -c --arg session "$PLAYBACK_SESSION" 'select(.sessionId == $session)'
+sudo env PLAYBACK_SESSION="$PLAYBACK_SESSION" python3 - <<'PY'
+import glob
+import json
+import os
+
+target = os.environ["PLAYBACK_SESSION"]
+for path in sorted(glob.glob("/var/lib/camstation2-production/data/logs/camstationd.jsonl*")):
+    with open(path, encoding="utf-8") as source:
+        for line in source:
+            record = json.loads(line)
+            if record.get("sessionId") == target:
+                print(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+PY
 ```
 
 예시 session 값은 실제 Viewer JSONL의 `sessionId`로 바꾼다. 로그 timestamp는 UTC RFC3339이고 운영
@@ -284,14 +344,38 @@ override를 사용하며, `playback`이 양쪽에 있으면 `CAMSTATION_LOG_LEVE
   잘못된 URL 설정을 포함한 fixture가 통과한다. output은 count/age/percent와 고정 alert code만 포함하며
   camera/Viewer identity, host, stream, URL, 오류 원문과 경로를 포함하지 않는다.
 
+### E-006
+
+- observed_at: 2026-08-13 20:56 KST
+- source_type: production runtime
+- source_ref: `cctv` Docker inspect, daemon JSONL and host watcher JSONL
+- content_hash: image `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`;
+  Compose `710748d53eaa87168a9766294c2125bc9629b6b6533311595b74baa59ea1704d`
+- finding: `.18-operational-logging` container는 healthy/restart 0이고 camera·stream·recorder·Viewer가
+  8/8이다. watcher timer는 enabled/active이며 최신 6개 표본은 연속 `ok`, alert/warn/error/persistent
+  write failure 0, Viewer progress age 3초다. Viewer MSI 중 Service 정지를 감지한 두 error 표본과 전환
+  직후 약 6분의 6/8→8/8 수렴 표본도 삭제하지 않았다.
+
+### E-007
+
+- observed_at: 2026-08-13 20:52 KST
+- source_type: production Windows runtime
+- source_ref: official `monitoring-pc` target wrapper install audit and interactive capture
+- content_hash: Viewer 2.0.26 MSI
+  `4c5358a7c983f7decd8a097a663fa441fd7111dc27db6651330a61cefcda6502`; screenshot
+  `2c6d7c5c04bbc8eba9aa6beb0a608284e550bb8f1a9e4743879a4ca4084d53db`
+- finding: Viewer 2.0.26과 Service가 실행 중이고 warn·5 MiB×3 정책이 명시됐다. config/client identity는
+  배포 전 hash와 같으며 실제 창과 서버 telemetry 모두 8개 WebRTC stream의 진행을 확인했다.
+
 ### F-001
 
-- status: validated by source tests
-- evidence_ids: E-001, E-002, E-003, E-004, E-005
+- status: deployed and observed
+- evidence_ids: E-001, E-002, E-003, E-004, E-005, E-006, E-007
 - finding: 카메라 media 진행에서 Viewer playback까지는 공통 JSONL 필드와 session으로 추적할 수 있고,
-  고빈도 정상 pulse는 서버의 상태 전이·주기 요약으로 제한된다. Viewer는 warn/error만 보완한다.
-- remaining acceptance: 새 daemon과 Viewer 빌드 및 1분 watcher의 운영 배포, 실제 추이 표본과 장애
-  표본의 cross-machine session join
+  고빈도 정상 pulse는 서버의 상태 전이·주기 요약으로 제한된다. 서버 logger와 watcher, Viewer 최소
+  블랙박스가 운영 배포됐고 정상 8/8 표본이 확인됐다.
+- remaining acceptance: 실제 장애가 재발할 때 같은 `sessionId`의 server/Viewer record를 결합해 원인을
+  특정한다. 평시 warn 정책에서는 Viewer record가 새로 생기지 않는 것이 정상이다.
 
 ### P-001
 
@@ -302,5 +386,5 @@ override를 사용하며, `playback`이 양쪽에 있으면 `CAMSTATION_LOG_LEVE
   2. `recorder`의 progress와 segment close로 서버 수신·저장을 확인한다 — E-001.
   3. 서버 `playback`과 Viewer `viewer.playback`을 같은 `sessionId`로 결합한다 — E-002.
   4. Viewer control/renderer/stream 상태 전이와 DB 운영 event를 대조한다 — E-001, E-002.
-- residual_risks: 현재 운영 설치본은 새 level schema 이전 버전이므로 배포 전에는 최소 Viewer 정책과
-  cross-machine session join을 실운영에서 검증할 수 없다.
+- residual_risks: 내부 배포 Viewer MSI는 code signing되지 않았다. 재시작 직후 public live producer가
+  약 6분 늦게 수렴한 이력이 있어 watcher로 재발 빈도와 지속시간을 계속 관찰해야 한다.

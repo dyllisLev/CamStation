@@ -1098,4 +1098,41 @@
   기록한다. Windows Installer `ProductInfo(product, property)`는 automation의 매개변수형 property이므로
   reflection에서는 `GetProperty`를 사용한다.
 
+## 2026-08-13 — Windows PowerShell에서 native stderr와 종료코드를 분리한다
+
+- Windows PowerShell 5.1에서 `$ErrorActionPreference = "Stop"`인 채 native 명령을 `2>&1`로 합치면
+  `git fetch`의 정상 진행 메시지도 `NativeCommandError`로 승격돼 실제 exit code를 확인하기 전에
+  중단될 수 있다. native stdout/stderr는 bounded하게 버리거나 별도 capture하고 `$LASTEXITCODE`를
+  즉시 저장한 뒤 그 값으로 성공을 판정한다.
+- 정확한 source build는 기존 dirty repo에서 직접 수행하지 않는다. fetch한 commit을 대조하고 새
+  detached worktree를 exact path에 만든 뒤, 성공·실패 모두 `git worktree list --porcelain`에서 같은
+  정규화 경로를 확인한 경우에만 그 worktree를 제거한다.
+
+## 2026-08-13 — 기술적 rollback과 Viewer media 수렴을 같은 타이머로 묶지 않는다
+
+- 서버 재생성 뒤 Viewer의 일부 타일이 cooldown이면 camera ingest, public stream, recorder와 container
+  rollback이 실패한 것이 아니다. exact Compose/image/health와 server camera·stream·recorder 축을 먼저
+  기술적 전환·원복 합격으로 판정하고 Viewer heartbeat/renderer/media 수렴은 별도 축으로 기록한다.
+- 제품이 5분 저빈도 재시도를 설계한 상태에서 그보다 짧은 210초 gate로 8/8을 강제하면 정상 회복을
+  실패로 오판한다. gate는 실제 retry cadence보다 길어야 하며, 운영 중 단축이 필요하면 현재 telemetry로
+  미수신인 카메라에만 승인된 `resubscribe_stream`을 보내고 정상 타일과 Viewer 전체는 건드리지 않는다.
+- rollback verifier가 Viewer 수렴 지연만으로 `ROLLBACK_FAILED`를 출력하면 실제 복구 상태를 왜곡한다.
+  server rollback 실패와 `viewerMediaConverged=false`를 서로 다른 결과 필드와 종료 조건으로 분리한다.
+- container health와 camera/recorder worker 8/8 뒤에도 public live-warm producer는 카메라 연결 슬롯과
+  local go2rtc source 준비에 따라 4분을 넘겨 6/8에 머물 수 있다. 새 image와 old image가 같은 지연을
+  보이면 로거 회귀로 단정하지 말고 runtime key 존재, producer/consumer 수와 분류된 `not_found` retry를
+  비교한다. 운영 전환의 server media gate는 관찰된 최악값보다 충분히 긴 bounded window를 사용한다.
+
+## 2026-08-13 — 원인이 확인된 운영 배포에서는 재시작보다 관찰을 선택한다
+
+- 새·구 image 모두 재시작 뒤 public producer가 약 6분에 수렴한다는 증거를 확보했으면 같은 상태를
+  재확인하려고 컨테이너를 다시 재생성하지 않는다. 마지막 정상 전환을 유지한 채 watcher와 읽기 전용
+  표본으로 닫고, 사용자에게 남은 작업과 예상 시간을 즉시 알린다.
+- 안전 gate가 실제 제품 retry cadence보다 짧아 반복 rollback을 만들면 신중함이 아니라 서비스 수렴
+  시간을 계속 초기화하는 행동이 된다. 기술적 health와 느린 media convergence를 분리해 한 번만 기다리고,
+  비필수 증거 수집과 문서 정리는 서비스가 안정된 뒤 병렬이 아닌 짧은 마감 단계로 제한한다.
+- Windows Viewer MSI 전에는 Viewer 창보다 Service를 먼저 중지한다. Service가 interactive Viewer를
+  자동 재기동하므로 순서가 반대면 `msiexec` 시작 전 preflight가 실패할 수 있다. 실패 보고에는 generic
+  catch만 남기지 말고 `service_stop`, `viewer_close`, `msiexec`, `restore` 단계와 실제 exit code를 분리한다.
+
 ---

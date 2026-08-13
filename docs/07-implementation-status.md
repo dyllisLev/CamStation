@@ -10,9 +10,10 @@ This document records the current implementation state so the next session can c
 - Active branch used for this work: `camstation2-initial`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 source revision: `723dc3d771bd3ad42d300cd4d07e98c99369471f`
-- Current deployed image: `camstation:2.0.0-rc.20260812.12-canary`, image ID
-  `sha256:cb9409da1b9ce659f0722bd568f65131898edd52ac59f7d02338e04a380bc799`
+- Current deployed 2.0 source revision: `de4938c532694615f30530952d8daf50e511f208`
+- Current deployed image: `camstation:2.0.0-rc.20260813.18-operational-logging`, image ID
+  `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`
+- Current monitoring PC Viewer: 2.0.26; Service Running/Auto; local logging `warn`, 5 MiB × 3
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
 - Main monitoring page: `http://192.168.0.160:18081/live`
@@ -43,10 +44,13 @@ This document records the current implementation state so the next session can c
   agent/control/renderer/stream state changes produce one event; unchanged and concurrent duplicate
   heartbeats do not.
 - Initial-soak and steady-state settings, live queries and cross-machine session joins are documented in
-  [the operational logging guide](2026-08-13_camstation2-operational-logging.md). Source implementation is
-  not proof of deployment. The official `monitoring-pc` audit passed for NUC/session 1 and found only two
-  tiny ProgramData log files, but its 13 existing records use the prior schema without `level`; the new
-  daemon and Viewer builds still require an approved production deployment before operational acceptance.
+  [the operational logging guide](2026-08-13_camstation2-operational-logging.md). The daemon logger and
+  one-minute host watcher are deployed in production, and `monitoring-pc` is upgraded to Viewer 2.0.26.
+  The 2026-08-13 20:56 KST sample showed container healthy/restart 0, camera/stream/recorder/Viewer 8/8,
+  six consecutive watcher `ok` samples, no active alerts or logger failures, and Viewer media progress
+  age 3 seconds. Existing
+  pre-upgrade local Viewer records retain their old schema; at the new `warn` policy no fresh file growth
+  during healthy operation is expected.
 
 ### 2026-08-12 Docker WebRTC first-attempt playback and diagnostics
 

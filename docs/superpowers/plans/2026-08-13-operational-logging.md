@@ -58,10 +58,10 @@
 - [x] synthetic camera/playback 요청으로 동일 session의 server JSONL과 Viewer Service test log를 join한다.
 - [x] 공식 wrapper로 `monitoring-pc` 기존 로그를 읽기 전용 재감사하고 현재 설치본이 새 level schema
       이전임을 확인한다.
-- [ ] fixture 입력을 받는 host watcher와 1분 systemd oneshot/timer, 회전·flock·금지 필드 테스트를 구현한다.
-- [ ] 사용자 승인에 따라 clean `main`의 immutable server image와 Viewer 2.0.26 MSI를 만들고 hash를 고정한다.
-- [ ] 운영 서버에 exact Compose rollback을 남겨 server logger와 watcher를 배포하고 camera/recorder/Viewer
+- [x] fixture 입력을 받는 host watcher와 1분 systemd oneshot/timer, 회전·flock·금지 필드 테스트를 구현한다.
+- [x] 사용자 승인에 따라 clean `main`의 immutable server image와 Viewer 2.0.26 MSI를 만들고 hash를 고정한다.
+- [x] 운영 서버에 exact Compose rollback을 남겨 server logger와 watcher를 배포하고 camera/recorder/Viewer
       8/8 및 log append를 검증한다.
-- [ ] 공식 wrapper로 `monitoring-pc`를 2.0.26으로 업그레이드하고 warn·5 MiB×3 정책, identity/config,
+- [x] 공식 wrapper로 `monitoring-pc`를 2.0.26으로 업그레이드하고 warn·5 MiB×3 정책, identity/config,
       Service/interactive Viewer와 8/8 media progress를 검증한다.
-- [ ] 즉시·5분·15분 이상 watcher/server/Viewer 표본을 비교하고 배포·잔여 위험·복구 경로를 문서화한다.
+- [x] 즉시·5분·15분 이상 watcher/server/Viewer 표본을 비교하고 배포·잔여 위험·복구 경로를 문서화한다.

@@ -25,17 +25,17 @@
 - [x] `test-pc`의 clean build root, Git revision, Go/Node/WiX 도구와 2.0.26 빌드 가능 상태를 공식 wrapper로
       확인하고 `monitoring-pc`의 exact MSI rollback/config/client identity 기준선을 고정한다.
 - [x] 운영 watcher·systemd unit·fixture test와 설치/제거 절차를 구현하고 spec/운영 문서를 갱신한다.
-- [ ] 현재 변경을 목적별로 commit/push하고 운영 revision을 포함해 clean `main`으로 승격한다.
-- [ ] clean `main`에서 Web/Viewer/Go/race/vet/policy/secret 검증, Linux image와 Windows 2.0.26 MSI를 만들고
+- [x] 현재 변경을 목적별로 commit/push하고 운영 revision을 포함해 clean `main`으로 승격한다.
+- [x] clean `main`에서 Web/Viewer/Go/race/vet/policy/secret 검증, Linux image와 Windows 2.0.26 MSI를 만들고
       revision·SHA-256·unsigned 내부 배포 상태를 고정한다.
-- [ ] 서버의 exact Compose를 root-only timestamp 백업한 뒤 image 한 곳과 log 환경값만 변경해 재생성하고,
+- [x] 서버의 exact Compose를 root-only timestamp 백업한 뒤 image 한 곳과 log 환경값만 변경해 재생성하고,
       health/security/camera 8/8/recorder 8/8/Viewer 8/8 및 JSONL append를 유한 시간 안에 검증한다.
-- [ ] watcher script/config/service/timer를 exact hash로 설치해 1분 cadence, flock, 회전, journald와 JSONL
+- [x] watcher script/config/service/timer를 exact hash로 설치해 1분 cadence, flock, 회전, journald와 JSONL
       표본을 검증한다.
-- [ ] monitoring-pc에 exact MSI를 공식 artifact 경로로 전달·업그레이드하고 Viewer log 환경값을 기존 Service
+- [x] monitoring-pc에 exact MSI를 공식 artifact 경로로 전달·업그레이드하고 Viewer log 환경값을 기존 Service
       Environment와 병합한다. ProductCode/version/file hash/config/client identity/Service/interactive Viewer를
       전후 비교하고 실제 Viewer 창과 server heartbeat/media progress를 확인한다.
-- [ ] 즉시·5분·15분 이상 표본에서 container restart, logger failure, warn/error 증가, camera/recorder/Viewer
+- [x] 즉시·5분·15분 이상 표본에서 container restart, logger failure, warn/error 증가, camera/recorder/Viewer
       진행, disk와 watcher alert 추이를 비교하고 검토·운영 문서를 증거와 함께 마감한다.
 
 ## 합격과 자동 롤백
@@ -47,8 +47,9 @@
   `lastProgressAt`, 평시 warn 정책과 3-file 상한이 확인돼야 한다. MSI가 unsigned인 사실은 숨기지 않고
   기존 내부 unsigned 배포와 같은 잔여 위험으로 기록한다.
 - 서버 gate 하나라도 실패하면 같은 transaction에서 exact Compose 백업과 `.17` image로 되돌리고 health와
-  8/8를 재확인한다. watcher 실패는 제품 container를 건드리지 않고 unit/config/script만 이전 상태로
-  복구하거나 제거한다.
+  server camera/stream/recorder 축을 재확인한다. Viewer 8/8은 제품의 5분 cooldown 또는 누락 타일만의
+  `resubscribe_stream`으로 별도 수렴시킨다. 이 지연만으로 기술적 rollback 실패로 판정하지 않는다.
+  watcher 실패는 제품 container를 건드리지 않고 unit/config/script만 이전 상태로 복구하거나 제거한다.
 - Viewer gate가 실패하면 exact 2.0.25 MSI와 보존한 Service Environment/config/client identity로 원복하고
   Service·Viewer·8/8 media progress를 다시 확인한다. 서버 배포 성공은 Viewer 실패 때문에 자동 원복하지
   않되 서버가 구 Viewer와 호환되는지 검증한다.
@@ -69,7 +70,37 @@
   fixture 4개와 systemd unit verify, production policy가 통과했다.
 - 새 logger 포함 Web 81 tests/lint/build, Viewer 49 tests/build, 전체 Go test, 관련 5개 package race,
   `go vet ./...`, Linux daemon/Windows Service cross-build가 통과했다. 배포 revision, artifact hash,
-  before/after 증거, 관찰 구간과 rollback 사용 여부는 다음 단계에서 이어서 기록한다.
+  before/after 증거, 관찰 구간과 rollback 사용 여부는 아래 운영 표본에 기록했다.
+- 변경 commit `de4938c`를 feature branch와 `main`에 force 없이 게시했다. clean `main`에서 만든 Linux image는
+  `sha256:ad1bc15...09326`, Viewer 2.0.26 MSI는 125,898,752 bytes/SHA-256
+  `4c5358a7...6502`이며 MSI는 기존 내부 배포와 같이 unsigned다. 격리 image smoke에서 non-root/read-only,
+  restart 0과 두 번의 재생성 사이 JSONL append(11건→24건)를 확인했다.
+- 첫 `.18` 전환은 210초 안에 Viewer 8/8을 요구한 검사기가 3개 타일의 정상 5분 cooldown을 제품 실패로
+  오판해 자동 `.17` 원복을 수행했다. 원복 Compose SHA와 image/health/restart 0, camera·stream·recorder
+  8/8은 즉시 확인돼 실제 rollback은 성공했다. Viewer도 별도 명령 없이 저빈도 재시도로 8/8,
+  `playing 8/fallback 8`, progress age 3~4초로 수렴했다. 재시도 검사기는 server 복구와 Viewer 수렴을
+  분리하고 누락 타일에만 제한된 재구독을 허용하도록 수정했다.
+- 두 번째 `.18` 전환에서는 Viewer gate 전에 public warm stream이 4분 동안 6/8이라 정확히 `.17`로
+  원복했다. `.17`도 재시작 직후 같은 6/8 지연을 보여 로거 image 고유 회귀가 아님을 확인했고,
+  runtime key는 8개 모두 존재하나 일부 producer가 늦게 생기며 `not_found` retry가 반복되는 형태였다.
+  server는 이후 8/8로 수렴했고 cooldown 2개에만 command 10·11을 보내 Viewer도 8/8, progress age
+  1~2초로 복구했다. 다음 전환 gate는 실제 server warm 수렴을 포함하도록 12분으로 늘렸다.
+- 최종 `.18` 전환은 root-only rollback
+  `/opt/camstation2/docker-production/compose.pre-operational-logging-retry2-20260813T113014Z.yaml`을 남기고
+  완료했다. 운영 Compose SHA-256은 `710748d5...704d`, image ID는 `sha256:ad1bc15...09326`이며,
+  2026-08-13 20:56 KST 최종 무중단 표본에서 container는 healthy/restart 0, camera·stream·recorder·Viewer는
+  모두 8/8, Viewer progress age는 3초였다. 재시작 뒤 public producer가 8/8이 되기까지 약 6분 걸렸지만
+  `.17`에서도 같은 현상이 재현됐고 수렴 뒤 추가 재시작은 하지 않았다.
+- host watcher는 `/usr/local/libexec/camstation-log-watch`와 1분 systemd timer로 설치됐다. timer는
+  enabled/active다. Viewer MSI 전환 중 Service가 정지된 20:48~20:49 KST의 두 표본은 정확히
+  `viewer_health_degraded`/`viewer_media_missing`을 기록했고, 이후 6개 연속 `ok`로 회복했다. 최신 표본은
+  alert 0, warn/error/persistent-write-failure window 0, logger age 30초, state/media 사용률 14.4%/9.2%다.
+  전환 구간의 error 표본도 삭제하지 않아 이후 추이 비교의 기준으로 남긴다.
+- `monitoring-pc`는 Viewer 2.0.26 ProductCode `{998E7181-5567-4973-AD1F-0A8361798B32}`로 업그레이드됐다.
+  Service는 Running/Auto이고 `warn`, override 없음, 5 MiB×3이 명시됐다. config/client identity hash는
+  배포 전과 같고, 새 MSI와 설치 core hash가 일치한다. 실제 interactive 창과 서버 telemetry에서 8개
+  타일의 WebRTC playing/progress를 확인했다. 2.0.25 rollback MSI는 보존했으며 2.0.26 MSI가 내부용
+  unsigned라는 잔여 위험은 그대로다.
 
 ---
 
