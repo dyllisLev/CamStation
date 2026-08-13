@@ -64,6 +64,22 @@ iframe {
   border: 1px solid #252a2f;
   background: #020405;
   cursor: pointer;
+  transition: opacity .12s;
+}
+
+.viewer-grid-focused .viewer-tile-background {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-tile-focused {
+  left: 0 !important;
+  top: 0 !important;
+  z-index: 3;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
+  cursor: default;
 }
 
 .viewer-video-frame {
@@ -1428,14 +1444,29 @@ iframe {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
 }
 
-.new-grid-stage.new-zoom-active .react-grid-layout {
-  opacity: .18;
-  pointer-events: none;
-}
-
 .new-grid-item {
   overflow: hidden;
   border-radius: 4px;
+  transition: opacity .12s;
+}
+
+.new-grid-stage.new-zoom-active .new-grid-item-background {
+  opacity: .14;
+  pointer-events: none;
+}
+
+.new-grid-item.new-grid-item-focused {
+  left: 0 !important;
+  top: 0 !important;
+  z-index: 12;
+  width: 100% !important;
+  height: 100% !important;
+  transform: translate(0, 0) !important;
+  pointer-events: auto;
+}
+
+.new-grid-stage.new-zoom-active .new-grid-item-focused .react-resizable-handle {
+  display: none;
 }
 
 .new-grid-item .react-resizable-handle {

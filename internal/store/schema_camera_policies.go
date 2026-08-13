@@ -98,7 +98,29 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 	if err := d.ensureCameraPolicyDefaults(ctx); err != nil {
 		return err
 	}
+	if err := d.ensureAlwaysHotLiveOutputs(ctx); err != nil {
+		return err
+	}
 	return d.canonicalizeCameraPolicySources(ctx)
+}
+
+func (d *DB) ensureAlwaysHotLiveOutputs(ctx context.Context) error {
+	_, err := d.db.ExecContext(ctx, `UPDATE camera_outputs SET
+		activation='always',
+		applied_policy_json=CASE
+			WHEN COALESCE(json_extract(applied_policy_json,'$.sourceKey'),'') != ''
+			THEN json_set(applied_policy_json,'$.activation','always')
+			ELSE applied_policy_json
+		END
+		WHERE purpose='live' AND (
+			activation!='always' OR
+			(COALESCE(json_extract(applied_policy_json,'$.sourceKey'),'') != '' AND
+			 COALESCE(json_extract(applied_policy_json,'$.activation'),'')!='always')
+		)`)
+	if err != nil {
+		return fmt.Errorf("always-hot live policy migration failed: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) canonicalizeCameraPolicySources(ctx context.Context) error {
@@ -164,20 +186,21 @@ func (d *DB) ensureCameraPolicyDefaults(ctx context.Context) error {
 func defaultOutputInsertSQL(purpose string) string {
 	sourceOrder := "CASE WHEN s.source_key = 'recording' THEN 0 ELSE 1 END"
 	streamName := "CASE WHEN c.recording_stream_name != '' THEN c.recording_stream_name ELSE c.stream_name || '-recording' END"
-	video, audio, maxWidth, maxHeight := "'copy'", "'source'", "NULL", "NULL"
+	video, audio, maxWidth, maxHeight, maxFPS, activation := "'copy'", "'source'", "NULL", "NULL", "NULL", "'on_demand'"
 	if purpose == "live" {
 		sourceOrder = "CASE WHEN s.source_key = 'live' THEN 0 WHEN s.source_key = 'recording' THEN 1 ELSE 2 END"
-		streamName, video, audio = "CASE WHEN c.live_stream_name != '' AND c.live_stream_name != c.recording_stream_name THEN c.live_stream_name ELSE c.stream_name || '-live' END", "'auto'", "'none'"
+		streamName, video, audio = "CASE WHEN c.live_stream_name != '' AND c.live_stream_name != c.recording_stream_name THEN c.live_stream_name ELSE c.stream_name || '-live' END", "'h264'", "'none'"
+		maxWidth, maxHeight, maxFPS, activation = "1280", "720", "15", "'always'"
 	}
 	if purpose == "focus" {
 		streamName, video, audio, maxWidth, maxHeight = "c.stream_name || '-focus'", "'auto'", "'none'", "1920", "1080"
 	}
 	return fmt.Sprintf(`INSERT OR IGNORE INTO camera_outputs(
-		camera_id, purpose, stream_name, source_stream_id, video_mode, max_width, max_height,
+		camera_id, purpose, stream_name, source_stream_id, video_mode, max_width, max_height, max_fps,
 		audio_mode, activation, created_at, updated_at
 	) SELECT c.id, '%s', %s,
 		(SELECT s.id FROM camera_streams s WHERE s.camera_id = c.id ORDER BY %s, s.id LIMIT 1),
-		%s, %s, %s, %s, 'on_demand', c.created_at, c.updated_at
+		%s, %s, %s, %s, %s, %s, c.created_at, c.updated_at
 	FROM cameras c WHERE EXISTS (SELECT 1 FROM camera_streams s WHERE s.camera_id = c.id)`,
-		purpose, streamName, sourceOrder, video, maxWidth, maxHeight, audio)
+		purpose, streamName, sourceOrder, video, maxWidth, maxHeight, maxFPS, audio, activation)
 }

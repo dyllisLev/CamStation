@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Camera } from "../app/api";
 import { useCameras, useLayouts } from "../app/queries";
-import { playbackStreamCandidates } from "../components/live/streamSelection";
+import { playbackStreamCandidates, tileFocusPresentation } from "../components/live/streamSelection";
 import { useMseStream } from "../components/live/useMseStream";
 import { resolveViewerLayout, viewerRect } from "../components/viewer/viewerLayout";
+import { cn } from "../lib/utils";
 
 export function ViewerPage() {
   const camerasQuery = useCameras();
@@ -51,49 +52,47 @@ export function ViewerPage() {
 
   return (
     <main className="viewer-app" aria-label="CCTV 전용 뷰어">
-      {focusedCamera ? (
-        <section className="viewer-focus" aria-label={`${focusedCamera.name} 집중 보기`}>
-          <ViewerVideo camera={focusedCamera} focused />
-          <button
-            className="viewer-focus-close"
-            type="button"
-            aria-label="집중 보기 닫기"
-            onClick={() => setFocusedStream(null)}
-          >
-            ×
-          </button>
-        </section>
-      ) : (
-        <section className="viewer-grid" aria-label="카메라 전체 배치">
-          {layout.items.map((item) => {
-            const camera = cameraByStream.get(item.i);
-            if (!camera) return null;
-            const rect = viewerRect(item, layout.cols, layout.rows);
-            return (
-              <article
-                key={camera.streamName}
-                className="viewer-tile"
-                style={{
-                  left: `${rect.left}%`,
-                  top: `${rect.top}%`,
-                  width: `${rect.width}%`,
-                  height: `${rect.height}%`,
-                }}
-                aria-label={`${camera.name} 라이브`}
-                onClick={() => setFocusedStream(camera.streamName)}
-              >
-                <ViewerVideo camera={camera} />
-              </article>
-            );
-          })}
-        </section>
+      <section className={cn("viewer-grid", focusedCamera && "viewer-grid-focused")} aria-label={focusedCamera ? `${focusedCamera.name} 집중 보기` : "카메라 전체 배치"}>
+        {layout.items.map((item) => {
+          const camera = cameraByStream.get(item.i);
+          if (!camera) return null;
+          const rect = viewerRect(item, layout.cols, layout.rows);
+          const presentation = tileFocusPresentation(camera.streamName, focusedCamera?.streamName ?? null);
+          return (
+            <article
+              key={camera.streamName}
+              className={cn("viewer-tile", `viewer-tile-${presentation}`)}
+              style={{
+                left: `${rect.left}%`,
+                top: `${rect.top}%`,
+                width: `${rect.width}%`,
+                height: `${rect.height}%`,
+              }}
+              aria-label={`${camera.name} 라이브`}
+              aria-hidden={presentation === "background"}
+              onClick={() => setFocusedStream(camera.streamName)}
+            >
+              <ViewerVideo camera={camera} />
+            </article>
+          );
+        })}
+      </section>
+      {focusedCamera && (
+        <button
+          className="viewer-focus-close"
+          type="button"
+          aria-label="집중 보기 닫기"
+          onClick={() => setFocusedStream(null)}
+        >
+          ×
+        </button>
       )}
     </main>
   );
 }
 
-function ViewerVideo({ camera, focused = false }: { camera: Camera; focused?: boolean }) {
-  const playback = useMseStream(playbackStreamCandidates(camera, focused));
+function ViewerVideo({ camera }: { camera: Camera }) {
+  const playback = useMseStream(playbackStreamCandidates(camera));
   const status = playback.phase === "playing" ? "재생 중" : "연결 중";
 
   return (

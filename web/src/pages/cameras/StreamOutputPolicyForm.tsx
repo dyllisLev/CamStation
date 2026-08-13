@@ -75,9 +75,9 @@ function StreamPolicyCard({
           <option value="none">없음</option>
           <option value="aac">AAC</option>
         </PolicySelect>
-        <PolicySelect label="실행" value={output.activation} disabled={disabled} onChange={(value) => onChange({ activation: value as StreamOutputSettings["activation"] })}>
-          <option value="on_demand">요청 시 실행</option>
-          <option value="always">항상 준비</option>
+        <PolicySelect label="실행" value={output.purpose === "live" ? "always" : output.activation} disabled={disabled || output.purpose === "live"} onChange={(value) => onChange({ activation: value as StreamOutputSettings["activation"] })}>
+          {output.purpose !== "live" && <option value="on_demand">요청 시 실행</option>}
+          <option value="always">{output.purpose === "live" ? "항상 준비 (고정)" : "항상 준비"}</option>
         </PolicySelect>
       </div>
 

@@ -125,13 +125,32 @@ func main() {
 	}
 	recorderManager.SetAfterSegmentClosed(runAutomaticCleanup)
 	go runAutomaticCleanup()
+	streamReady := true
 	if err := startCameraPolicies(ctx, db, streamer, policyCoordinator, recorderManager, *recordingEnabled); err != nil {
+		streamReady = false
 		_ = db.AppendEvent(ctx, store.Event{
 			Source:  "go2rtc",
 			Level:   "error",
 			Message: "go2rtc start failed",
 			Details: map[string]any{"error": err.Error()},
 		})
+	}
+	if streamReady {
+		if err := startLiveWarmReconciler(ctx, db, streamer, 2*time.Second, func(err error) {
+			_ = db.AppendEvent(context.Background(), store.Event{
+				Source:  "stream.warm",
+				Level:   "warning",
+				Message: "live warm consumer reconciliation failed",
+				Details: map[string]any{"error": store.RedactText(err.Error())},
+			})
+		}); err != nil {
+			_ = db.AppendEvent(ctx, store.Event{
+				Source:  "stream.warm",
+				Level:   "error",
+				Message: "live warm consumers failed to start",
+				Details: map[string]any{"error": store.RedactText(err.Error())},
+			})
+		}
 	}
 
 	if *probeOnly {

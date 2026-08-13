@@ -311,18 +311,24 @@ func isSecretJSONKey(key string) bool {
 }
 
 type publicStreamStatus struct {
-	Installed bool                            `json:"installed"`
-	Running   bool                            `json:"running"`
-	Error     string                          `json:"error,omitempty"`
-	Streams   map[string]stream.StreamRuntime `json:"streams,omitempty"`
+	Installed           bool                            `json:"installed"`
+	Running             bool                            `json:"running"`
+	MediaReady          bool                            `json:"mediaReady"`
+	ExpectedLiveStreams int                             `json:"expectedLiveStreams"`
+	ReadyLiveStreams    int                             `json:"readyLiveStreams"`
+	Error               string                          `json:"error,omitempty"`
+	Streams             map[string]stream.StreamRuntime `json:"streams,omitempty"`
 }
 
 func publicGo2RTCStatus(status stream.Status) publicStreamStatus {
 	return publicStreamStatus{
-		Installed: status.Installed,
-		Running:   status.Running,
-		Error:     redactInternalRuntimeText(status.Error),
-		Streams:   status.Streams,
+		Installed:           status.Installed,
+		Running:             status.Running,
+		MediaReady:          status.MediaReady,
+		ExpectedLiveStreams: status.ExpectedLiveStreams,
+		ReadyLiveStreams:    status.ReadyLiveStreams,
+		Error:               redactInternalRuntimeText(status.Error),
+		Streams:             status.Streams,
 	}
 }
 

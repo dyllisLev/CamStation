@@ -279,9 +279,10 @@ func requestedCameraOutputs(requested []publicStreamOutputSettings, inputs []sto
 			live = input.SourceKey
 		}
 	}
+	maxLiveWidth, maxLiveHeight, maxLiveFPS := 1280, 720, 15.0
 	return []store.CameraOutput{
 		{Purpose: store.CameraOutputRecording, SourceKey: recording, VideoMode: store.CameraVideoCopy, AudioMode: store.CameraAudioSource, Activation: store.CameraActivationOnDemand},
-		{Purpose: store.CameraOutputLive, SourceKey: live, VideoMode: store.CameraVideoAuto, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
+		{Purpose: store.CameraOutputLive, SourceKey: live, VideoMode: store.CameraVideoH264, MaxWidth: &maxLiveWidth, MaxHeight: &maxLiveHeight, MaxFPS: &maxLiveFPS, AudioMode: store.CameraAudioNone, Activation: store.CameraActivationAlways},
 		{Purpose: store.CameraOutputFocus, SourceKey: recording, VideoMode: store.CameraVideoAuto, MaxWidth: intValue(1920), MaxHeight: intValue(1080), AudioMode: store.CameraAudioNone, Activation: store.CameraActivationOnDemand},
 	}
 }

@@ -158,7 +158,7 @@ func TestRenderPolicyConfigKeepsSourcesPrivateEscapesYAMLAndPreloadsAlways(t *te
 	}
 }
 
-func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
+func TestRenderPolicyConfigLeavesLiveWarmupToServerManager(t *testing.T) {
 	camera, live := policyFixture("h264", "yuv420p", 8, 1920, 1080, 20)
 	live.Purpose = store.CameraOutputLive
 	live.StreamName = "camera-live"
@@ -175,13 +175,9 @@ func TestRenderPolicyConfigPreloadsPrivateLiveSourceOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(config)
-	entry := fmt.Sprintf("  %q: %q", PrivateSourceName(camera.ID, camera.Streams[0].ID), "video&audio")
-	if strings.Count(text, entry) != 1 {
-		t.Fatalf("private live preload count = %d, want 1: %s", strings.Count(text, entry), text)
-	}
-	for _, publicName := range []string{recording.StreamName, live.StreamName, focus.StreamName} {
-		if strings.Contains(text, fmt.Sprintf("  %q: %q", publicName, "video&audio")) {
-			t.Fatalf("on-demand public output %q was preloaded: %s", publicName, text)
+	for _, name := range []string{PrivateSourceName(camera.ID, camera.Streams[0].ID), recording.StreamName, live.StreamName, focus.StreamName} {
+		if strings.Contains(text, fmt.Sprintf("  %q: %q", name, "video")) || strings.Contains(text, fmt.Sprintf("  %q: %q", name, "video&audio")) {
+			t.Fatalf("server-owned live warmup leaked into static preload for %q: %s", name, text)
 		}
 	}
 }

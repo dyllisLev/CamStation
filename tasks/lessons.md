@@ -144,6 +144,23 @@
 - 1.0 실행 자산을 삭제하지 않는 전환의 기본 복구는 `2.0 종료 → 1.0 재시작`이다. 계획은 이 명확한 경계를 중심으로 쓰고, 사용자가 요구하지 않은 스킬 개발·장시간 soak·이력 감사로 확대하지 않는다.
 - 카나리 이미지가 healthy라는 사실은 production Docker 전환 계약이 준비됐다는 뜻이 아니다. 카나리 DB·경로·정책과 final DB·경로·정책을 분리하고, systemd 전용 switch/rollback을 Docker 절차로 이름만 바꿔 재사용하지 않는다.
 - “카메라 연결정보와 레이아웃만 승계”는 legacy settings까지 importer가 읽어 채워도 된다는 뜻이 아니다. 2.0에 필수 settings row가 있더라도 그 값은 legacy 승계가 아니라 명시적인 fresh 운영 정책에서 만들어져야 한다.
+## 2026-08-13 — 동시 작업이 보이면 기능 개발 전에 worktree부터 분리한다
+
+- 기존 worktree에 다른 작업의 소스·generated web asset·문서 변경이 함께 있으면, 같은 디렉터리에서
+  계획 문서만 추가하는 것도 충돌 범위를 만든다. 사용자가 동시 작업을 알려 주면 현재 변경을 복사하거나
+  stash하지 말고 명시한 기준 commit에서 별도 branch/worktree를 먼저 만든다.
+- 로컬 Docker 검증도 Git worktree만 분리해서는 충분하지 않다. container/project 이름, HTTP/WebRTC
+  port, state/media directory를 모두 전용으로 지정해야 다른 개발·운영 인스턴스를 건드리지 않는다.
+- dirty 원본 worktree의 미커밋 개선을 새 branch에 임의로 가져오지 않는다. 필요한 동작은 기준 commit에서
+  독립 구현하고, 나중에 통합할 때 commit 단위로 충돌을 해소한다.
+
+## 2026-08-13 — 저장 정책 불변식 변경은 importer의 비교 기준까지 함께 이동한다
+
+- DB migration이 기존 row를 새 불변식으로 정규화하면 신규 저장 API와 renderer만 고쳐서는 부족하다.
+  legacy/canary importer가 만드는 source plan과 staged DB verification이 과거 값을 기대하면 import는
+  데이터가 올바르게 정규화된 뒤에도 불일치로 실패한다.
+- activation처럼 의미가 바뀐 필드는 기본값, 일반 저장, applied snapshot, import plan, staged verification,
+  public editor를 하나의 계약 묶음으로 검색하고 전체 테스트에서 일치시킨다.
 
 ## 2026-08-12 — 1.x→2.0 전환에서 보존 범위와 화면 합격 기준을 별개로 확인한다
 
@@ -978,3 +995,35 @@
   있는지 코드와 실제 PID 연결을 함께 본다.
 - 사용자가 실패 뒤 Viewer 1.0을 다시 실행했다면 이를 원인으로 소급하지 않는다. 실패 시각의 로그와
   process start time을 먼저 맞춰 원인과 복구 동작을 분리한다.
+## 2026-08-13 — Do not confuse Docker CPU percentage or thread count with saturation
+
+- Docker CPU percentage is expressed in single-core units. A container showing about `383%` under an
+  eight-core quota is using roughly 3.8 cores, not 383% of its available allocation. Compare it with
+  the cgroup quota and measure `cpu.stat` throttling deltas before calling CPU a bottleneck.
+- A large FFmpeg thread/PID count shows concurrency and memory/scheduling cost, but does not prove CPU
+  pressure. Correlate delayed media readiness with quota throttling, host idle time, per-process CPU,
+  and repeated startup timing; keep local-development observations separate from production causes.
+- When a user challenges a causal conclusion, retract the unsupported part explicitly and rerun the
+  smallest read-only measurements that can distinguish environment effects from application logic.
+
+## 2026-08-13 — Define always-hot from the viewer's boundary
+
+- `preload` configuration is an implementation mechanism, not proof of an always-hot service. The
+  acceptance state requires every enabled public live producer to be active with zero viewers before
+  a client request arrives; eventual recovery after a long startup is not equivalent.
+- Measure server warm-up and viewer attachment separately. A camera becoming ready 20–80 seconds
+  after daemon start may be a startup problem, but it must never be presented as evidence of fast
+  client attachment.
+- For the radio-like product contract, ordinary health must not imply media readiness. Expose or
+  derive an explicit media-ready gate, keep server-owned consumers alive independently of viewers,
+  and verify focus/grid presentation does not replace those viewer sessions.
+- When the user explicitly treats camera-to-server ingest as an already-working invariant, do not
+  make cold camera startup or private-source recovery the acceptance target. Keep the warm public
+  producer as the server-side prerequisite, then measure only post-warm server-to-browser attach and
+  focus/grid session continuity. Remove unrelated ingest watchdog changes from the feature scope.
+- Verify the installed client's exact launch route before labeling a browser surface as the client.
+  In CamStation, the Windows Viewer opens `/live?viewer=1`; `/viewer` is a separate web route. Exercise
+  both when the requirement names both client and browser, even if they share playback components.
+- Once the user has personally accepted an already completed local validation, do not insert the same
+  validation again before an explicitly requested commit, push, and deployment. Preserve the accepted
+  artifact, publish it, and limit post-deployment checks to the target runtime.

@@ -100,6 +100,43 @@ func TestCameraPolicyLegacyMigrationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCameraPolicyMigrationMakesExistingLiveActivationAlwaysWithoutChangingEncoding(t *testing.T) {
+	db := openMigratedStore(t)
+	camera := mustCamera(t, db, "legacy-cold-live")
+	camera.Outputs[1].VideoMode = CameraVideoAuto
+	camera.Outputs[1].MaxWidth, camera.Outputs[1].MaxHeight = intPtr(1600), intPtr(900)
+	camera.Outputs[1].MaxFPS = floatPtr(12)
+	camera.Outputs[1].Activation = CameraActivationOnDemand
+	camera, err := db.SaveCameraConfiguration(t.Context(), camera, int64Ptr(camera.PolicyState.DesiredRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	before := mustGetCamera(t, db, camera.StreamName)
+	if _, err := db.db.ExecContext(t.Context(), `UPDATE camera_outputs SET activation='on_demand',
+		applied_policy_json=json_set(applied_policy_json,'$.activation','on_demand')
+		WHERE camera_id=? AND purpose='live'`, camera.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after := mustGetCamera(t, db, camera.StreamName)
+	live := after.Outputs[1]
+	if live.Activation != CameraActivationAlways || live.AppliedPolicy.Activation != CameraActivationAlways {
+		t.Fatalf("live activation desired=%q applied=%q", live.Activation, live.AppliedPolicy.Activation)
+	}
+	if live.VideoMode != CameraVideoAuto || live.MaxWidth == nil || *live.MaxWidth != 1600 || live.MaxHeight == nil || *live.MaxHeight != 900 || live.MaxFPS == nil || *live.MaxFPS != 12 {
+		t.Fatalf("migration changed live encoding policy: %#v", live)
+	}
+	if after.PolicyState.DesiredRevision != before.PolicyState.DesiredRevision || after.PolicyState.AppliedRevision != before.PolicyState.AppliedRevision {
+		t.Fatalf("migration changed revisions: before=%#v after=%#v", before.PolicyState, after.PolicyState)
+	}
+}
+
 func TestReplaceCameraStreamsPreservesIDsAndOutputPolicies(t *testing.T) {
 	db := openMigratedStore(t)
 	camera := mustCamera(t, db, "stable")
@@ -153,7 +190,7 @@ func TestSaveCameraConfigurationRejectsInvalidPoliciesAtomically(t *testing.T) {
 			c.Outputs[0].SourceKey = ""
 		}},
 		{"copy resize", func(c *Camera, _ *DB) { c.Outputs[0].MaxWidth, c.Outputs[0].MaxHeight = intPtr(1280), intPtr(720) }},
-		{"half resolution", func(c *Camera, _ *DB) { c.Outputs[1].MaxWidth = intPtr(1280) }},
+		{"half resolution", func(c *Camera, _ *DB) { c.Outputs[1].MaxHeight = nil }},
 		{"odd dimensions", func(c *Camera, _ *DB) { c.Outputs[1].MaxWidth, c.Outputs[1].MaxHeight = intPtr(1279), intPtr(720) }},
 		{"out of range dimensions", func(c *Camera, _ *DB) { c.Outputs[1].MaxWidth, c.Outputs[1].MaxHeight = intPtr(7682), intPtr(4320) }},
 		{"invalid fps", func(c *Camera, _ *DB) { c.Outputs[1].MaxFPS = floatPtr(61) }},
@@ -705,7 +742,7 @@ func assertDefaultOutputs(t *testing.T, camera Camera) {
 	if recording.Purpose != CameraOutputRecording || recording.SourceKey != "recording" || recording.VideoMode != CameraVideoCopy || recording.AudioMode != CameraAudioSource || recording.Activation != CameraActivationOnDemand {
 		t.Fatalf("recording default = %#v", recording)
 	}
-	if live.Purpose != CameraOutputLive || live.SourceKey == "" || live.VideoMode != CameraVideoAuto || live.AudioMode != CameraAudioNone || live.Activation != CameraActivationOnDemand {
+	if live.Purpose != CameraOutputLive || live.SourceKey == "" || live.VideoMode != CameraVideoH264 || live.MaxWidth == nil || *live.MaxWidth != 1280 || live.MaxHeight == nil || *live.MaxHeight != 720 || live.MaxFPS == nil || *live.MaxFPS != 15 || live.AudioMode != CameraAudioNone || live.Activation != CameraActivationAlways {
 		t.Fatalf("live default = %#v", live)
 	}
 	if focus.Purpose != CameraOutputFocus || focus.SourceKey != "recording" || focus.VideoMode != CameraVideoAuto || focus.MaxWidth == nil || *focus.MaxWidth != 1920 || focus.MaxHeight == nil || *focus.MaxHeight != 1080 || focus.AudioMode != CameraAudioNone || focus.Activation != CameraActivationOnDemand {

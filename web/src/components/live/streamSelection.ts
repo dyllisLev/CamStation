@@ -16,6 +16,9 @@ export function playbackStreamName(camera: CameraPlaybackStreams, focused = fals
   return playbackStreamCandidates(camera, focused)[0];
 }
 
-export function shouldRenderLiveTile(cameraKey: string, focusedCameraKey: string | null) {
-  return cameraKey !== focusedCameraKey;
+export type TileFocusPresentation = "grid" | "focused" | "background";
+
+export function tileFocusPresentation(cameraKey: string, focusedCameraKey: string | null): TileFocusPresentation {
+  if (!focusedCameraKey) return "grid";
+  return cameraKey === focusedCameraKey ? "focused" : "background";
 }

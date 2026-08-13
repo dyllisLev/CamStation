@@ -19,6 +19,7 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 	if err := validateCameraOutputs(camera.Outputs); err != nil {
 		return Camera{}, err
 	}
+	normalizeAlwaysHotLiveOutput(camera.Outputs)
 	if err := validateCameraStreams(camera.Streams); err != nil {
 		return Camera{}, err
 	}
@@ -188,6 +189,14 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 		return Camera{}, err
 	}
 	return d.GetCameraByStream(ctx, camera.StreamName)
+}
+
+func normalizeAlwaysHotLiveOutput(outputs []CameraOutput) {
+	for i := range outputs {
+		if outputs[i].Purpose == CameraOutputLive {
+			outputs[i].Activation = CameraActivationAlways
+		}
+	}
 }
 
 func validateCameraStreams(streams []CameraStream) error {
@@ -368,6 +377,9 @@ func markCameraPolicyAppliedTx(ctx context.Context, tx *sql.Tx, snapshot CameraP
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, result := range snapshot.Results {
+		if result.Purpose == CameraOutputLive {
+			result.Policy.Activation = CameraActivationAlways
+		}
 		if result.Policy.SourceKey == "" && result.Policy.SourceStreamID != 0 {
 			if err := tx.QueryRowContext(ctx, `SELECT source_key FROM camera_streams WHERE camera_id=? AND id=?`, snapshot.CameraID, result.Policy.SourceStreamID).Scan(&result.Policy.SourceKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err

@@ -1,0 +1,65 @@
+name: camstation-always-hot-dev
+
+services:
+  camstation:
+    image: "${CAMSTATION_DEV_IMAGE:-camstation:always-hot-dev}"
+    pull_policy: never
+    container_name: camstation-always-hot-dev
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      TZ: Asia/Seoul
+      CAMSTATION_ADDR: 0.0.0.0:18080
+      CAMSTATION_DB: /var/lib/camstation/data/camstation.db
+      CAMSTATION_RECORDINGS_DIR: /var/lib/camstation/media/recordings
+      CAMSTATION_TEMP_DIR: /var/lib/camstation/media/temp
+      CAMSTATION_VIEWER_RELEASES_DIR: /var/lib/camstation/data/viewer-releases
+      CAMSTATION_RECORDING_ENABLED: "false"
+      CAMSTATION_MAX_STORAGE_GB: "0"
+      CAMSTATION_WEBRTC_CANDIDATES: "${CAMSTATION_DEV_WEBRTC_CANDIDATES:?CAMSTATION_DEV_WEBRTC_CANDIDATES is required}"
+      CAMSTATION_PLAYBACK_LOG_LEVEL: info
+    ports:
+      - target: 18080
+        published: "${CAMSTATION_DEV_HTTP_PORT:-28080}"
+        host_ip: "${CAMSTATION_DEV_BIND_IP:-0.0.0.0}"
+        protocol: tcp
+      - target: 8555
+        published: "${CAMSTATION_DEV_WEBRTC_PORT:-28555}"
+        host_ip: "${CAMSTATION_DEV_BIND_IP:-0.0.0.0}"
+        protocol: tcp
+      - target: 8555
+        published: "${CAMSTATION_DEV_WEBRTC_PORT:-28555}"
+        host_ip: "${CAMSTATION_DEV_BIND_IP:-0.0.0.0}"
+        protocol: udp
+    volumes:
+      - type: bind
+        source: "${CAMSTATION_DEV_STATE_DIR:?CAMSTATION_DEV_STATE_DIR is required}"
+        target: /var/lib/camstation/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${CAMSTATION_DEV_MEDIA_DIR:?CAMSTATION_DEV_MEDIA_DIR is required}"
+        target: /var/lib/camstation/media
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    pids_limit: 2048
+    cpus: 10.0
+    mem_limit: 6g
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "2"
+
+networks:
+  default:
+    name: camstation-always-hot-dev-net
+    driver: bridge
