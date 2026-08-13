@@ -1,5 +1,8 @@
 # Monitoring PC Viewer 2.0 clean-transition runbook
 
+> 이 문서는 과거 확대 검토안이며 현재 실행 기준이 아니다. 실제 전환은
+> [CamStation 1.0 → Docker 2.0 전환 계획](2026-08-12_camstation2-simple-cutover-plan.md)을 따른다.
+
 Use this runbook only after explicitly selecting `monitoring-pc`. Use `test-pc` for rehearsal, but
 repeat every acceptance check on `monitoring-pc`; the test PC cannot establish the final display or
 monitoring-LAN result.

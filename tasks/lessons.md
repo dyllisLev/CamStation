@@ -1,5 +1,123 @@
 # Lessons
 
+## 2026-08-13 — portable 구 Viewer 제거는 실행 파일과 재실행 경로를 따로 고정한다
+
+- 구 Viewer가 설치 제품이 아니라 사용자 Desktop의 portable EXE일 수 있고, Startup 바로가기는
+  그 파일과 다른 사용자 프로필의 이미 사라진 경로를 가리킬 수 있다. 프로세스 이름만 보고 지우지
+  말고 EXE의 ProductVersion·크기·SHA-256, shortcut target/hash, Run/task/service, 전용 profile
+  root를 각각 관찰한 뒤 정확한 legacy 자산만 제거한다.
+- 현재 Viewer의 MSI/Service/Run/config/profile과 legacy portable EXE/startup/profile을 같은
+  `Viewer` 이름으로 묶지 않는다. 변경 전후 현재 제품 버전, Service PID/start mode, 설정과
+  auto-start hash, 실제 창을 고정하면 구버전 삭제가 운영 Viewer를 건드리지 않았음을 증명할 수 있다.
+- Windows uninstall registry와 ScheduledTask action은 모든 객체가 `DisplayName`, `Execute`,
+  `Arguments`를 갖지 않는다. StrictMode 감사 스크립트는 `PSObject.Properties[...]`로 존재 여부를
+  확인한 뒤 값을 읽어야 하며, 누락 속성 때문에 진단 자체가 실패하지 않게 한다.
+
+## 2026-08-13 — producer 존재와 영상 track 진행은 다른 건강 신호다
+
+- go2rtc producer와 RTSP 연결이 존재하고 audio byte가 증가해도 video receiver가 0 byte로 멈출 수
+  있다. 카메라 입력 건강은 process/producer 수가 아니라 track별 video byte·packet delta로 판정하고,
+  recording·live처럼 서로 다른 입력을 같은 카메라라는 이유로 하나의 상태로 합치지 않는다.
+- private 입력 preload와 public 출력 preload를 구분한다. 서버가 카메라 원본을 계속 받더라도
+  `on_demand` H.264 출력은 첫 viewer에서 ffmpeg cold start와 keyframe 대기를 다시 겪으며, 여러
+  변환기의 동시 시작은 CPU 제한과 짧은 setup deadline을 넘길 수 있다.
+- 부분 정지 producer는 프로세스가 살아 있다는 이유로 방치하지 않는다. 유한 시간 video delta가 0인
+  입력만 격리 재시작하는 server-side watchdog과 cooldown이 필요하고, 전체 go2rtc/container 재시작은
+  진단 증거이지 정상 복구 설계가 아니다.
+- 운영 영상 진단에서 `docker top`, `ps args`, raw go2rtc JSON은 카메라 URL·자격증명을 포함할 수
+  있으므로 출력하지 않는다. 공개 DTO 또는 raw JSON을 즉시 파싱한 허용 필드·counter만 사용하고,
+  오류 로그도 URL/IP를 제거한 뒤 표시한다.
+- 조사 중 컨테이너 ID/image가 외부 작업으로 바뀌면 기존 세션의 전체 단절을 카메라 장애로 세지
+  않는다. 즉시 기준선을 폐기하고 새 revision·시작 시각·consumer를 다시 고정한 뒤 재현한다.
+
+## 2026-08-13 — 운영 검증기는 실제 publish 주소와 trap 실행 경계를 먼저 고정한다
+
+- Docker port가 특정 host 주소에만 publish된 운영에서는 host `127.0.0.1:port`가 열려 있다고
+  가정하지 않는다. public 검증은 실제 관리/모니터링 주소를 쓰고, 컨테이너 내부 health는
+  `docker exec`의 loopback으로 분리한다.
+- `set -E`의 ERR trap은 함수와 command substitution에도 상속된다. 실패한 치환 안에서 rollback
+  출력을 stdout에 쓰면 바깥 비교식까지 오염되고 rollback이 중복 실행될 수 있다. transaction
+  trap은 최상위 shell에만 두고 rollback 출력과 데이터 치환을 분리한다.
+- `grep -c`는 일치 0건을 숫자 `0`으로 출력하면서 exit 1을 반환한다. “0건이어야 합격” 검사는
+  `set -e` 아래서 `awk`의 명시적 count를 사용하거나 종료 상태를 별도로 처리한다.
+
+## 2026-08-13 — 대체 스트림은 재생 성공의 종착점이 아니라 임시 상태다
+
+- `focus` 대체 경로가 실제 재생 중이라는 사실만으로 복구를 끝내면 안 된다. 정상 화면을 유지하면서
+  원본 `live`를 별도 연결로 계속 확인하고, 원본의 실제 media progress가 증명되면 자동으로 복귀한다.
+- 원본 확인을 위해 현재 대체 영상을 먼저 끊으면 probe 실패가 곧 사용자 화면 장애가 된다. probe는
+  백그라운드에서 격리하고, 성공이 확인된 뒤에만 해당 타일 하나를 전환한다.
+- 연결 성립이나 binary 수신 한 번만으로 원본 복구를 판정하지 않는다. WebRTC/MSE 모두 실제 영상
+  시간이 연속 진행하는지 확인해 연결만 살아 있는 정지 영상을 원본으로 승격하지 않는다.
+
+## 2026-08-13 — Viewer 연결 수와 실제 프레임 진행을 함께 감시한다
+
+- go2rtc의 `viewerCount`는 카메라별 downstream 연결 존재 여부를 정확히 보여 주지만, 연결이 남은 채
+  디코딩 프레임이 멈춘 상태까지 정상으로 판정할 수는 없다. 같은 시각의 Viewer
+  `lastProgressAt` 갱신과 반복 표본을 함께 확인하고, recording consumer는 Viewer 연결 수에서 분리한다.
+- `live` 실패 뒤 `focus`가 재생 중이면 카메라 기준 연결은 정상일 수 있다. public stream 이름별 수를
+  그대로 합격/실패로 해석하지 말고, 같은 카메라의 live/focus 합계와 최신 progress를 대응시킨다.
+- 30초 집중 복구 뒤 5분 저빈도 probe를 한 번만 허용하면 그 probe 실패 후 타이머가 영구히 사라져
+  수동 페이지 reload나 설정 재연결이 필요해진다. 재연결 폭주를 막는 cooldown은 유지하되, 성공할
+  때까지 cooldown마다 정확히 한 번의 격리 probe를 다시 예약하고 정상 타일은 건드리지 않는다.
+- Viewer telemetry는 후보 stream별 최근 상태를 보존하므로 과거 fallback/retrying 행이 남을 수 있다.
+  `updatedAt`이 오래된 행보다 현재 서버 consumer와 최신 `lastProgressAt`을 우선해 실제 활성 경로를
+  판정한다.
+
+## 2026-08-13 — 전환 verifier와 rollback 자체도 제품처럼 검증한다
+
+- `ss`, public DTO, Viewer registry는 기억한 열/필드 이름으로 판정하지 않는다. 현재 출력의 실제 열과
+  DTO key를 먼저 한 번 읽고, 카메라는 `state`, Viewer는 `renderer.state`와 `streams[].state`처럼
+  확인된 필드만 사용한다. 검사기 파싱 실패를 제품 실패로 오판해 불필요한 rollback을 만들지 않는다.
+- stdin 데이터를 `node`로 파이프하면서 동시에 heredoc으로 JavaScript를 주면 heredoc이 stdin을
+  차지해 데이터가 사라진다. 파이프 분석은 `node -e`를 사용하거나 입력 파일을 명시한다.
+- `ERR` trap에서 rollback 함수가 0을 반환하면 원래 실패 뒤 스크립트가 계속 진행할 수 있다.
+  transaction trap은 먼저 trap을 해제하고 원복한 뒤 원래 exit code로 반드시 종료해야 한다.
+  또한 `systemctl is-enabled`의 `disabled`는 기대 문자열을 출력하면서 nonzero를 반환하므로
+  `value=$(... || true)`로 상태를 분리해 비교한다.
+- nginx graceful reload 직후 첫 요청은 구 worker가 처리할 수 있다. 새 symlink와 `nginx -t`만으로
+  합격하지 말고 짧은 bounded retry로 새 upstream health를 확인한다. 첫 502는 error log의 실제
+  upstream을 확인하고 symlink rollback이 끝났는지 검증한다.
+- 전환 완료 시 현재 화면만 보지 말고 재부팅 소유권을 맞춘다. Docker restart policy와 compose를
+  같은 값으로 유지하고, 대체된 1.0 unit은 삭제하지 않되 boot enable만 해제한다. 이 변경은 container
+  recreate 없이 적용하고 health/restart 0을 다시 확인한다.
+
+## 2026-08-13 — Viewer 설치본 비교는 현재 MSI runtime과 비소유 잔여물을 분리한다
+
+- 두 PC가 같은 최종 Viewer인지 확인할 때 표시 버전만 비교하지 않는다. ProductCode, Viewer exe,
+  Service exe, `app.asar`와 MSI 소유 전체 파일의 상대 경로·크기·SHA-256을 함께 비교한다.
+- 설치 root 전체 manifest가 다르더라도 차이가 과거 bootstrap/current pointer 같은 비소유 잔여물뿐이면
+  현재 runtime 차이로 단정하지 않는다. 공통 MSI 파일이 모두 동일하고 실제 프로세스·Service가 표준
+  직접 실행 파일을 사용하는지 확인한 뒤 연결 장애 원인에서 패키지 불일치를 제외한다.
+- 읽기 전용 시스템 파일 감사에 대상 사용자의 대화형 Explorer가 꼭 필요하지는 않다. GUI preflight가
+  fail-closed 되면 이를 완화하지 말고, 고정 SSH host key·관리 identity·machine·script hash를 별도로
+  검증하는 비대화형 감사 경로만 사용한다.
+
+## 2026-08-12 — 실제 영상까지 승인된 로컬 DB는 다시 변환하지 않고 정지 상태로 승격한다
+
+- 로컬 Docker에서 전체 카메라와 레이아웃을 실제 확인한 DB가 있고 사용자가 그 상태의 승격을
+  승인했다면, 같은 원본에서 “운영용 DB”를 다시 import해 서로 다른 산출물을 만들지 않는다.
+  로컬 컨테이너를 정상 정지해 SQLite 쓰기를 끝내고 quick-check와 SHA-256을 고정한 뒤 그 파일을
+  그대로 배치한다.
+- 사용자가 기존 중지된 2.0 카나리의 폐기를 명시적으로 승인하면 별도 staging을 병렬로 쌓지 않는다.
+  정확한 카나리 컨테이너·전용 state/media/deploy 경로만 제거하고, 최종 컨테이너를 `Created`
+  상태로 만들어 두되 start는 호출하지 않는다. 기존 1.0 자산은 이 삭제 범위에 포함하지 않는다.
+
+## 2026-08-12 — 카메라 동시 수신 가능 여부는 서버 세대가 아니라 실제 source IP 기준으로 판단한다
+
+- 운영 서버의 1.0과 같은 IP에서 2.0을 띄우면 중복 수신이 불가능하지만, 별도 IP를 사용하는 로컬 Docker는 1.0을 유지한 채 활성 8대를 실제 시험할 수 있다. “사전 라이브 시험 불가”를 모든 환경에 일반화하지 않는다.
+- 사용자가 로컬 전체 검증으로 범위를 바꾸면 production Docker packaging 작업을 즉시 중단하고, 운영 카나리만 정지한 뒤 `source snapshot → local fresh DB → local live 8대 → monitoring PC Viewer`의 짧은 경로로 전환한다.
+- 로컬 검증의 목표가 라이브 화면이면 저장공간이 작은 개발 호스트에서 recorder를 함께 켜지 않는다. runtime의 recording enable을 false로 고정하고 recorder worker와 recordings/temp 증가가 0인지 확인한 뒤, 운영 이관 시에만 운영용 저장경로와 녹화 정책을 적용한다.
+- 사용자가 로컬 Docker와 브라우저만으로 검증하라고 범위를 좁히면 모니터링 PC의 Viewer 주소 변경·실행·캡처를 추가하지 않는다. 로컬 HTTP 화면, video 진행 시간, stream 상태와 녹화 0건만으로 해당 단계의 합격을 판정한다.
+
+## 2026-08-12 — 전환 계획은 실제 제약과 단순 복구 경로를 중심으로 작성한다
+
+- 동일 카메라 IP를 1.0과 2.0에서 동시에 수신할 수 없는 환경에서는 사전 2.0 라이브 시험을 계획에 넣지 않는다. 사전에는 camera/layout 데이터와 Docker 구성을 오프라인으로 준비하고, 실제 연결 시험은 1.0을 완전히 내린 뒤 수행한다.
+- 레이아웃이 변경되지 않는다면 1.0 전체화면 기준 캡처는 미리 한 번 확보하면 된다. 전환 직전 반복 캡처나 장시간 감사를 기본 절차로 만들지 않는다.
+- 1.0 실행 자산을 삭제하지 않는 전환의 기본 복구는 `2.0 종료 → 1.0 재시작`이다. 계획은 이 명확한 경계를 중심으로 쓰고, 사용자가 요구하지 않은 스킬 개발·장시간 soak·이력 감사로 확대하지 않는다.
+- 카나리 이미지가 healthy라는 사실은 production Docker 전환 계약이 준비됐다는 뜻이 아니다. 카나리 DB·경로·정책과 final DB·경로·정책을 분리하고, systemd 전용 switch/rollback을 Docker 절차로 이름만 바꿔 재사용하지 않는다.
+- “카메라 연결정보와 레이아웃만 승계”는 legacy settings까지 importer가 읽어 채워도 된다는 뜻이 아니다. 2.0에 필수 settings row가 있더라도 그 값은 legacy 승계가 아니라 명시적인 fresh 운영 정책에서 만들어져야 한다.
+
 ## 2026-08-12 — 1.x→2.0 전환에서 보존 범위와 화면 합격 기준을 별개로 확인한다
 
 - 사용자가 “기존 데이터는 필요 없고 카메라 연결정보만 가져온다”고 말해도 최종 목표가 “현재
@@ -777,3 +895,59 @@
   Explorer and UIA-visible windows while desktop serialization returns non-JSON and GDI capture fails
   with an invalid handle. Read the locale-independent WTS connection-state enum and require `Active`
   before screenshot, foreground input, or visually verified GUI control.
+## 2026-08-13 — 반복 복구도 전체 후보를 다시 순회한다
+
+- fallback은 초기 30초 episode에서만 방문하면 충분하지 않다. 영상이 하나도 재생되지 않는 cooldown
+  상태에서는 매 저빈도 wake-up마다 새 유한 episode를 시작해 원본 transport, fallback, 격리 재구독을
+  모두 다시 방문해야 한다. primary 한 번만 실패하고 다시 cooldown으로 돌아가면 복구 가능한 대체
+  영상도 영구히 놓친다.
+- fallback이 이미 실제 재생 중인 경우와 어떤 후보도 재생되지 않는 경우를 분리한다. 전자는 화면을
+  건드리지 않는 1분 primary promotion probe를 쓰고, 후자는 5분마다 30초 전체 복구 episode를 쓴다.
+- 서버 consumer 존재나 명령 성공은 영상 성공 증거가 아니다. Viewer의 video-clock 기반
+  `lastProgressAt` 증가와 같은 시간대의 playback log를 함께 확인한다.
+
+# Paseo 예약 인증 경계
+
+- Paseo `daemon.auth.password`의 `$2b$...` 값은 bcrypt 검증용 hash이지 CLI 비밀번호가 아니다.
+  이를 `PASEO_PASSWORD`로 전달하거나 로그에 출력하지 않는다. 예약 등록 전에는 평문 비밀번호가 이미
+  안전한 environment/root-only 임시 파일로 제공됐는지 확인한다. 현재 Paseo agent 세션에 인증된
+  `create_schedule` MCP가 있으면 그것을 우선 사용하고, daemon 인증 재설정이나 사용자 비밀번호 재입력을
+  요구하지 않는다. 등록 후에는 `inspect_schedule`로 ID, `nextRunAt`, max-runs, target mode/model,
+  prompt와 cwd를 반드시 재조회한다.
+
+## 2026-08-13 — 전환 순서와 네트워크 경계를 사용자의 실행 계약 그대로 유지
+
+- 운영 1.0과 운영 Docker 2.0은 같은 서버 출발 IP라 카메라 수신을 겹치면 안 되지만, 로컬 개발
+  Docker는 다른 출발 IP이므로 운영 1.0을 유지한 채 8대 사전 검증이 가능하다. 두 상황을 같은
+  제약으로 일반화하지 않는다.
+- 최소중단 전환은 사용자가 정한 다섯 단계, 즉 `로컬 8대 → 모니터링 PC에서 로컬 8대 → 운영
+  1.0 stop/2.0 start → 운영 직접 브라우저 → 모니터링 Viewer 운영 주소` 순서를 그대로 사용한다.
+  추가 정책이나 스킬 변경을 끼워 넣지 않는다.
+- `10 대역도 열기` 또는 `192 대역도 열기`를 한쪽의 대체 선택지로 해석하지 않는다. 이 배포 계약은
+  로컬과 운영 모두 HTTP 및 WebRTC TCP+UDP를 10·192 두 인터페이스에 동시에 명시적으로 bind하고,
+  두 WebRTC candidate를 모두 광고해야 한다.
+- Viewer 1.0 프로세스를 화면 복구 안전망으로 잠시 유지하는 것과 운영 1.0 camera receiver를 계속
+  실행하는 것은 다르다. receiver는 2.0 시작 전에 반드시 종료하고, Viewer 1.0은 Viewer 2.0 화면이
+  확인될 때까지 rollback용으로만 남길 수 있다.
+- 이 전환에서 로컬 Docker는 브라우저 시험 후 바로 끄는 일회성 검사 장비가 아니다. 모니터링 PC의
+  Viewer 1.0을 종료하고 Viewer 2.0을 로컬 Docker에 붙인 순간부터 임시 실제 서비스가 되며, 운영
+  Docker와 Viewer 2.0의 운영 주소 전환이 끝날 때까지 계속 실행해야 한다.
+- 모니터링 PC에서 로컬 2.0 영상을 확인하라는 지시는 브라우저 확인이 아니라 설치된 Viewer 2.0의
+  서버 주소를 로컬 192 대역으로 설정해 실제 전체화면 서비스를 인계하라는 의미다. 운영 Docker가
+  검증된 뒤 같은 Viewer의 주소만 운영 도메인으로 바꾸고 재시작한다.
+- 사용자가 Viewer 종료·실행을 직접 하겠다고 작업 경계를 회수하면 즉시 창/프로세스 제어를 중단하고
+  요청받은 설정 필드만 변경한다. `IP 설정만`은 server URL만 변경한다는 뜻이므로 displayName,
+  client identity와 `autoStart`는 현재 값을 그대로 보존하고 Viewer 프로세스를 실행·종료하지 않는다.
+
+## 2026-08-13 — Viewer 주소 저장과 실행 중 control 연결은 별도로 검증한다
+
+- Registry/API에서 새 `serverUrl` 저장을 확인한 것만으로 Viewer Service가 그 주소를 사용한다고
+  판정하지 않는다. Electron renderer의 원격 endpoint와 Service PID의 원격 endpoint를 각각 확인한다.
+- Viewer는 새 URL로 live를 직접 열 수 있지만 Service control loop는 시작 시 읽은 이전 URL을 계속
+  사용할 수 있다. `잠깐 live -> setup`은 앱 crash가 아니라 새 renderer 연결과 오래된 Service
+  connection state가 충돌한 상태일 수 있다.
+- 주소 변경 검증은 `저장된 config`, `renderer TCP/WebSocket`, `Service heartbeat/control TCP`, 서버의
+  Viewer 등록을 한 시각축에서 확인한다. 특히 config commit 뒤 control loop의 reload/cancel 신호가
+  있는지 코드와 실제 PID 연결을 함께 본다.
+- 사용자가 실패 뒤 Viewer 1.0을 다시 실행했다면 이를 원인으로 소급하지 않는다. 실패 시각의 로그와
+  process start time을 먼저 맞춰 원인과 복구 동작을 분리한다.
