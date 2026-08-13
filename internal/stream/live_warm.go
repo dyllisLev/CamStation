@@ -1,17 +1,20 @@
 package stream
 
 import (
+	"bufio"
 	"errors"
+	"fmt"
 	"io"
-	"log"
 	"net/url"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"camstation/internal/opslog"
 	"camstation/internal/store"
 )
 
@@ -23,11 +26,12 @@ const (
 )
 
 type liveWarmSpec struct {
+	CameraID   int64
 	StreamName string
 	Input      string
 }
 
-type liveWarmRunner func(stop <-chan struct{}, spec liveWarmSpec, setActive func(bool)) error
+type liveWarmRunner func(stop <-chan struct{}, spec liveWarmSpec, attempt int, setActive func(bool)) error
 
 type liveWarmOption func(*LiveWarmManager)
 
@@ -36,6 +40,7 @@ type LiveWarmManager struct {
 	workers  map[string]*liveWarmWorker
 	rtspBase string
 	runner   liveWarmRunner
+	logger   *opslog.Logger
 	retryMin time.Duration
 	retryMax time.Duration
 }
@@ -60,7 +65,6 @@ func newLiveWarmManager(options ...liveWarmOption) *LiveWarmManager {
 	manager := &LiveWarmManager{
 		workers:  make(map[string]*liveWarmWorker),
 		rtspBase: "rtsp://127.0.0.1:8554",
-		runner:   runLiveWarmFFmpeg,
 		retryMin: liveWarmRetryMin,
 		retryMax: liveWarmRetryMax,
 	}
@@ -68,6 +72,9 @@ func newLiveWarmManager(options ...liveWarmOption) *LiveWarmManager {
 		if option != nil {
 			option(manager)
 		}
+	}
+	if manager.runner == nil {
+		manager.runner = manager.runLiveWarmFFmpeg
 	}
 	return manager
 }
@@ -77,6 +84,12 @@ func withLiveWarmRunner(runner liveWarmRunner) liveWarmOption {
 		if runner != nil {
 			manager.runner = runner
 		}
+	}
+}
+
+func withLiveWarmLogger(logger *opslog.Logger) liveWarmOption {
+	return func(manager *LiveWarmManager) {
+		manager.logger = logger
 	}
 }
 
@@ -186,6 +199,7 @@ func liveWarmSpecs(cameras []store.Camera, rtspBase string) []liveWarmSpec {
 			}
 			seen[name] = true
 			specs = append(specs, liveWarmSpec{
+				CameraID:   camera.ID,
 				StreamName: name,
 				Input:      base + "/" + url.PathEscape(name),
 			})
@@ -197,7 +211,8 @@ func liveWarmSpecs(cameras []store.Camera, rtspBase string) []liveWarmSpec {
 
 func BuildLiveWarmFFmpegArgs(input string) []string {
 	return []string{
-		"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-nostats",
+		"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-nostats",
+		"-stats_period", "60", "-progress", "pipe:1",
 		"-rtsp_transport", "tcp", "-user_agent", "CamStationWarm/2.0", "-i", input,
 		"-map", "0:v:0", "-c:v", "copy", "-an", "-f", "null", "-",
 	}
@@ -206,6 +221,7 @@ func BuildLiveWarmFFmpegArgs(input string) []string {
 func (w *liveWarmWorker) run() {
 	defer close(w.done)
 	delay := w.manager.retryMin
+	attempt := 0
 	for {
 		select {
 		case <-w.stop:
@@ -214,28 +230,47 @@ func (w *liveWarmWorker) run() {
 		default:
 		}
 
+		attempt++
 		startedAt := time.Now()
-		err := w.manager.runner(w.stop, w.spec, w.setActive)
+		w.manager.log(opslog.Info, "worker_attempt_started", opslog.Fields{
+			CameraID: w.spec.CameraID, StreamName: w.spec.StreamName, Attempt: attempt,
+		})
+		err := w.manager.runner(w.stop, w.spec, attempt, w.setActive)
 		w.setActive(false)
 		if err != nil {
-			w.setError("live warm consumer exited")
-			log.Printf("live warm consumer exited stream=%s", w.spec.StreamName)
+			safeError := opslog.SanitizeMessage(err.Error())
+			w.setError(safeError)
+			w.manager.log(opslog.Warn, "worker_exited", opslog.Fields{
+				CameraID: w.spec.CameraID, StreamName: w.spec.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(), ErrorCode: liveWarmErrorCode(err), Message: safeError,
+			})
 		}
 
 		select {
 		case <-w.stop:
+			w.manager.log(opslog.Info, "worker_stopped", opslog.Fields{
+				CameraID: w.spec.CameraID, StreamName: w.spec.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(),
+			})
 			return
 		default:
 		}
 		if time.Since(startedAt) >= liveWarmStableAfter {
 			delay = w.manager.retryMin
 		}
+		w.manager.log(opslog.Warn, "retry_scheduled", opslog.Fields{
+			CameraID: w.spec.CameraID, StreamName: w.spec.StreamName, Attempt: attempt, RetryMS: delay.Milliseconds(),
+		})
 		timer := time.NewTimer(delay)
 		select {
 		case <-w.stop:
 			if !timer.Stop() {
 				<-timer.C
 			}
+			w.manager.log(opslog.Info, "worker_stopped", opslog.Fields{
+				CameraID: w.spec.CameraID, StreamName: w.spec.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(),
+			})
 			return
 		case <-timer.C:
 		}
@@ -245,6 +280,12 @@ func (w *liveWarmWorker) run() {
 				delay = w.manager.retryMax
 			}
 		}
+	}
+}
+
+func (m *LiveWarmManager) log(level opslog.Level, event string, fields opslog.Fields) {
+	if m != nil && m.logger != nil {
+		_ = m.logger.Log(level, "stream.live_warm", event, fields)
 	}
 }
 
@@ -275,15 +316,36 @@ func (w *liveWarmWorker) isActive() bool {
 }
 
 func runLiveWarmFFmpeg(stop <-chan struct{}, spec liveWarmSpec, setActive func(bool)) error {
+	return runLiveWarmFFmpegObserved(stop, spec, 1, setActive, nil)
+}
+
+func (m *LiveWarmManager) runLiveWarmFFmpeg(stop <-chan struct{}, spec liveWarmSpec, attempt int, setActive func(bool)) error {
+	return runLiveWarmFFmpegObserved(stop, spec, attempt, setActive, m.logger)
+}
+
+func runLiveWarmFFmpegObserved(stop <-chan struct{}, spec liveWarmSpec, attempt int, setActive func(bool), logger *opslog.Logger) error {
 	args := BuildLiveWarmFFmpegArgs(spec.Input)
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open ffmpeg progress pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("open ffmpeg stderr pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("start ffmpeg: %w", err)
 	}
 	setActive(true)
-	log.Printf("live warm consumer started stream=%s pid=%d", spec.StreamName, cmd.Process.Pid)
+	if logger != nil {
+		_ = logger.Log(opslog.Debug, "stream.live_warm", "process_started", opslog.Fields{
+			CameraID: spec.CameraID, StreamName: spec.StreamName, Attempt: attempt,
+		})
+	}
+	scanDone := make(chan error, 2)
+	go func() { scanDone <- scanLiveWarmProgress(stdout, logger, spec, attempt) }()
+	go func() { scanDone <- scanLiveWarmStderr(stderr, logger, spec, attempt) }()
 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
@@ -296,19 +358,96 @@ func runLiveWarmFFmpeg(stop <-chan struct{}, spec liveWarmSpec, setActive func(b
 		defer timer.Stop()
 		select {
 		case <-waitDone:
+			<-scanDone
+			<-scanDone
 			return nil
 		case <-timer.C:
 			if cmd.Process != nil && cmd.ProcessState == nil {
 				_ = cmd.Process.Kill()
 			}
 			<-waitDone
+			<-scanDone
+			<-scanDone
 			return nil
 		}
 	case err := <-waitDone:
+		progressErr := <-scanDone
+		stderrErr := <-scanDone
 		if err == nil {
-			return errors.New("live warm consumer stopped")
+			return errors.Join(errors.New("live warm ffmpeg stopped"), progressErr, stderrErr)
 		}
-		return errors.New("live warm consumer failed")
+		return errors.Join(errors.New("live warm ffmpeg failed"), progressErr, stderrErr)
+	}
+}
+
+func scanLiveWarmProgress(reader io.Reader, logger *opslog.Logger, spec liveWarmSpec, attempt int) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1024), maxBufferedLogLine)
+	var frame, mediaTimeUS int64
+	started := false
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "frame":
+			frame, _ = strconv.ParseInt(value, 10, 64)
+		case "out_time_us":
+			mediaTimeUS, _ = strconv.ParseInt(value, 10, 64)
+		case "progress":
+			if logger == nil || (frame <= 0 && mediaTimeUS <= 0) {
+				continue
+			}
+			event, level := "media_progress", opslog.Debug
+			if !started {
+				started = true
+				event, level = "media_started", opslog.Info
+			}
+			_ = logger.Log(level, "stream.live_warm", event, opslog.Fields{
+				CameraID: spec.CameraID, StreamName: spec.StreamName, Attempt: attempt,
+				Frame: frame, MediaTimeMS: mediaTimeUS / 1000,
+			})
+		}
+	}
+	return scanner.Err()
+}
+
+func scanLiveWarmStderr(reader io.Reader, logger *opslog.Logger, spec liveWarmSpec, attempt int) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1024), maxBufferedLogLine)
+	for scanner.Scan() {
+		message := strings.TrimSpace(scanner.Text())
+		if logger == nil || message == "" {
+			continue
+		}
+		level := opslog.Warn
+		event := "ffmpeg_warning"
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "invalid") || strings.Contains(lower, "failed") {
+			level = opslog.Error
+			event = "ffmpeg_error"
+		}
+		_ = logger.Log(level, "stream.live_warm", event, opslog.Fields{
+			CameraID: spec.CameraID, StreamName: spec.StreamName, Attempt: attempt,
+			ErrorCode: event, Message: message,
+		})
+	}
+	return scanner.Err()
+}
+
+func liveWarmErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "start ffmpeg"):
+		return "process_start_failed"
+	case strings.Contains(message, "progress pipe") || strings.Contains(message, "stderr pipe"):
+		return "process_pipe_failed"
+	default:
+		return "process_exited"
 	}
 }
 

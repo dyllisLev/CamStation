@@ -79,12 +79,12 @@ func (d routeDeps) registerViewerRoutes(mux *http.ServeMux) {
 			writeViewerError(w, err)
 			return
 		}
-		_ = d.db.AppendEvent(r.Context(), store.Event{
-			Source:  "viewer",
-			Level:   "info",
-			Message: "viewer heartbeat",
-			Details: map[string]any{"viewerId": viewer.ID, "route": viewer.Route, "mode": viewer.Mode},
-		})
+		if observation, changed := d.viewerTransitions.Observe(viewer); changed {
+			_ = d.db.AppendEvent(r.Context(), observation.Event)
+			for _, record := range observation.Records {
+				_ = d.operationalLogger.Log(record.Level, record.Component, record.Event, record.Fields)
+			}
+		}
 		writeJSON(w, http.StatusOK, viewerHeartbeatResponse{
 			Viewer:         viewer,
 			DesiredRelease: desiredRelease,

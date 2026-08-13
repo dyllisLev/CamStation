@@ -13,17 +13,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"camstation/internal/opslog"
 )
 
 const (
 	DefaultLogsRoot         = `C:\ProgramData\CamStation\Viewer\Logs`
 	ServiceLogFilename      = "service.log"
-	DefaultLogRotateBytes   = 10 * 1024 * 1024
-	DefaultLogRetainedFiles = 5
+	DefaultLogLevel         = "warn"
+	DefaultLogRotateBytes   = 5 * 1024 * 1024
+	DefaultLogRetainedFiles = 3
 	MaxLogRecordBytes       = 4 * 1024
 	CodeLoggingUnavailable  = "logging_unavailable"
 )
@@ -39,20 +43,48 @@ var (
 )
 
 type LogRecord struct {
-	Component     string
-	State         string
-	Code          string
-	CorrelationID string
-	Detail        string
+	Level            opslog.Level
+	Component        string
+	Event            string
+	State            string
+	Code             string
+	CorrelationID    string
+	SessionID        string
+	StreamName       string
+	Transport        string
+	Phase            string
+	Attempt          int
+	DurationMS       int64
+	AttemptElapsedMS int64
+	RetryMS          int64
+	ReadyState       int
+	ReconnectCount   int
+	FallbackCount    int
+	UsingFallback    bool
+	Detail           string
 }
 
 type logLine struct {
-	Timestamp     string `json:"timestamp"`
-	Component     string `json:"component"`
-	State         string `json:"state,omitempty"`
-	Code          string `json:"code,omitempty"`
-	CorrelationID string `json:"correlationId,omitempty"`
-	Detail        string `json:"detail,omitempty"`
+	Timestamp        string `json:"timestamp"`
+	Level            string `json:"level"`
+	Component        string `json:"component"`
+	Event            string `json:"event"`
+	State            string `json:"state,omitempty"`
+	Code             string `json:"errorCode,omitempty"`
+	CorrelationID    string `json:"correlationId,omitempty"`
+	SessionID        string `json:"sessionId,omitempty"`
+	StreamName       string `json:"streamName,omitempty"`
+	Transport        string `json:"transport,omitempty"`
+	Phase            string `json:"phase,omitempty"`
+	Attempt          int    `json:"attempt,omitempty"`
+	DurationMS       int64  `json:"durationMs,omitempty"`
+	AttemptElapsedMS int64  `json:"attemptElapsedMs,omitempty"`
+	RetryMS          int64  `json:"retryMs,omitempty"`
+	ReadyState       int    `json:"readyState,omitempty"`
+	ReconnectCount   int    `json:"reconnectCount,omitempty"`
+	FallbackCount    int    `json:"fallbackCount,omitempty"`
+	UsingFallback    bool   `json:"usingFallback,omitempty"`
+	Detail           string `json:"detail,omitempty"`
 }
 
 type LogManager struct {
@@ -61,12 +93,48 @@ type LogManager struct {
 	retained    int
 	secureFile  func(string, string) error
 	now         func() time.Time
+	policy      *opslog.Policy
 	mu          sync.Mutex
 	viewerFiles map[string]string
 }
 
 func NewLogManager() *LogManager {
 	return newLogManager(DefaultLogsRoot, DefaultLogRotateBytes, DefaultLogRetainedFiles, secureViewerLogFile)
+}
+
+func NewLogManagerFromEnvironment() (*LogManager, error) {
+	level := strings.TrimSpace(os.Getenv("CAMSTATION_VIEWER_LOG_LEVEL"))
+	if level == "" {
+		level = DefaultLogLevel
+	}
+	componentLevels := strings.TrimSpace(os.Getenv("CAMSTATION_VIEWER_LOG_LEVELS"))
+	policy, err := opslog.NewPolicy(level, componentLevels)
+	if err != nil {
+		return nil, fmt.Errorf("configure Viewer logging: %w", err)
+	}
+	maxMB, err := boundedViewerLogEnv("CAMSTATION_VIEWER_LOG_MAX_MB", DefaultLogRotateBytes>>20, 1, 1024)
+	if err != nil {
+		return nil, err
+	}
+	retained, err := boundedViewerLogEnv("CAMSTATION_VIEWER_LOG_FILES", DefaultLogRetainedFiles, 1, 64)
+	if err != nil {
+		return nil, err
+	}
+	logs := newLogManager(DefaultLogsRoot, int64(maxMB)<<20, retained, secureViewerLogFile)
+	logs.policy = policy
+	return logs, nil
+}
+
+func boundedViewerLogEnv(name string, fallback, minimum, maximum int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be an integer from %d to %d", name, minimum, maximum)
+	}
+	return parsed, nil
 }
 
 func newLogManager(root string, rotateSize int64, retained int, secureFile func(string, string) error) *LogManager {
@@ -76,13 +144,18 @@ func newLogManager(root string, rotateSize int64, retained int, secureFile func(
 	if retained < 1 {
 		retained = 1
 	}
+	policy, _ := opslog.NewPolicy(DefaultLogLevel, "")
 	return &LogManager{
 		root: filepath.Clean(root), rotateSize: rotateSize, retained: retained,
-		secureFile: secureFile, now: time.Now, viewerFiles: make(map[string]string),
+		secureFile: secureFile, now: time.Now, policy: policy, viewerFiles: make(map[string]string),
 	}
 }
 
 func (logs *LogManager) WriteService(record LogRecord) error {
+	level := logRecordLevel(record)
+	if logs == nil || logs.policy == nil || !logs.policy.Enabled(logRecordComponent(record, "viewer.service"), level) {
+		return nil
+	}
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
 	line, err := logs.encode(record)
@@ -100,20 +173,66 @@ func (logs *LogManager) WriteService(record LogRecord) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	if _, err := file.Write(line); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("append service log: %w", err)
 	}
 	return file.Close()
 }
 
-func (logs *LogManager) AssignViewerLog(peer Peer) (string, error) {
-	sid := strings.TrimSpace(peer.UserSID)
-	if !peer.Interactive || peer.SessionID == 0 || sid == "" {
-		return "", fmt.Errorf("%w: verified interactive identity is required", ErrLoggingUnavailable)
+func (logs *LogManager) WriteViewer(peer Peer, record LogRecord) error {
+	level := logRecordLevel(record)
+	component := logRecordComponent(record, "viewer.main")
+	if logs == nil || logs.policy == nil || !logs.policy.Enabled(component, level) {
+		return nil
 	}
-	digest := sha256.Sum256([]byte(strings.ToUpper(sid)))
-	name := fmt.Sprintf("viewer-%d-%s.log", peer.SessionID, hex.EncodeToString(digest[:8]))
+	if logs.secureFile == nil {
+		return fmt.Errorf("%w: secure file creator is unavailable", ErrLoggingUnavailable)
+	}
+	name, sid, err := viewerLogIdentity(peer)
+	if err != nil {
+		return err
+	}
+	path, err := logs.managedPath(name)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)
+	}
+	record.Level = level
+	record.Component = component
+	logs.mu.Lock()
+	defer logs.mu.Unlock()
+	if logs.viewerFiles[name] != sid {
+		return fmt.Errorf("%w: viewer log was not assigned to this lease", ErrLoggingUnavailable)
+	}
+	line, err := logs.encode(record)
+	if err != nil {
+		return err
+	}
+	if err := logs.rotate(path, int64(len(line))); err != nil {
+		return fmt.Errorf("%w: rotate viewer log: %v", ErrLoggingUnavailable, err)
+	}
+	if err := logs.secureFile(path, sid); err != nil {
+		return fmt.Errorf("%w: secure viewer log: %v", ErrLoggingUnavailable, err)
+	}
+	file, err := logs.openManaged(name)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)
+	}
+	if _, err := file.Write(line); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("%w: append viewer log: %v", ErrLoggingUnavailable, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("%w: close viewer log: %v", ErrLoggingUnavailable, err)
+	}
+	return nil
+}
+
+func (logs *LogManager) AssignViewerLog(peer Peer) (string, error) {
+	name, sid, err := viewerLogIdentity(peer)
+	if err != nil {
+		return "", err
+	}
 	path, err := logs.managedPath(name)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)
@@ -139,6 +258,15 @@ func (logs *LogManager) AssignViewerLog(peer Peer) (string, error) {
 	}
 	logs.viewerFiles[name] = sid
 	return path, nil
+}
+
+func viewerLogIdentity(peer Peer) (name, sid string, err error) {
+	sid = strings.TrimSpace(peer.UserSID)
+	if !peer.Interactive || peer.SessionID == 0 || sid == "" {
+		return "", "", fmt.Errorf("%w: verified interactive identity is required", ErrLoggingUnavailable)
+	}
+	digest := sha256.Sum256([]byte(strings.ToUpper(sid)))
+	return fmt.Sprintf("viewer-%d-%s.log", peer.SessionID, hex.EncodeToString(digest[:8])), sid, nil
 }
 
 func (logs *LogManager) MaintainViewerLogs() error {
@@ -176,7 +304,10 @@ func (logs *LogManager) ErrorLogger(ctx context.Context, logged error) string {
 			code = "internal_error"
 		}
 	}
-	if err := logs.WriteService(LogRecord{Component: "service", State: "failed", Code: code, CorrelationID: correlationID}); err != nil {
+	if err := logs.WriteService(LogRecord{
+		Level: opslog.Error, Component: "viewer.service", Event: "request_failed",
+		State: "failed", Code: code, CorrelationID: correlationID,
+	}); err != nil {
 		return ""
 	}
 	return correlationID
@@ -212,15 +343,29 @@ func (logs *LogManager) encode(record LogRecord) ([]byte, error) {
 		limit = logs.rotateSize
 	}
 	line := logLine{
-		Timestamp:     logs.now().UTC().Format(time.RFC3339Nano),
-		Component:     boundedLogText(record.Component, 64),
-		State:         boundedLogText(record.State, 64),
-		Code:          boundedLogText(record.Code, 64),
-		CorrelationID: boundedLogText(record.CorrelationID, 128),
-		Detail:        boundedLogText(redactLogDetail(record.Detail), 2048),
+		Timestamp:        logs.now().UTC().Format(time.RFC3339Nano),
+		Level:            logRecordLevel(record).String(),
+		Component:        boundedLogText(logRecordComponent(record, "viewer.service"), 64),
+		Event:            boundedLogText(record.Event, 64),
+		State:            boundedLogText(record.State, 64),
+		Code:             boundedLogText(record.Code, 64),
+		CorrelationID:    boundedLogText(record.CorrelationID, 128),
+		SessionID:        boundedLogText(record.SessionID, 128),
+		StreamName:       boundedLogText(redactLogDetail(record.StreamName), 128),
+		Transport:        boundedLogText(record.Transport, 32),
+		Phase:            boundedLogText(record.Phase, 64),
+		Attempt:          record.Attempt,
+		DurationMS:       record.DurationMS,
+		AttemptElapsedMS: record.AttemptElapsedMS,
+		RetryMS:          record.RetryMS,
+		ReadyState:       record.ReadyState,
+		ReconnectCount:   record.ReconnectCount,
+		FallbackCount:    record.FallbackCount,
+		UsingFallback:    record.UsingFallback,
+		Detail:           boundedLogText(redactLogDetail(record.Detail), 2048),
 	}
-	if line.Component == "" {
-		line.Component = "service"
+	if line.Event == "" {
+		line.Event = "state_changed"
 	}
 	if line.State == "" && line.Code == "" {
 		line.State = "event"
@@ -241,6 +386,21 @@ func (logs *LogManager) encode(record LogRecord) ([]byte, error) {
 		}
 		line.Detail = boundedLogText(line.Detail, len(line.Detail)/2)
 	}
+}
+
+func logRecordLevel(record LogRecord) opslog.Level {
+	if record.Level < opslog.Debug || record.Level > opslog.Error {
+		return opslog.Info
+	}
+	return record.Level
+}
+
+func logRecordComponent(record LogRecord, fallback string) string {
+	component := strings.TrimSpace(record.Component)
+	if component == "" {
+		return fallback
+	}
+	return component
 }
 
 func (logs *LogManager) rotate(path string, incoming int64) error {

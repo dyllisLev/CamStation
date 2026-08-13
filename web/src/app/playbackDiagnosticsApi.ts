@@ -1,4 +1,5 @@
 import { withAppBase } from "./basePath.ts";
+import { reportViewerDiagnostic } from "../components/live/viewerBridge.ts";
 
 export const playbackDiagnosticEvents = {
   socket_open: "debug",
@@ -111,7 +112,25 @@ export function safePlaybackDiagnostic(input: Record<string, unknown>): SafePlay
 
 export function reportPlaybackDiagnostic(input: Record<string, unknown>): void {
   const event = safePlaybackDiagnostic(input);
-  if (!event || typeof fetch !== "function") return;
+  if (!event) return;
+  reportViewerDiagnostic({
+    level: playbackDiagnosticLevel(event.event),
+    component: "viewer.playback",
+    event: event.event,
+    sessionId: event.sessionId,
+    streamName: event.streamName,
+    transport: event.transport,
+    phase: event.phase,
+    attempt: event.attempt,
+    durationMs: event.elapsedMs,
+    attemptElapsedMs: event.attemptElapsedMs,
+    readyState: event.readyState,
+    usingFallback: event.usingFallback,
+    reconnectCount: event.reconnectCount,
+    fallbackCount: event.fallbackCount,
+    ...(event.errorCategory === "none" ? {} : { errorCode: event.errorCategory }),
+  });
+  if (typeof fetch !== "function") return;
   void fetch(withAppBase("/api/playback/events"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },

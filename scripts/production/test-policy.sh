@@ -8,6 +8,8 @@ for script in "$SCRIPT_DIR"/*.sh; do
   bash -n "$script"
 done
 
+python3 -B "$SCRIPT_DIR/test_camstation_log_watch.py"
+
 if grep -ERn '(^|[[:space:]])(pkill|killall|kill[[:space:]]+-9|rm[[:space:]]+-rf)([[:space:]]|$)' "$SCRIPT_DIR"; then
   printf 'production scripts contain a forbidden broad/destructive process command\n' >&2
   exit 1
@@ -51,7 +53,20 @@ test "$(grep -Fc 'published: "${CANARY_HTTP_PORT:-18081}"' "$ROOT_DIR/packaging/
 test "$(grep -Fc 'host_ip: "${CANARY_BIND_IP:?CANARY_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 1
 test "$(grep -Fc 'host_ip: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 3
 grep -Fq 'CAMSTATION_WEBRTC_CANDIDATES: "${CANARY_MONITOR_BIND_IP:?CANARY_MONITOR_BIND_IP is required}:${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
-grep -Fq 'CAMSTATION_PLAYBACK_LOG_LEVEL: "${CAMSTATION_PLAYBACK_LOG_LEVEL:-info}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_LEVEL: "${CAMSTATION_LOG_LEVEL:-info}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_LEVELS: "${CAMSTATION_LOG_LEVELS:-}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_DIR: /var/lib/camstation/data/logs' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_MAX_MB: "${CAMSTATION_LOG_MAX_MB:-25}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_FILES: "${CAMSTATION_LOG_FILES:-8}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
+grep -Fq 'CAMSTATION_LOG_LEVELS=playback=debug,stream.go2rtc=debug,stream.live_warm=debug,recorder.ffmpeg=debug' "$ROOT_DIR/packaging/docker/canary.env.example"
+grep -Fq 'CAMSTATION_LOG_DIR=/var/lib/camstation2/data/logs' "$ROOT_DIR/packaging/systemd/camstationd-2x.env.example"
+test -x "$SCRIPT_DIR/camstation_log_watch.py"
+grep -Fq 'EnvironmentFile=/etc/camstation/camstation-log-watch.env' "$ROOT_DIR/packaging/systemd/camstation-log-watch.service"
+grep -Fq 'ExecStart=/usr/local/libexec/camstation-log-watch' "$ROOT_DIR/packaging/systemd/camstation-log-watch.service"
+grep -Fq 'OnUnitActiveSec=1min' "$ROOT_DIR/packaging/systemd/camstation-log-watch.timer"
+grep -Fq 'Persistent=true' "$ROOT_DIR/packaging/systemd/camstation-log-watch.timer"
+grep -Fq 'CAMSTATION_WATCH_OUTPUT_MAX_MB=10' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
+grep -Fq 'CAMSTATION_WATCH_OUTPUT_FILES=4' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
 test "$(grep -Fc 'target: 8555' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 test "$(grep -Fc 'published: "${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 grep -A5 -F 'name: webrtc-tcp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: tcp'

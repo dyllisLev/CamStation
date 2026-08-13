@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"camstation/internal/opslog"
 )
 
 var ErrListenerClosed = errors.New("viewer service listener is closed")
@@ -93,13 +95,13 @@ func (service *Service) Run(ctx context.Context) error {
 	if service.Listener == nil {
 		return errors.New("viewer service listener is unavailable")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
 	server := service.server()
 	server.SetCommandResultHandler(service.acceptCommandResult)
 	engine := service.commandEngine()
 	if err := engine.Start(); err != nil {
 		return fmt.Errorf("start viewer command engine: %w", err)
 	}
+	runCtx, cancel := context.WithCancel(ctx)
 	commandDone := make(chan struct{})
 	go func() {
 		defer close(commandDone)
@@ -112,8 +114,10 @@ func (service *Service) Run(ctx context.Context) error {
 		service.runControl(controlCtx, server)
 	}()
 	if service.Logs != nil {
-		_ = service.Logs.WriteService(LogRecord{Component: "service", State: "running"})
-		defer func() { _ = service.Logs.WriteService(LogRecord{Component: "service", State: "stopped"}) }()
+		_ = service.Logs.WriteService(LogRecord{Component: "viewer.service", Event: "started", State: "running"})
+		defer func() {
+			_ = service.Logs.WriteService(LogRecord{Component: "viewer.service", Event: "stopped", State: "stopped"})
+		}()
 	}
 	stopClosing := make(chan struct{})
 	go func() {
@@ -241,6 +245,8 @@ func (service *Service) server() *Server {
 	service.Server.SetCommandResultHandler(service.acceptCommandResult)
 	if service.Logs != nil {
 		service.Server.SetLeaseLogAssigner(service.Logs.AssignViewerLog)
+		service.Server.SetViewerLogWriter(service.Logs.WriteViewer)
+		service.Server.SetServiceLogWriter(service.Logs.WriteService)
 	}
 	return service.Server
 }
@@ -462,7 +468,22 @@ func (service *Service) handleConnection(ctx context.Context, server *Server, co
 
 	peer, err := connection.Peer()
 	if err != nil || peer.PID == 0 || peer.UserSID == "" {
+		if service.Logs != nil {
+			_ = service.Logs.WriteService(LogRecord{
+				Level: opslog.Warn, Component: "viewer.control", Event: "management_pipe_rejected", State: "rejected",
+			})
+		}
 		return
+	}
+	if service.Logs != nil {
+		_ = service.Logs.WriteService(LogRecord{
+			Component: "viewer.control", Event: "management_pipe_connected", State: "connected",
+		})
+		defer func() {
+			_ = service.Logs.WriteService(LogRecord{
+				Component: "viewer.control", Event: "management_pipe_disconnected", State: "disconnected",
+			})
+		}()
 	}
 	connectionID, err := newLeaseID()
 	if err != nil {
@@ -542,7 +563,11 @@ func NewRuntimeService(store ConfigStore) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create viewer service pipe: %w", err)
 	}
-	logs := NewLogManager()
+	logs, err := NewLogManagerFromEnvironment()
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	return &Service{
 		Store: store, Listener: listener, Logs: logs, Control: HTTPControlLoop{InstalledVersion: InstalledVersion},
 		Journal: FileCommandJournalStore{Path: DefaultCommandJournalPath},

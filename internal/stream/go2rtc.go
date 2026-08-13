@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"camstation/internal/opslog"
 	"camstation/internal/store"
 )
 
@@ -25,10 +26,12 @@ type Go2RTC struct {
 	apiURL           string
 	webrtcCandidates []string
 	liveWarmer       *LiveWarmManager
+	logger           *opslog.Logger
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	applyMu sync.Mutex
+	mu            sync.Mutex
+	cmd           *exec.Cmd
+	expectedExits map[*exec.Cmd]struct{}
+	applyMu       sync.Mutex
 }
 
 type Go2RTCOption func(*Go2RTC)
@@ -53,22 +56,29 @@ type StreamRuntime struct {
 
 func NewGo2RTC(configPath string, options ...Go2RTCOption) *Go2RTC {
 	g := &Go2RTC{
-		binary:     "go2rtc",
-		configPath: configPath,
-		apiURL:     "http://127.0.0.1:1984",
-		liveWarmer: newLiveWarmManager(),
+		binary:        "go2rtc",
+		configPath:    configPath,
+		apiURL:        "http://127.0.0.1:1984",
+		expectedExits: make(map[*exec.Cmd]struct{}),
 	}
 	for _, option := range options {
 		if option != nil {
 			option(g)
 		}
 	}
+	g.liveWarmer = newLiveWarmManager(withLiveWarmLogger(g.logger))
 	return g
 }
 
 func WithWebRTCCandidates(candidates []string) Go2RTCOption {
 	return func(g *Go2RTC) {
 		g.webrtcCandidates = append([]string(nil), candidates...)
+	}
+}
+
+func WithLogger(logger *opslog.Logger) Go2RTCOption {
+	return func(g *Go2RTC) {
+		g.logger = logger
 	}
 }
 
@@ -181,39 +191,90 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 	defer g.mu.Unlock()
 
 	if _, err := exec.LookPath(g.binary); err != nil {
+		g.log(opslog.Error, "binary_unavailable", opslog.Fields{ErrorCode: "binary_unavailable", Message: err.Error()})
 		return err
 	}
 	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
 		if healthy(ctx, g.apiURL) {
 			return nil
 		}
+		g.log(opslog.Warn, "unhealthy_process_stopped", opslog.Fields{State: "unhealthy"})
+		g.expectExitLocked(g.cmd)
 		_ = g.cmd.Process.Kill()
 		g.cmd = nil
 	}
 
+	startedAt := time.Now()
+	g.log(opslog.Debug, "process_starting", opslog.Fields{State: "starting"})
 	cmd := exec.Command(g.binary, "-config", g.configPath)
-	cmd.Stdout = newRedactingLineWriter(os.Stdout)
-	cmd.Stderr = newRedactingLineWriter(os.Stderr)
+	if g.logger != nil {
+		cmd.Stdout = newOperationalLineWriter(g.logger, "stream.go2rtc", opslog.Info)
+		cmd.Stderr = newOperationalLineWriter(g.logger, "stream.go2rtc", opslog.Warn)
+	} else {
+		cmd.Stdout = newRedactingLineWriter(os.Stdout)
+		cmd.Stderr = newRedactingLineWriter(os.Stderr)
+	}
 	if err := cmd.Start(); err != nil {
+		g.log(opslog.Error, "process_start_failed", opslog.Fields{ErrorCode: "process_start_failed", Message: err.Error()})
 		return err
 	}
 	g.cmd = cmd
 	go func() {
-		_ = cmd.Wait()
+		err := cmd.Wait()
+		expected := g.takeExpectedExit(cmd)
+		fields := opslog.Fields{State: "stopped", DurationMS: time.Since(startedAt).Milliseconds()}
+		level := opslog.Info
+		if !expected {
+			level = opslog.Warn
+			fields.ErrorCode = "process_exited"
+			if err != nil {
+				fields.Message = err.Error()
+			}
+		}
+		g.log(level, "process_exited", fields)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if healthy(ctx, g.apiURL) {
+			g.log(opslog.Info, "ready", opslog.Fields{State: "ready", DurationMS: time.Since(startedAt).Milliseconds()})
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	if g.cmd == cmd && cmd.Process != nil && cmd.ProcessState == nil {
+		g.expectExitLocked(cmd)
 		_ = cmd.Process.Kill()
 		g.cmd = nil
 	}
+	g.log(opslog.Error, "startup_timeout", opslog.Fields{
+		State: "unhealthy", DurationMS: time.Since(startedAt).Milliseconds(), ErrorCode: "startup_timeout",
+	})
 	return fmt.Errorf("go2rtc did not become healthy on %s", g.apiURL)
+}
+
+func (g *Go2RTC) log(level opslog.Level, event string, fields opslog.Fields) {
+	if g != nil && g.logger != nil {
+		_ = g.logger.Log(level, "stream.go2rtc", event, fields)
+	}
+}
+
+func (g *Go2RTC) expectExitLocked(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if g.expectedExits == nil {
+		g.expectedExits = make(map[*exec.Cmd]struct{})
+	}
+	g.expectedExits[cmd] = struct{}{}
+}
+
+func (g *Go2RTC) takeExpectedExit(cmd *exec.Cmd) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	_, expected := g.expectedExits[cmd]
+	delete(g.expectedExits, cmd)
+	return expected
 }
 
 func (g *Go2RTC) Restart(ctx context.Context, cameras []store.Camera) error {
@@ -239,6 +300,7 @@ func (g *Go2RTC) StopLiveWarmers() {
 func (g *Go2RTC) restartProcess(ctx context.Context) error {
 	g.mu.Lock()
 	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
+		g.expectExitLocked(g.cmd)
 		_ = g.cmd.Process.Kill()
 		g.cmd = nil
 	}

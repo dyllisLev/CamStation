@@ -11,10 +11,11 @@ test("preload exposes only narrow Viewer methods including native fullscreen", a
     removeListener: (channel) => listeners.delete(channel),
   });
 
-  assert.deepEqual(Object.keys(bridge).sort(), ["getSetupState", "onCommand", "onFullscreenChange", "reportRenderer", "reportStream", "retryConnection", "saveConfiguration", "setFullscreen"]);
+  assert.deepEqual(Object.keys(bridge).sort(), ["getSetupState", "onCommand", "onFullscreenChange", "reportDiagnostic", "reportRenderer", "reportStream", "retryConnection", "saveConfiguration", "setFullscreen"]);
   bridge.reportRenderer({ state: "ready" });
   bridge.reportStream({ streamName: "yard-live", transport: "webrtc", phase: "playing" });
-  assert.deepEqual(sent.map((entry) => entry[0]), ["viewer:renderer", "viewer:stream"]);
+  bridge.reportDiagnostic({ level: "info", component: "viewer.main", event: "started" });
+  assert.deepEqual(sent.map((entry) => entry[0]), ["viewer:renderer", "viewer:stream", "viewer:diagnostic"]);
 
   const received: unknown[] = [];
   const unsubscribe = bridge.onCommand((command) => {

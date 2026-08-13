@@ -2,11 +2,81 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   requestViewerFullscreen,
+  reportViewerDiagnostic,
   reportViewerStream,
+  safeViewerDiagnostic,
   subscribeViewerFullscreen,
   subscribeViewerCommands,
   type CamStationViewerBridge,
 } from "../src/components/live/viewerBridge.ts";
+
+test("reports only allowlisted Viewer diagnostic fields", () => {
+  let reported: unknown;
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined,
+    reportDiagnostic: (diagnostic) => {
+      reported = diagnostic;
+    },
+    onCommand: () => undefined,
+  };
+
+  reportViewerDiagnostic({
+    level: "warn",
+    component: "viewer.playback",
+    event: "attempt_failed",
+    sessionId: "playback-12345678",
+    streamName: "yard-live",
+    transport: "webrtc",
+    phase: "retrying",
+    attempt: 2,
+    durationMs: 5_100,
+    attemptElapsedMs: 5_001,
+    readyState: 0,
+    reconnectCount: 1,
+    fallbackCount: 1,
+    usingFallback: true,
+    errorCode: "setup_timeout",
+    rawUrl: "rtsp://operator:secret@camera/live",
+    sdp: "secret-session-description",
+  }, bridge);
+
+  assert.deepEqual(reported, {
+    level: "warn",
+    component: "viewer.playback",
+    event: "attempt_failed",
+    sessionId: "playback-12345678",
+    streamName: "yard-live",
+    transport: "webrtc",
+    phase: "retrying",
+    errorCode: "setup_timeout",
+    attempt: 2,
+    durationMs: 5_100,
+    attemptElapsedMs: 5_001,
+    readyState: 0,
+    reconnectCount: 1,
+    fallbackCount: 1,
+    usingFallback: true,
+  });
+  assert.doesNotMatch(JSON.stringify(reported), /rtsp|secret|sdp/iu);
+});
+
+test("rejects unsafe Viewer diagnostic identities without affecting playback", () => {
+  let calls = 0;
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined,
+    reportDiagnostic: () => {
+      calls++;
+      throw new Error("agent pipe is offline");
+    },
+    onCommand: () => undefined,
+  };
+
+  assert.equal(safeViewerDiagnostic({ level: "debug", component: "viewer.playback", event: "first_media", streamName: "rtsp://camera/live" }), null);
+  reportViewerDiagnostic({ level: "debug", component: "viewer.playback", event: "first_media", streamName: "rtsp://camera/live" }, bridge);
+  assert.equal(calls, 0);
+  assert.doesNotThrow(() => reportViewerDiagnostic({ level: "info", component: "viewer.main", event: "live_loaded", state: "running" }, bridge));
+  assert.equal(calls, 1);
+});
 
 test("reports only bounded stream telemetry fields", () => {
   let reported: unknown;

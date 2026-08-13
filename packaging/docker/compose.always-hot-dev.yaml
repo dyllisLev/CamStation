@@ -22,7 +22,11 @@ services:
       CAMSTATION_RECORDING_ENABLED: "false"
       CAMSTATION_MAX_STORAGE_GB: "0"
       CAMSTATION_WEBRTC_CANDIDATES: "${CAMSTATION_DEV_WEBRTC_CANDIDATES:?CAMSTATION_DEV_WEBRTC_CANDIDATES is required}"
-      CAMSTATION_PLAYBACK_LOG_LEVEL: info
+      CAMSTATION_LOG_LEVEL: info
+      CAMSTATION_LOG_LEVELS: playback=debug,stream.go2rtc=debug,stream.live_warm=debug,recorder.ffmpeg=debug
+      CAMSTATION_LOG_DIR: /var/lib/camstation/data/logs
+      CAMSTATION_LOG_MAX_MB: "25"
+      CAMSTATION_LOG_FILES: "8"
     ports:
       - target: 18080
         published: "${CAMSTATION_DEV_HTTP_PORT:-28080}"

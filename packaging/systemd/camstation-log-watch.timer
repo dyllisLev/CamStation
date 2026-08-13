@@ -1,0 +1,12 @@
+[Unit]
+Description=Run CamStation operational log watcher every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=camstation-log-watch.service
+
+[Install]
+WantedBy=timers.target

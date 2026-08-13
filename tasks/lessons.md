@@ -1,5 +1,53 @@
 # Lessons
 
+## 2026-08-13 — ignored 운영 프로필은 현재 worktree 밖의 승인 원본까지 먼저 찾는다
+
+- Paseo worktree에 ignored 파일이 없다는 사실만으로 운영 대상 접근이 막혔다고 결론내리지 않는다.
+  canonical 이전 작업공간, 다른 worktree, 전용 key·known-host 자산과 과거 실행 기록을 값 비노출 방식으로
+  먼저 찾고, 승인 원본이 있으면 그대로 복구한 뒤 공식 wrapper 검증으로 진위를 확인한다.
+- 대상 PC가 한 대인지와 접속 프로필이 존재하는지는 다른 문제지만, 그 차이를 사용자에게 설명하는 데서
+  멈추지 않는다. 안전한 읽기 전용 탐색이 가능한 범위는 에이전트가 스스로 소진하고 실제 차단 조건만
+  보고한다.
+
+## 2026-08-13 — 서버를 운영 로그의 기준으로 두고 Viewer는 마지막 구간만 보완한다
+
+- 카메라 ingest, recorder, playback 요청·실패·복구와 Viewer가 전달할 수 있는 진단은 서버 영속 로그를
+  주 기록으로 삼는다. 정상 Viewer lifecycle과 media progress를 PC에 장기간 debug로 중복 보존하지 않는다.
+- Viewer 로컬 로그는 서버에 보고하지 못하는 시작 전 종료, renderer/GPU, management pipe, 네트워크 단절을
+  확인할 최소 `warn/error` 순환 블랙박스다. 상세 component debug는 장애 재현 중에만 시간 제한으로 켜고
+  조사 후 즉시 기본값으로 되돌린다.
+
+## 2026-08-13 — 운영 로그는 process 생존과 media 진행을 분리하고 정상 종료를 경고로 만들지 않는다
+
+- ffmpeg/go2rtc process가 시작됐다는 사실은 카메라 영상 수신 성공이 아니다. worker attempt와 process
+  start는 lifecycle로, 첫 `frame`/`out_time` 진행은 `media_started`로 분리하고 이후 진행은 debug
+  주기 요약으로 제한해야 장기 관제에서 실제 정지와 정상 상태를 구분할 수 있다.
+- 설정 적용이나 종료 과정에서 의도적으로 child process를 끊은 경우 non-zero `Wait` 결과만 보고 WARN을
+  만들면 운영자가 거짓 장애에 익숙해진다. 기대 종료 표식을 process 단위로 소비하고, 예기치 않은 clean
+  exit도 WARN으로 취급해 양쪽 오분류를 막는다.
+- heartbeat 원문은 DB 운영 event가 아니다. 최초 상태와 의미 있는 축별 변화만 event/INFO로 남기고,
+  동일 heartbeat와 renderer pulse는 억제하며 media가 실제 전진할 때만 bounded debug summary를 남긴다.
+- persistent file logger는 파일 실패가 영상 경로를 막지 않게 stdout 복사본을 유지하되, 파일 쓰기 실패
+  자체도 rate-limit된 구조화 ERROR로 알려야 한다. 회전 상한, 재기동 append, 동시 JSON line 무결성,
+  URL·SDP/ICE·PEM·경로 redaction을 각각 테스트로 고정한다.
+
+## 2026-08-13 — 운영 Viewer 감사는 `monitoring-pc` 실측으로 닫는다
+
+- 운영 로그 감사를 소스와 서버 표본만으로 완료하지 않는다. 사용자가 운영 Viewer를
+  `monitoring-pc`로 지정하면 그 대상의 Service/Viewer 실제 로그 파일, 회전본, 최근 record와
+  서비스 상태를 공식 target wrapper로 확인해야 운영 경로 전체가 검증된다.
+- Paseo worktree에는 ignored `work/windows-control-targets.json`이 자동 복제되지 않을 수 있다.
+  Windows 작업은 항상 `status` preflight부터 실행하고 프로필이 없으면 임의 SSH로 우회하지 않는다.
+  구현은 독립적으로 진행할 수 있어도 PC 실측·설치·배포 완료는 프로필이 복구될 때까지 구분해 기록한다.
+
+## 2026-08-13 — 운영 로그 감사 도구도 원문 비노출과 입력 형식을 먼저 검증한다
+
+- 민감한 운영 로그를 집계할 때는 원문을 내려받아 뒤에서 가리는 방식보다 원격에서 JSON의 허용 필드와
+  숫자만 산출한다. 정규식 literal은 경로 구분자 같은 입력에서 파서 자체가 실패할 수 있으므로 작은
+  비민감 표본으로 문법을 먼저 확인하거나 `RegExp` 생성자·단순 분류기를 사용한다.
+- `docker top`의 사용자 지정 format에는 Docker가 식별할 PID 열이 포함돼야 한다. raw `args`는 카메라
+  URL·자격증명을 노출할 수 있으므로 `pid,comm`만 읽고 프로세스명별 숫자로 즉시 집계한다.
+
 ## 2026-08-13 — 배포 후보는 현재 운영 revision을 먼저 포함한다
 
 - 원격 `main`이 깨끗하고 최신이어도 운영 컨테이너가 아직 main에 없는 검증된 feature revision을
@@ -1040,3 +1088,14 @@
 - Once the user has personally accepted an already completed local validation, do not insert the same
   validation again before an explicitly requested commit, push, and deployment. Preserve the accepted
   artifact, publish it, and limit post-deployment checks to the target runtime.
+# 2026-08-13 — StrictMode 감사에서는 선택 레지스트리 값을 절대 dot-access하지 않는다
+
+- `Get-ItemProperty -Name X -ErrorAction SilentlyContinue` 뒤 `.X`를 읽어도 `Set-StrictMode`에서는 값이
+  없는 키에서 `PropertyNotFoundStrict`가 발생한다. uninstall entry의 `DisplayName`과 Service의
+  `Environment`처럼 선택적인 모든 값은 `PSObject.Properties["X"]`의 존재를 먼저 확인한다.
+- canonical Windows build repo에 특정 remote/ref가 있을 것이라고 가정하지 않는다. remote 이름과 refs를
+  먼저 열거하고, 없는 `origin/main`은 감사 실패가 아니라 exact source 전달 방식을 결정하는 기준선으로
+  기록한다. Windows Installer `ProductInfo(product, property)`는 automation의 매개변수형 property이므로
+  reflection에서는 `GetProperty`를 사용한다.
+
+---

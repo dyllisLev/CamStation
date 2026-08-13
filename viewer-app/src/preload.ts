@@ -38,6 +38,9 @@ export function createPreloadBridge(ipc: PreloadIPC) {
     reportStream(payload: unknown) {
       ipc.send("viewer:stream", payload);
     },
+    reportDiagnostic(payload: unknown) {
+      ipc.send("viewer:diagnostic", payload);
+    },
     onCommand(handler: (command: unknown) => boolean | Promise<boolean>) {
       if (typeof handler !== "function") return () => undefined;
       if (commandHandlers.size === 0) ipc.on("viewer:command", commandListener);

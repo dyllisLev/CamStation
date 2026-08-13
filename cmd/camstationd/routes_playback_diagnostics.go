@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"camstation/internal/opslog"
 )
 
 const (
@@ -58,6 +60,8 @@ type playbackLogRecord struct {
 	UsingFallback    bool   `json:"usingFallback"`
 	ReconnectCount   int    `json:"reconnectCount"`
 	FallbackCount    int    `json:"fallbackCount"`
+	ClientIP         string `json:"clientIp,omitempty"`
+	CameraID         int64  `json:"cameraId,omitempty"`
 }
 
 type playbackLogLevel uint8
@@ -71,9 +75,14 @@ const (
 )
 
 type playbackEventSink struct {
-	threshold playbackLogLevel
-	logger    *log.Logger
-	now       func() time.Time
+	threshold  playbackLogLevel
+	logger     *log.Logger
+	operations *opslog.Logger
+	now        func() time.Time
+}
+
+func newPlaybackEventSinkWithLogger(logger *opslog.Logger) *playbackEventSink {
+	return &playbackEventSink{operations: logger, now: time.Now}
 }
 
 func newPlaybackEventSink(value string, writer io.Writer) (*playbackEventSink, error) {
@@ -126,10 +135,33 @@ func playbackEventLevel(event string) (playbackLogLevel, string, bool) {
 
 func (s *playbackEventSink) enabled(event string) bool {
 	level, _, ok := playbackEventLevel(event)
+	if ok && s.operations != nil {
+		return s.operations.Enabled("playback", playbackOperationalLevel(level))
+	}
 	return ok && s.threshold != playbackOff && level >= s.threshold
 }
 
-func (s *playbackEventSink) write(event playbackClientEvent) {
+func (s *playbackEventSink) write(event playbackClientEvent, clientIP string, cameraID int64) {
+	if s.operations != nil {
+		level, _, _ := playbackEventLevel(event.Event)
+		_ = s.operations.Log(playbackOperationalLevel(level), "playback", event.Event, opslog.Fields{
+			SessionID:        event.SessionID,
+			ClientIP:         clientIP,
+			CameraID:         cameraID,
+			StreamName:       event.StreamName,
+			Transport:        event.Transport,
+			Phase:            event.Phase,
+			Attempt:          event.Attempt,
+			DurationMS:       event.ElapsedMS,
+			AttemptElapsedMS: event.AttemptElapsedMS,
+			ErrorCode:        event.ErrorCategory,
+			ReadyState:       event.ReadyState,
+			UsingFallback:    event.UsingFallback,
+			ReconnectCount:   event.ReconnectCount,
+			FallbackCount:    event.FallbackCount,
+		})
+		return
+	}
 	_, level, _ := playbackEventLevel(event.Event)
 	record := playbackLogRecord{
 		Timestamp:        s.now().UTC().Format(time.RFC3339Nano),
@@ -147,10 +179,27 @@ func (s *playbackEventSink) write(event playbackClientEvent) {
 		UsingFallback:    event.UsingFallback,
 		ReconnectCount:   event.ReconnectCount,
 		FallbackCount:    event.FallbackCount,
+		ClientIP:         clientIP,
+		CameraID:         cameraID,
 	}
 	encoded, err := json.Marshal(record)
 	if err == nil {
 		s.logger.Print(string(encoded))
+	}
+}
+
+func playbackOperationalLevel(level playbackLogLevel) opslog.Level {
+	switch level {
+	case playbackDebug:
+		return opslog.Debug
+	case playbackInfo:
+		return opslog.Info
+	case playbackWarn:
+		return opslog.Warn
+	case playbackError:
+		return opslog.Error
+	default:
+		return opslog.Off
 	}
 }
 
@@ -180,10 +229,7 @@ func newPlaybackEventRateLimiter(limit int, window time.Duration) *playbackEvent
 }
 
 func (l *playbackEventRateLimiter) allow(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
+	host := playbackRemoteHost(remoteAddr)
 	now := l.now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -205,6 +251,14 @@ func (l *playbackEventRateLimiter) allow(remoteAddr string) bool {
 		}
 	}
 	return true
+}
+
+func playbackRemoteHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return strings.TrimSpace(remoteAddr)
+	}
+	return host
 }
 
 func (d routeDeps) registerPlaybackDiagnosticRoutes(mux *http.ServeMux) {
@@ -239,11 +293,12 @@ func (d routeDeps) registerPlaybackDiagnosticRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("validate playback stream"))
 			return
 		}
-		if !isRegisteredPublicStream(cameras, event.StreamName) {
+		cameraID, registered := registeredPublicCameraID(cameras, event.StreamName)
+		if !registered {
 			writeError(w, http.StatusNotFound, fmt.Errorf("playback stream is not registered"))
 			return
 		}
-		d.playbackEvents.write(event)
+		d.playbackEvents.write(event, playbackRemoteHost(r.RemoteAddr), cameraID)
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"camstation/internal/opslog"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	CodeLeaseBusy          = "lease_busy"
 	CodeLeaseFailed        = "lease_failed"
 	LeaseHeartbeatSeconds  = 5
+	viewerProgressLogEvery = time.Minute
 )
 
 var (
@@ -78,6 +81,8 @@ type Server struct {
 	installedVersion string
 	logError         func(context.Context, error) string
 	leaseLogAssigner func(Peer) (string, error)
+	viewerLogWriter  func(Peer, LogRecord) error
+	serviceLogWriter func(LogRecord) error
 	commandResult    func(LocalCommandResult) error
 
 	mu                      sync.Mutex
@@ -89,18 +94,20 @@ type Server struct {
 	rendererLastHeartbeatAt *time.Time
 	rendererLastProgressAt  *time.Time
 	streams                 []ViewerStreamState
+	streamProgressLoggedAt  map[string]time.Time
 	update                  UpdateSnapshot
 }
 
 func NewServer(config ConfigManager, leases *LeaseManager, installedVersion string, logError func(context.Context, error) string) *Server {
 	return &Server{
-		config:           config,
-		leases:           leases,
-		installedVersion: installedVersion,
-		logError:         logError,
-		viewer:           "closed",
-		renderer:         "not_ready",
-		update:           UpdateSnapshot{State: "idle"},
+		config:                 config,
+		leases:                 leases,
+		installedVersion:       installedVersion,
+		logError:               logError,
+		viewer:                 "closed",
+		renderer:               "not_ready",
+		streamProgressLoggedAt: make(map[string]time.Time),
+		update:                 UpdateSnapshot{State: "idle"},
 	}
 }
 
@@ -108,6 +115,18 @@ func (server *Server) SetLeaseLogAssigner(assigner func(Peer) (string, error)) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	server.leaseLogAssigner = assigner
+}
+
+func (server *Server) SetViewerLogWriter(writer func(Peer, LogRecord) error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.viewerLogWriter = writer
+}
+
+func (server *Server) SetServiceLogWriter(writer func(LogRecord) error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	server.serviceLogWriter = writer
 }
 
 func (server *Server) SetCommandResultHandler(handler func(LocalCommandResult) error) {
@@ -118,11 +137,18 @@ func (server *Server) SetCommandResultHandler(handler func(LocalCommandResult) e
 
 func (server *Server) SetConnection(state string) {
 	server.mu.Lock()
-	defer server.mu.Unlock()
+	previous := server.connection
 	server.connection = state
 	if state == "online" {
 		now := time.Now().UTC()
 		server.controlLastSuccessAt = &now
+	}
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	if previous != state {
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(state), Component: "viewer.control", Event: "connection_state_changed", State: state,
+		})
 	}
 }
 
@@ -178,6 +204,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 				return server.errorResponse(ctx, request, fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)), nil
 			}
 		}
+		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_acquired", State: "active"})
 		return successResponse(request, LeaseGrant{LeaseID: lease.ID, HeartbeatSeconds: LeaseHeartbeatSeconds, LogPath: logPath}), nil
 	case "lease_heartbeat":
 		leaseID, _, err := decodeLeasePayload(request.Payload)
@@ -197,6 +224,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 		if err := server.leases.Release(connectionID, leaseID, peer); err != nil {
 			return Response{}, fmt.Errorf("%w: %v", ErrPeerIdentity, err)
 		}
+		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_released", State: "released"})
 		server.setViewerState("closed", "not_ready")
 		return successResponse(request, nil), nil
 	case "viewer_status", "renderer_status", "stream_telemetry", "diagnostic_event":
@@ -206,6 +234,22 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 		}
 		if err := server.leases.Authorize(connectionID, leaseID, peer); err != nil {
 			return Response{}, fmt.Errorf("%w: %v", ErrPeerIdentity, err)
+		}
+		if request.Type == "diagnostic_event" {
+			record, err := decodeViewerDiagnostic(payload)
+			if err != nil {
+				return server.errorResponse(ctx, request, err), nil
+			}
+			server.mu.Lock()
+			writer := server.viewerLogWriter
+			server.mu.Unlock()
+			if writer == nil {
+				return server.errorResponse(ctx, request, ErrLoggingUnavailable), nil
+			}
+			if err := writer(peer, record); err != nil {
+				return server.errorResponse(ctx, request, err), nil
+			}
+			return successResponse(request, nil), nil
 		}
 		if err := server.recordReport(request.Type, payload); err != nil {
 			return server.errorResponse(ctx, request, err), nil
@@ -231,6 +275,15 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 		if err := handler(result); err != nil {
 			return server.errorResponse(ctx, request, err), nil
 		}
+		state := "succeeded"
+		level := opslog.Info
+		if !result.Succeeded {
+			state = "failed"
+			level = opslog.Warn
+		}
+		server.writeServiceRecord(LogRecord{
+			Level: level, Component: "viewer.control", Event: "command_result", State: state, Code: result.ErrorCode,
+		})
 		return successResponse(request, nil), nil
 	default:
 		return server.errorResponse(ctx, request, ErrUnsupportedRequest), nil
@@ -254,6 +307,7 @@ func validLocalCommandResult(result LocalCommandResult) bool {
 
 func (server *Server) HandleDisconnect(connectionID string) {
 	if server.leases != nil && server.leases.ReleaseConnection(connectionID) {
+		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_disconnected", State: "released"})
 		server.setViewerState("closed", "not_ready")
 	}
 }
@@ -306,9 +360,6 @@ func (server *Server) Snapshot(ctx context.Context) (StatusSnapshot, error) {
 }
 
 func (server *Server) recordReport(requestType string, payload map[string]json.RawMessage) error {
-	if requestType == "diagnostic_event" {
-		return nil
-	}
 	if requestType == "stream_telemetry" {
 		stream, err := decodeViewerStreamTelemetry(payload, time.Now().UTC())
 		if err != nil {
@@ -325,14 +376,27 @@ func (server *Server) recordReport(requestType string, payload map[string]json.R
 		return fmt.Errorf("%w: invalid %s state", ErrInvalidRequest, requestType)
 	}
 	server.mu.Lock()
-	defer server.mu.Unlock()
 	now := time.Now().UTC()
 	server.viewerLastHeartbeatAt = &now
+	previous := ""
 	if requestType == "viewer_status" {
+		previous = server.viewer
 		server.viewer = state
 	} else {
+		previous = server.renderer
 		server.renderer = state
 		server.rendererLastHeartbeatAt = &now
+	}
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	if previous != state {
+		component := "viewer.main"
+		if requestType == "renderer_status" {
+			component = "viewer.renderer"
+		}
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(state), Component: component, Event: "state_changed", State: state,
+		})
 	}
 	return nil
 }
@@ -363,7 +427,6 @@ func decodeViewerStreamTelemetry(payload map[string]json.RawMessage, now time.Ti
 
 func (server *Server) storeViewerTelemetry(stream ViewerStreamState) {
 	server.mu.Lock()
-	defer server.mu.Unlock()
 	server.viewerLastHeartbeatAt = stream.UpdatedAt
 	server.rendererLastHeartbeatAt = stream.UpdatedAt
 	if stream.LastProgressAt != nil &&
@@ -372,15 +435,43 @@ func (server *Server) storeViewerTelemetry(stream ViewerStreamState) {
 	}
 	for index := range server.streams {
 		if server.streams[index].StreamName == stream.StreamName {
+			previous := server.streams[index]
+			changed := previous.State != stream.State || previous.Transport != stream.Transport
+			progressed := stream.LastProgressAt != nil &&
+				(previous.LastProgressAt == nil || stream.LastProgressAt.After(*previous.LastProgressAt))
+			progressDue := progressed && stream.UpdatedAt != nil &&
+				stream.UpdatedAt.Sub(server.streamProgressLoggedAt[stream.StreamName]) >= viewerProgressLogEvery
 			server.streams[index] = stream
+			if progressDue {
+				server.streamProgressLoggedAt[stream.StreamName] = *stream.UpdatedAt
+			}
+			writer := server.serviceLogWriter
+			server.mu.Unlock()
+			if changed {
+				writeViewerStreamRecord(writer, stream)
+			}
+			if progressDue {
+				writeServiceRecord(writer, LogRecord{
+					Level: opslog.Debug, Component: "viewer.playback", Event: "media_progress",
+					State: stream.State, Phase: stream.State, StreamName: stream.StreamName, Transport: stream.Transport,
+				})
+			}
 			return
 		}
 	}
 	if len(server.streams) >= 64 {
+		evictedStream := server.streams[0].StreamName
 		copy(server.streams, server.streams[1:])
 		server.streams = server.streams[:63]
+		delete(server.streamProgressLoggedAt, evictedStream)
 	}
 	server.streams = append(server.streams, stream)
+	if stream.UpdatedAt != nil {
+		server.streamProgressLoggedAt[stream.StreamName] = *stream.UpdatedAt
+	}
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	writeViewerStreamRecord(writer, stream)
 }
 
 func (server *Server) markViewerHeartbeat() {
@@ -421,10 +512,53 @@ func validViewerStreamPhase(value string) bool {
 
 func (server *Server) setViewerState(viewer, renderer string) {
 	server.mu.Lock()
-	defer server.mu.Unlock()
+	previousViewer := server.viewer
+	previousRenderer := server.renderer
 	server.viewer = viewer
 	server.renderer = renderer
 	server.streams = nil
+	server.streamProgressLoggedAt = make(map[string]time.Time)
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	if previousViewer != viewer {
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(viewer), Component: "viewer.main", Event: "state_changed", State: viewer,
+		})
+	}
+	if previousRenderer != renderer {
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(renderer), Component: "viewer.renderer", Event: "state_changed", State: renderer,
+		})
+	}
+}
+
+func (server *Server) writeServiceRecord(record LogRecord) {
+	server.mu.Lock()
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	writeServiceRecord(writer, record)
+}
+
+func writeServiceRecord(writer func(LogRecord) error, record LogRecord) {
+	if writer != nil {
+		_ = writer(record)
+	}
+}
+
+func writeViewerStreamRecord(writer func(LogRecord) error, stream ViewerStreamState) {
+	writeServiceRecord(writer, LogRecord{
+		Level: viewerStateLevel(stream.State), Component: "viewer.playback", Event: "stream_state_changed",
+		State: stream.State, Phase: stream.State, StreamName: stream.StreamName, Transport: stream.Transport,
+	})
+}
+
+func viewerStateLevel(state string) opslog.Level {
+	switch state {
+	case "degraded", "failed", "unresponsive", "stalled", "retrying", "fallback", "cooldown", "unsupported":
+		return opslog.Warn
+	default:
+		return opslog.Info
+	}
 }
 
 func (server *Server) errorResponse(ctx context.Context, request Request, err error) Response {

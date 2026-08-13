@@ -1,3 +1,253 @@
+# 2026-08-13 운영 로그 배포·실시간 추이 관찰
+
+## 범위와 불변 기준
+
+- 실제 운영 서버는 `ssh cctv`의 `/opt/camstation2/docker-production`이며, 공개 확인 주소는
+  `https://cctv2.nuc.hmini.me`다. 폐기된 `cctv2` SSH 별칭을 우회하거나 복구 대상으로 사용하지 않는다.
+- 서버 기준선은 image `camstation:2.0.0-rc.20260813.17-viewer-reception`, revision `e4411cd`,
+  Compose SHA-256 `b4028d10d1b6468f8b649ffbc380c5b4cad941df569f96bbbdcca6eae6f34057`,
+  healthy/restart 0, 활성 camera·recorder·Viewer 수신 8/8이다.
+- `monitoring-pc` 기준선은 Viewer 2.0.25, Service Running/Auto, 새 Viewer log 환경값 미설정,
+  ProgramData 기존 로그 2개·1,661 bytes다. 설정·client identity·현재 2.0.25 MSI 복구 자산을 배포 전에
+  다시 고정한다.
+- 새 서버 후보는 clean `main`의 immutable image
+  `camstation:2.0.0-rc.20260813.18-operational-logging`, Viewer 후보는 2.0.26 MSI다. 현재 운영 revision의
+  always-hot/Viewer 재수신 동작을 먼저 포함한 뒤 빌드하며 monitoring-pc에는 소스나 toolchain을 두지 않는다.
+- 서버는 `info` 전역과 camera/playback/recorder component debug, 영속 log 64 MiB×32를 초기 몇 주간
+  사용한다. Viewer는 `warn`, override 없음, 5 MiB×3을 명시한다.
+- 별도 1분 systemd timer는 공개 API·Docker health·영속 logger freshness·warn/error 증가·disk·recorder·
+  Viewer media progress를 숫자와 alert code만으로 `operational-watch.jsonl`에 10 MiB×4 회전 기록한다.
+  URL, credential, camera host/name, process args, runtime path와 원문 API/log는 저장하지 않는다.
+
+## 배포 계획
+
+- [x] 실제 운영 서버 경로와 현재 server/Viewer/API 기준선을 읽기 전용으로 확정한다.
+- [x] `test-pc`의 clean build root, Git revision, Go/Node/WiX 도구와 2.0.26 빌드 가능 상태를 공식 wrapper로
+      확인하고 `monitoring-pc`의 exact MSI rollback/config/client identity 기준선을 고정한다.
+- [x] 운영 watcher·systemd unit·fixture test와 설치/제거 절차를 구현하고 spec/운영 문서를 갱신한다.
+- [ ] 현재 변경을 목적별로 commit/push하고 운영 revision을 포함해 clean `main`으로 승격한다.
+- [ ] clean `main`에서 Web/Viewer/Go/race/vet/policy/secret 검증, Linux image와 Windows 2.0.26 MSI를 만들고
+      revision·SHA-256·unsigned 내부 배포 상태를 고정한다.
+- [ ] 서버의 exact Compose를 root-only timestamp 백업한 뒤 image 한 곳과 log 환경값만 변경해 재생성하고,
+      health/security/camera 8/8/recorder 8/8/Viewer 8/8 및 JSONL append를 유한 시간 안에 검증한다.
+- [ ] watcher script/config/service/timer를 exact hash로 설치해 1분 cadence, flock, 회전, journald와 JSONL
+      표본을 검증한다.
+- [ ] monitoring-pc에 exact MSI를 공식 artifact 경로로 전달·업그레이드하고 Viewer log 환경값을 기존 Service
+      Environment와 병합한다. ProductCode/version/file hash/config/client identity/Service/interactive Viewer를
+      전후 비교하고 실제 Viewer 창과 server heartbeat/media progress를 확인한다.
+- [ ] 즉시·5분·15분 이상 표본에서 container restart, logger failure, warn/error 증가, camera/recorder/Viewer
+      진행, disk와 watcher alert 추이를 비교하고 검토·운영 문서를 증거와 함께 마감한다.
+
+## 합격과 자동 롤백
+
+- 서버는 container healthy/restart 0, 보안 옵션·publish bind 불변, 활성 camera 8/8, stream media 8/8,
+  recorder running/current 8/8, Viewer online/control/renderer/media 8/8, 새 JSONL schema와 persistent append가
+  모두 확인돼야 한다.
+- Viewer는 2.0.26 설치, Service Running/Auto, interactive Viewer renderer ready, 8대의 최신
+  `lastProgressAt`, 평시 warn 정책과 3-file 상한이 확인돼야 한다. MSI가 unsigned인 사실은 숨기지 않고
+  기존 내부 unsigned 배포와 같은 잔여 위험으로 기록한다.
+- 서버 gate 하나라도 실패하면 같은 transaction에서 exact Compose 백업과 `.17` image로 되돌리고 health와
+  8/8를 재확인한다. watcher 실패는 제품 container를 건드리지 않고 unit/config/script만 이전 상태로
+  복구하거나 제거한다.
+- Viewer gate가 실패하면 exact 2.0.25 MSI와 보존한 Service Environment/config/client identity로 원복하고
+  Service·Viewer·8/8 media progress를 다시 확인한다. 서버 배포 성공은 Viewer 실패 때문에 자동 원복하지
+  않되 서버가 구 Viewer와 호환되는지 검증한다.
+
+## 검토
+
+- 실제 server는 `cctv`이며 `.17` image/revision/Compose, 양쪽 publish bind, security option, persistent volume,
+  camera·stream·recorder·Viewer 8/8를 기준선으로 고정했다. stale `cctv2` SSH 별칭은 사용하지 않았다.
+- `test-pc` canonical repo는 HEAD `1215d05`, dirty entry 131, remote ref가 과거
+  `origin/camstation2-initial` 하나뿐이라 직접 빌드 기준으로 사용할 수 없다. 다만 Node 22.23.2,
+  npm 10.9.8, Go 1.25.12, .NET 8.0.423과 24.7GB 여유를 확인했으므로 새 exact commit을 fetch한 별도
+  detached worktree에서만 2.0.26을 빌드한다.
+- `monitoring-pc`는 ProductCode `{81E12973-4223-462D-92DD-EAE6705C3AC3}`의 2.0.25 하나이며 Service
+  Running/Auto다. config SHA-256 `da085b9b...e8710`, client-ID SHA-256 `0f5101ea...f323`, cached rollback
+  MSI 124,436,480 bytes/SHA-256 `51448b51...e79f`를 값 비노출 방식으로 고정했다.
+- watcher는 1분 oneshot, flock, 10 MiB×4 회전이며 raw API/log를 저장하지 않고 count/age/percent와
+  alert code만 기록한다. 정상 8/8, 부분 장애·logger write failure, 회전, 잘못된 credential URL 설정의
+  fixture 4개와 systemd unit verify, production policy가 통과했다.
+- 새 logger 포함 Web 81 tests/lint/build, Viewer 49 tests/build, 전체 Go test, 관련 5개 package race,
+  `go vet ./...`, Linux daemon/Windows Service cross-build가 통과했다. 배포 revision, artifact hash,
+  before/after 증거, 관찰 구간과 rollback 사용 여부는 다음 단계에서 이어서 기록한다.
+
+---
+
+# 2026-08-13 서버 중심 운영 로그 정책
+
+## 범위와 합격 기준
+
+- 운영 판단과 몇 주간의 실시간 관제는 서버의 영속 JSONL을 기준으로 한다.
+- `monitoring-pc` 로컬 로그는 서버가 볼 수 없는 Viewer 시작 전 실패, renderer/GPU, management pipe,
+  네트워크 단절을 위한 최소 블랙박스로만 유지한다.
+- Viewer 기본 level은 `warn`, component override는 없음, 회전은 파일당 5 MiB·active 포함 3개로 한다.
+  상세 `debug`는 장애 재현 시간에만 명시적으로 켰다가 원복한다.
+- 기존 승인 target profile을 스스로 찾아 공식 wrapper로 `monitoring-pc` 상태를 확인하며, 운영 설치본이나
+  Service 설정은 별도 배포 승인 없이 변경하지 않는다.
+
+## 계획
+
+- [x] 이전 작업공간과 로컬 보안 자산에서 승인 target profile을 찾아 현재 worktree에 `0600`으로 복구한다.
+- [x] 공식 wrapper status로 `monitoring-pc`의 machine, identity, active session, Service와 제어 잔여물을 확인한다.
+- [x] Viewer logger 기본 level·회전 상한과 회귀 테스트를 서버 중심 정책으로 변경한다.
+- [x] 운영 문서·설계·구현 계획에서 Viewer 상시 debug 권고와 오래된 profile 차단 문구를 제거한다.
+- [x] focused/full 테스트와 정적 검사를 실행하고 실제 PC 변경·미배포 상태를 검토에 기록한다.
+
+## 검토
+
+- 승인 profile 원본은 canonical 이전 작업공간 `/workspace/CamStation`에서 찾았고 key·known-host 파일,
+  schema와 wrapper 동일성을 값 비노출 방식으로 확인한 뒤 현재 worktree에 `0600`으로 복구했다.
+- 공식 status의 시작·종료 표본 모두 `monitoring-pc -> NUC`, `NUC\\dyllislev/session 1 Active`, Viewer
+  Service `Running`, telemetry disabled, TCP/firewall/control/setup/capture task 0, canonical script parity
+  전부 true였다. read-only 감사 외에 PC 설정·파일·Service를 변경하지 않았다.
+- 현재 ProgramData 로그는 2개·총 1,661 bytes다. 13개 기존 record에는 새 `level` 필드가 없고 Viewer
+  전용 로그 환경값도 없으므로 설치본은 이번 정책 이전이다. 새 Viewer 배포 전까지는 기존 동작을 유지한다.
+- 소스 기본값은 Viewer `warn`, override 없음, 파일당 5 MiB·active 포함 3개로 변경했다. daemon용
+  `CAMSTATION_LOG_LEVEL(S)`를 Viewer가 상속하지 않으며 장애 재현 중에만 Viewer 전용 override로 debug를
+  켠다. 서버의 영속 JSONL과 초기 soak debug 정책은 그대로 유지한다.
+- `internal/viewerservice` focused test, Viewer race, `go vet ./...`, Windows amd64 Service cross-build와
+  단독 `go test ./... -count=1`이 통과했다. 병렬 검증 부하 중 `vieweragent` readiness가 한 번 timeout
+  났지만 해당 test 20회와 package 5회, 표준 전체 재실행은 모두 통과해 제품 회귀가 아님을 확인했다.
+  Windows Service 후보 SHA-256은 `54e6c8413d75d76640d91f0d61134ced8675ba8d50a4e9ffcd382e89fcdc226f`다.
+- 운영상 다음 필수 작업은 (1) 새 daemon/Viewer의 승인 배포, (2) 서버 JSONL의 자동 경보다. 기존
+  `scripts/hourly-recording-monitor.sh`는 3-camera·종료일·raw args 가정 때문에 재사용하지 않고,
+  카메라 media 정지, recorder segment 정지, Viewer heartbeat 정지, 반복 restart, logger write 실패,
+  disk 임계치를 상태변화와 rate 기준으로 감시하는 새 서버 watcher가 필요하다.
+
+---
+
+# 2026-08-13 CamStation 2.0 운영 관측 로거 보강
+
+## 범위와 합격 기준
+
+- 운영 Viewer 기준 대상은 명시된 `monitoring-pc`다. 공식 target wrapper의 status와 읽기 전용
+  system 감사로 실제 Service/Viewer 로그를 확인하고, 프로필 부재 상태를 임의 SSH로 우회하지 않는다.
+- daemon, go2rtc, live-warm ffmpeg, recorder ffmpeg, HTTP playback, Viewer Service/Electron/renderer가
+  같은 JSONL 필드와 `debug/info/warn/error/off` 수준을 사용한다.
+- daemon 기본 `info`와 Viewer 기본 `warn`, component-prefix override를 환경 변수로 관리하며 기존
+  playback level 설정은 호환한다. 잘못된 level은 조용히 무시하지 않고 시작 단계에서 실패시킨다.
+- daemon 로그는 DB와 같은 영속 state volume 아래에서 회전해 컨테이너 재생성에도 남고, Viewer 로그는
+  ProgramData의 기존 ACL·회전 경계를 유지한다. raw 카메라 URL, 자격증명, token, SDP/candidate,
+  전체 process args와 runtime path는 기록하지 않는다.
+- 카메라→서버는 worker 시작/정상 media 진행/종료/분류된 ffmpeg 오류/재시도/segment close를 남기고,
+  서버→Viewer는 playback session, transport, phase, first media, failure/fallback/recovery/close 및
+  Viewer control/renderer/stream 상태 변화를 상호 검색할 수 있어야 한다.
+- 정상 Viewer heartbeat는 DB event를 10초마다 만들지 않는다. 최초 관찰과 의미 있는 상태 변화만
+  운영 event로 남기고 세부 heartbeat는 debug JSONL에서만 선택적으로 관찰한다.
+- 단위·race·전체 Go 테스트, Web test/lint/build, Viewer test/build, daemon 및 Windows cross-build,
+  secret hygiene, 회전·재시작 보존을 통과해야 한다. 운영 배포는 별도 승인 전에는 수행하지 않는다.
+
+## 계획
+
+- [x] 사용자 피드백을 lessons에 반영하고 `monitoring-pc` 공식 status preflight를 시도한다.
+- [x] 로그 공백과 기존 daemon/Viewer 로깅·회전·telemetry 경계를 다시 추적한다.
+- [x] 상세 설계와 파일 단위 구현 계획을 specs/plans에 고정한다.
+- [x] 공통 구조화 logger, level/override 파서, 영속 회전 writer와 보안 테스트를 구현한다.
+- [x] go2rtc/live-warm/recorder의 연결·media progress·오류·retry·segment 로그를 공통 logger에 연결한다.
+- [x] playback 서버 로그와 Viewer Service/Electron/renderer 로컬 로그를 같은 session으로 연결한다.
+- [x] Viewer heartbeat DB spam을 상태 변화 event로 교체하고 관련 회귀 테스트를 추가한다.
+- [x] Docker/Windows 운영 설정 예시와 운영 문서를 새 level·보존 계약에 맞춘다.
+- [x] 전체 소스 검증과 격리 재기동 검증을 수행하고 `monitoring-pc` status를 다시 시도한다.
+- [x] 승인 target profile을 복구한 뒤 `monitoring-pc` 기존 ProgramData 로그 기준선을 확인한다.
+- [ ] 새 빌드를 배포한 뒤 실제 장애 표본의 server/Viewer session join을 확인한다.
+- [x] 검토란에 구현, 테스트, 운영 미적용 사항과 남은 차단 조건을 기록한다.
+
+## 검토
+
+- 최초 `monitoring-pc` status는 현재 worktree의 ignored profile 부재로 fail-closed 됐다. 이후 canonical
+  이전 작업공간과 과거 승인 기록까지 추적해 원본 profile과 전용 known-host 자산을 찾고 현재 worktree에
+  `0600`으로 복구했다. 공식 status는 NUC/session 1 Active, Viewer Service Running, driver telemetry off,
+  TCP/firewall/control task 0과 7개 script parity를 확인했다. 임의 SSH로 우회하지 않았다.
+- 공식 read-only system 감사에서 ProgramData 로그는 2개·총 1,661 bytes였고 유효 JSON 13건 모두
+  `level` 필드가 없는 이전 schema였다. Viewer 로그 환경값 4개는 명시돼 있지 않았다. 설치·Service
+  재시작·설정 변경은 하지 않았으며 새 기본 warn·5 MiB×3 정책은 다음 승인 배포부터 적용된다.
+- daemon 공통 logger는 전역 `info`, longest-prefix component override, legacy playback 입력,
+  4 KiB JSONL, stdout+영속 파일, 25 MiB×8 기본 회전과 1–1024 MiB/1–64개 검증을 제공한다. URL,
+  자격증명, token, Authorization, SDP/ICE, PEM, Windows/POSIX path를 redact하고, 영속 쓰기 실패는
+  1분 rate-limit된 `opslog/persistent_write_failed`로 stdout에 남긴다.
+- 카메라 경로는 `stream.go2rtc`, `stream.live_warm`, `recorder(.ffmpeg)`에서 camera/stream, attempt,
+  first/periodic media progress, 분류된 child 오류, 종료 시간, retry, 안전한 segment filename/size를 남긴다.
+  의도된 go2rtc 재시작은 INFO 종료로 구분해 정상 운영 중 거짓 WARN을 만들지 않는다.
+- playback HTTP와 Viewer local diagnostic은 같은 `sessionId`를 쓰며 server record에는 `cameraId`와
+  client IP도 포함한다. Viewer management pipe는 활성 lease를 renderer payload보다 우선하고,
+  control/lease/renderer/stream 변화만 저장하며 진행 중인 media는 최대 1분 1회 debug로 요약한다.
+- Viewer heartbeat DB event는 최초 관찰·의미 있는 상태 변화만 append한다. 반복 heartbeat와 동시
+  duplicate는 회귀 테스트에서 event 수를 늘리지 않았다. 정적 검사에서 발견한 기존 Service context
+  cancel 조기-return 누수도 context 생성 순서를 조정해 함께 제거했다.
+- 검증은 Web 81개 test·lint·production build, Viewer 49개 test·build, `go test ./...`, 변경 패키지와
+  `camstationd` race, `go vet ./...`, production policy와 canary/dev Compose config를 통과했다. 최종
+  산출물은 정적 Linux daemon SHA-256 `06384751858306dcbbf9710cf73c4b20e012757c4d43831d31786a877322bda0`,
+  Windows Service `eb6f92d6388770408788adf54d646acb5ad37d6f4b59f10b8332ceab2e4cf39f`, Windows bootstrap
+  `ee7e4331e6ee1883ca6f345b0a359087402168db6dbe11a23e5430fdf4eb3425`다.
+- 네트워크가 차단된 임시 state에서 최종 정적 daemon을 세 번 재기동했다. 매회 의도된 probe-only
+  종료코드 1, 총 33개 유효 JSON record, `startup_started`/`ready`/`probe_failed` 각 3개와 파일 증가
+  5,347 bytes를 확인했으며 금지 URL·경로·credential 문자열은 없었다. 회전·동시 write·재open은
+  `internal/opslog` 테스트로 별도 검증했다.
+
+---
+
+# 2026-08-13 CamStation 2.0 운영 로그 수준 감사
+
+## 범위와 합격 기준
+
+- 카메라→서버 입력은 go2rtc/ffmpeg/recorder 각각에서 연결·끊김·재시도·media 진행·오류가 어느
+  수준으로 남는지 소스와 실제 운영 로그를 함께 확인한다.
+- 서버→브라우저/Viewer 출력은 HTTP, WebSocket, WebRTC/MSE 연결 수명주기와 Viewer heartbeat,
+  재생 진행·fallback·재연결을 어느 단위까지 사후 추적할 수 있는지 확인한다.
+- 로그의 저장 위치, 구조화 여부, 기본 level, 최근 보존량·회전/상한·민감정보 노출 위험을 확인한다.
+- 운영 상태를 바꾸지 않는 읽기 전용 점검만 수행하며 URL·자격증명·client secret·raw process args는
+  출력하지 않는다.
+- 몇 주간 실시간 관제에 필요한 최소 신호를 현재 로그만으로 충족하는지 `충분/부분/부족`으로 판정하고,
+  공백과 우선순위를 증거와 함께 기록한다.
+
+## 계획
+
+- [x] 프로젝트 지침·기존 교훈·워크트리 상태를 확인하고 감사 기준을 고정한다.
+- [x] daemon/go2rtc/ffmpeg/HTTP·WebRTC/Viewer의 로그 생성 지점과 level 설정을 추적한다.
+- [x] 현재 운영 프로세스·컨테이너와 실제 로그 표본, 저장량, 회전·보존 정책을 확인한다.
+- [x] 카메라↔서버 및 서버↔뷰어 연결별로 기록되는 이벤트와 관측 공백을 교차 검증한다.
+- [x] 몇 주간 실시간 관제 적합성, 즉시 확인할 명령/화면, 개선 우선순위를 검토란에 정리한다.
+
+## 검토
+
+- 2026-08-13 16:18~16:44 KST 운영 표본에서 Docker `camstation2`는 healthy/restart 0이며 활성
+  카메라 8/8, recorder worker 8/8, Viewer 카메라 8/8의 현재 media progress가 정상이다. incident는
+  0건이다. 다만 컨테이너 CPU는 세 표본에서 563~715%, host load는 17~19였고 `stream.warm`의
+  `context deadline exceeded` warning이 당일 40건 확인돼 별도 원인 진단과 경보가 필요하다.
+- 카메라→서버 로그는 `go2rtc` 기본 INFO/WARN과 worker 시작·종료 정도만 Docker stdout에 남는다.
+  live-warm ffmpeg 출력은 폐기되고 recorder는 segment open 외 ffmpeg stderr를 폐기하므로 카메라별
+  연결 성공, retry 단계, track별 byte/packet 진행, 정확한 단절 원인·기간을 사후 재구성할 수 없다.
+  현재 상태 API는 producer/consumer와 worker 상태를 보여 주지만 이력은 남기지 않는다. 판정은 `부분`이다.
+- 서버→Viewer playback 진단은 구조화돼 있으나 운영 level은 문서의 diagnostic `debug`가 아니라
+  `info`다. attempt/recovery/failure는 남지만 debug 전용 socket open, signaling answer, first track,
+  first media, session close는 남지 않는다. session ID와 Viewer ID/client 주소도 연결되지 않는다.
+  nginx access/error는 HTTP·WebSocket만 기록하며 WebRTC UDP media는 볼 수 없고 request/upstream
+  duration이나 correlation ID가 없다. 판정은 `부분`이다.
+- Viewer Service는 `service.log`를 10 MiB×5개로 회전하도록 설계됐지만 실제 호출은 시작·종료·실패
+  코드 중심이다. Electron Viewer는 lease의 `logPath`를 받아도 renderer/control/playback 수명주기를
+  기록하지 않고 diagnostic event도 서버에서 보존하지 않는다. 따라서 Viewer 로컬 상세 로그는 `부족`이다.
+  정확한 Windows 파일 크기는 대상 별칭(`test-pc` 또는 `monitoring-pc`)을 사용자가 지정하지 않아
+  PC 제어 규칙에 따라 읽지 않았다.
+- Docker는 `json-file` 10 MiB×3개라 현재 컨테이너당 약 30 MiB가 상한이며 컨테이너 재생성 때
+  보존이 끊긴다. nginx는 daily rotate 14로 약 14일을 보존한다. DB events는 자동 만료 없이 계속
+  증가하고, Viewer 정상 heartbeat도 10초마다 info event를 한 건씩 추가한다. 현재 크기를 기준으로
+  Viewer 1대당 약 8,640건/일, 60,480건/주, 약 16.5 MiB/주가 예상되므로 `/logs`는 정상 heartbeat에
+  묻히면서도 저장량은 무제한 증가한다.
+- 컨테이너 시작 뒤 약 21분 표본은 playback 34건(시작 11, 성공 9, attempt 실패 10, episode 소진 3,
+  primary probe 성공 1)이었고 장애는 16:24 KST까지의 시작·재연결 구간에 집중된 뒤 회복했다. nginx의
+  같은 구간 1,353건 중 502 32건도 16:18:56~57 KST 컨테이너 기동 순간에만 발생했다. 이후 표본에는
+  추가 502가 없었다.
+- 몇 주간 운영 관제 기준으로 전체 판정은 `부족`이다. 우선순위는 (1) 컨테이너 재생성에도 남는
+  구조화 중앙 로그와 최소 4주 보존, (2) soak 기간 playback debug 및 Viewer 실제 수명주기 로그,
+  (3) 카메라 track progress·recorder segment·Viewer progress의 상태변화/주기 요약, (4) nginx
+  latency/correlation 필드, (5) 정상 heartbeat event 억제 또는 자동 만료, (6) warm timeout·고부하
+  경보다. 기존 `scripts/hourly-recording-monitor.sh`는 종료일·3-camera 가정·raw process args 때문에
+  현재 8-camera 운영에 그대로 사용하지 않는다.
+- 읽기 전용 API/DB/컨테이너/nginx 표본과 관련 구현을 교차 확인했으며 운영 설정, daemon, Viewer에는
+  변경을 가하지 않았다.
+
+---
+
 # 2026-08-13 CamStation 2.0 `main` 승격 및 브랜치 정리
 
 ## 계획

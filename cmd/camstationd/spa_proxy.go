@@ -161,8 +161,13 @@ func isPlayerOriginAllowed(r *http.Request) bool {
 }
 
 func isRegisteredPublicStream(cameras []store.Camera, streamName string) bool {
+	_, registered := registeredPublicCameraID(cameras, streamName)
+	return registered
+}
+
+func registeredPublicCameraID(cameras []store.Camera, streamName string) (int64, bool) {
 	if streamName == "" {
-		return false
+		return 0, false
 	}
 	for _, camera := range cameras {
 		if !camera.Enabled {
@@ -170,16 +175,16 @@ func isRegisteredPublicStream(cameras []store.Camera, streamName string) bool {
 		}
 		for _, publicName := range []string{camera.StreamName, camera.RecordingStreamName, camera.LiveStreamName, camera.FocusStreamName} {
 			if streamName == publicName && publicName != "" {
-				return true
+				return camera.ID, true
 			}
 		}
 		for _, output := range camera.Outputs {
 			if streamName == output.StreamName && output.StreamName != "" {
-				return true
+				return camera.ID, true
 			}
 		}
 	}
-	return false
+	return 0, false
 }
 
 func allowedGo2RTCPath(path string) bool {

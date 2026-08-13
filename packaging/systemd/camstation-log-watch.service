@@ -1,0 +1,22 @@
+[Unit]
+Description=CamStation operational log watcher
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/camstation/camstation-log-watch.env
+ExecStart=/usr/local/libexec/camstation-log-watch
+User=root
+Group=root
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+TimeoutStartSec=45s

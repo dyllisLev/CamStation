@@ -13,6 +13,7 @@ import (
 	"camstation/internal/cameracontrol"
 	"camstation/internal/cleanup"
 	"camstation/internal/onvif"
+	"camstation/internal/opslog"
 	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
@@ -61,6 +62,8 @@ type routeDeps struct {
 	activationMu      *sync.Mutex
 	playbackEvents    *playbackEventSink
 	playbackRateLimit *playbackEventRateLimiter
+	operationalLogger *opslog.Logger
+	viewerTransitions *viewerTransitionTracker
 }
 
 func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunnerOpt ...*backup.Runner) (http.Handler, error) {
@@ -75,18 +78,24 @@ func routes(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorde
 }
 
 func routesWithPolicyApplier(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunner *backup.Runner, applier policyApplier, viewerReleasesDirOpt ...string) (http.Handler, error) {
+	return routesWithPolicyApplierAndLogger(db, prober, streamer, recorderManager, cleaner, recordingsDir, tempDir,
+		maxStorageBytes, recordingEnabled, backupRunner, applier, nil, viewerReleasesDirOpt...)
+}
+
+func routesWithPolicyApplierAndLogger(db *store.DB, prober camera.Prober, streamer *stream.Go2RTC, recorderManager *recorder.Manager, cleaner *cleanup.Cleaner, recordingsDir, tempDir string, maxStorageBytes int64, recordingEnabled bool, backupRunner *backup.Runner, applier policyApplier, operationalLogger *opslog.Logger, viewerReleasesDirOpt ...string) (http.Handler, error) {
 	deps := routeDeps{
-		db:               db,
-		prober:           prober,
-		streamer:         streamer,
-		policyApplier:    applier,
-		recorderManager:  recorderManager,
-		cleaner:          cleaner,
-		backupRunner:     backupRunner,
-		recordingsDir:    recordingsDir,
-		tempDir:          tempDir,
-		maxStorageBytes:  maxStorageBytes,
-		recordingEnabled: recordingEnabled,
+		db:                db,
+		prober:            prober,
+		streamer:          streamer,
+		policyApplier:     applier,
+		recorderManager:   recorderManager,
+		cleaner:           cleaner,
+		backupRunner:      backupRunner,
+		recordingsDir:     recordingsDir,
+		tempDir:           tempDir,
+		maxStorageBytes:   maxStorageBytes,
+		recordingEnabled:  recordingEnabled,
+		operationalLogger: operationalLogger,
 	}
 	if len(viewerReleasesDirOpt) > 0 {
 		deps.viewerReleasesDir = viewerReleasesDirOpt[0]
@@ -111,14 +120,21 @@ func (d routeDeps) handler() (http.Handler, error) {
 		d.viewerReleases = viewerrelease.NewCatalog(d.viewerReleasesDir)
 	}
 	if d.playbackEvents == nil {
-		var err error
-		d.playbackEvents, err = defaultPlaybackEventSink()
-		if err != nil {
-			return nil, err
+		if d.operationalLogger != nil {
+			d.playbackEvents = newPlaybackEventSinkWithLogger(d.operationalLogger)
+		} else {
+			var err error
+			d.playbackEvents, err = defaultPlaybackEventSink()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if d.playbackRateLimit == nil {
 		d.playbackRateLimit = newPlaybackEventRateLimiter(playbackEventDefaultLimit, playbackEventDefaultWindow)
+	}
+	if d.viewerTransitions == nil {
+		d.viewerTransitions = newViewerTransitionTracker()
 	}
 	mux := http.NewServeMux()
 	previews := newPreviewRegistry()

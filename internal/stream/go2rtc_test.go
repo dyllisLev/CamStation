@@ -1,9 +1,51 @@
 package stream
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"camstation/internal/opslog"
 )
+
+func TestGo2RTCStartLogsBoundedBinaryFailure(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	streamer := NewGo2RTC("ignored.yaml", WithLogger(logger))
+	streamer.binary = "camstation-go2rtc-definitely-missing"
+	if err := streamer.Start(context.Background()); err == nil {
+		t.Fatal("missing go2rtc binary unexpectedly started")
+	}
+	var record opslog.Record
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Component != "stream.go2rtc" || record.Event != "binary_unavailable" ||
+		record.Level != "error" || record.ErrorCode != "binary_unavailable" {
+		t.Fatalf("record=%+v", record)
+	}
+}
+
+func TestGo2RTCTracksExpectedProcessExitOnce(t *testing.T) {
+	streamer := NewGo2RTC("ignored.yaml")
+	command := &exec.Cmd{}
+	streamer.mu.Lock()
+	streamer.expectExitLocked(command)
+	streamer.mu.Unlock()
+	if !streamer.takeExpectedExit(command) {
+		t.Fatal("expected process exit was not tracked")
+	}
+	if streamer.takeExpectedExit(command) {
+		t.Fatal("expected process exit marker was not consumed")
+	}
+}
 
 func TestParseStreamRuntimeCountsViewersSeparatelyFromRecorderConsumers(t *testing.T) {
 	t.Parallel()

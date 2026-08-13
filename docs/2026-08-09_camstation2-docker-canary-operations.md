@@ -359,9 +359,11 @@ docker compose up -d
    `192.168.0.160:18555`가 일치하는지 확인한다. 10 대역에는 WebRTC를 공개하지 않으며,
    API `1984`와 RTSP `8554`도 공개하지 않는다.
 3. `/api/cameras`에서 세 대가 모두 `streaming`인지 확인한다.
-4. `/api/recorders/status`와 `playback_event` 구조화 로그를 확인한다. 현재 debug는 signaling,
-   첫 track과 첫 media까지 남기며, 평시에는 `.env`의 `CAMSTATION_PLAYBACK_LOG_LEVEL=info`로
-   attempt 시작·성공·실패만 보존할 수 있다.
+4. `/api/recorders/status`와 영속 `data/logs/camstationd.jsonl`을 확인한다. 초기 관제는
+   `CAMSTATION_LOG_LEVEL=info`와
+   `CAMSTATION_LOG_LEVELS=playback=debug,stream.go2rtc=debug,stream.live_warm=debug,recorder.ffmpeg=debug`를 사용해
+   signaling, 첫 track/media, 카메라 progress와 recorder progress를 함께 남긴다. 평시 전환과
+   session 결합 방법은 [운영 로그 관제 문서](2026-08-13_camstation2-operational-logging.md)를 따른다.
 5. `docker inspect`에서 PID 상한이 1024인지, `docker stats`에서 PID가 상한에 근접하지
    않는지 확인한다. 앱 로그가 조용해도 task 거부가 있으면 PID 고갈로 분류한다.
 6. 전용 `/viewer`는 저사양·호환용 MSE-first 화면이므로 HTTP의 same-origin

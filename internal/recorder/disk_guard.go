@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"camstation/internal/opslog"
 )
 
 const (
@@ -24,6 +26,12 @@ type DiskUsage struct {
 type DiskUsageChecker func(path string) (DiskUsage, error)
 
 type Option func(*Manager)
+
+func WithLogger(logger *opslog.Logger) Option {
+	return func(manager *Manager) {
+		manager.logger = logger
+	}
+}
 
 type diskGuard struct {
 	check           DiskUsageChecker

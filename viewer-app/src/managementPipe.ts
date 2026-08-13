@@ -115,11 +115,15 @@ export class ManagementConnection {
   }
 
   reportRenderer(leaseId: string, payload: unknown): void {
-    void this.request("renderer_status", { leaseId, ...objectPayload(payload) }).catch(() => undefined);
+    void this.request("renderer_status", { ...objectPayload(payload), leaseId }).catch(() => undefined);
   }
 
   reportStream(leaseId: string, payload: unknown): void {
-    void this.request("stream_telemetry", { leaseId, ...objectPayload(payload) }).catch(() => undefined);
+    void this.request("stream_telemetry", { ...objectPayload(payload), leaseId }).catch(() => undefined);
+  }
+
+  reportDiagnostic(leaseId: string, payload: unknown): void {
+    void this.request("diagnostic_event", { ...objectPayload(payload), leaseId }).catch(() => undefined);
   }
 
   reportCommandResult(leaseId: string, operationKey: string, succeeded: boolean, errorCode?: string): Promise<void> {

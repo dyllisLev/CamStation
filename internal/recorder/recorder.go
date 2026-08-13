@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"camstation/internal/opslog"
 	"camstation/internal/store"
 )
 
@@ -33,6 +33,7 @@ type Manager struct {
 	rtspBase       string
 	afterSegment   func()
 	diskGuard      diskGuard
+	logger         *opslog.Logger
 
 	mu      sync.Mutex
 	workers map[string]*worker
@@ -115,7 +116,10 @@ func (m *Manager) Reconcile(cameras []store.Camera) {
 		}
 		wanted[camera.StreamName] = camera
 		if err := m.Start(camera); err != nil {
-			log.Printf("recorder start %s: %v", camera.StreamName, err)
+			m.log(opslog.Error, "worker_start_failed", opslog.Fields{
+				CameraID: camera.ID, StreamName: camera.StreamName,
+				ErrorCode: "invalid_recording_spec", Message: err.Error(),
+			})
 		}
 	}
 
@@ -293,9 +297,22 @@ func (m *Manager) notifySegmentClosed() {
 	}
 }
 
+func (m *Manager) log(level opslog.Level, event string, fields opslog.Fields) {
+	if m != nil && m.logger != nil {
+		_ = m.logger.Log(level, "recorder", event, fields)
+	}
+}
+
+func (m *Manager) logFFmpeg(level opslog.Level, event string, fields opslog.Fields) {
+	if m != nil && m.logger != nil {
+		_ = m.logger.Log(level, "recorder.ffmpeg", event, fields)
+	}
+}
+
 func (w *worker) run() {
 	defer close(w.done)
 	delay := 5 * time.Second
+	attempt := 0
 	for {
 		select {
 		case <-w.stop:
@@ -304,20 +321,55 @@ func (w *worker) run() {
 		default:
 		}
 
-		err := w.runOnce()
-		if errors.Is(err, ErrRecordingDiskFull) {
-			w.setState(statusPaused, "", err.Error())
-			log.Printf("recorder %s paused: %v", w.camera.StreamName, err)
-		} else if err != nil {
-			w.setState(statusRunning, "", err.Error())
-			log.Printf("recorder %s exited: %v", w.camera.StreamName, err)
-		}
-
+		attempt++
+		startedAt := time.Now()
+		w.manager.log(opslog.Info, "worker_attempt_started", opslog.Fields{
+			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+		})
+		err := w.runOnce(attempt)
 		select {
 		case <-w.stop:
 			w.setState(statusStopped, "", "")
+			w.manager.log(opslog.Info, "worker_stopped", opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(),
+			})
 			return
-		case <-time.After(delay):
+		default:
+		}
+		if err == nil {
+			err = errors.New("recorder ffmpeg stopped")
+		}
+		if errors.Is(err, ErrRecordingDiskFull) {
+			w.setState(statusPaused, "", err.Error())
+			w.manager.log(opslog.Error, "worker_paused", opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(), ErrorCode: "disk_full", Message: err.Error(),
+			})
+		} else if err != nil {
+			w.setState(statusRunning, "", err.Error())
+			w.manager.log(opslog.Warn, "worker_exited", opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(), ErrorCode: recorderErrorCode(err), Message: err.Error(),
+			})
+		}
+
+		w.manager.log(opslog.Warn, "retry_scheduled", opslog.Fields{
+			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt, RetryMS: delay.Milliseconds(),
+		})
+		timer := time.NewTimer(delay)
+		select {
+		case <-w.stop:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			w.setState(statusStopped, "", "")
+			w.manager.log(opslog.Info, "worker_stopped", opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+				DurationMS: time.Since(startedAt).Milliseconds(),
+			})
+			return
+		case <-timer.C:
 		}
 		if delay < time.Minute {
 			delay *= 2
@@ -325,7 +377,7 @@ func (w *worker) run() {
 	}
 }
 
-func (w *worker) runOnce() error {
+func (w *worker) runOnce(attempt int) error {
 	now := time.Now().In(kst())
 	archiveName := RecordingArchiveName(w.camera.Name, w.camera.StreamName)
 	outputDir := filepath.Join(w.manager.tempDir, archiveName, now.Format("2006-01-02"))
@@ -342,25 +394,30 @@ func (w *worker) runOnce() error {
 	cmdArgs := BuildFFmpegArgsForPolicy(w.input, outputDir, w.manager.segmentMinutes, archiveName, w.audioMode)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = append(os.Environ(), "TZ=Asia/Seoul")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open recorder progress pipe: %w", err)
+	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("open recorder stderr pipe: %w", err)
 	}
-	cmd.Stdout = io.Discard
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("start recorder ffmpeg: %w", err)
 	}
 	w.mu.Lock()
 	w.proc = cmd
 	w.mu.Unlock()
 	w.setState(statusRunning, outputDir, "")
-	log.Printf("recorder started stream=%s pid=%d input=%s output=%s", w.camera.StreamName, cmd.Process.Pid, w.input, outputDir)
+	w.manager.logFFmpeg(opslog.Debug, "process_started", opslog.Fields{
+		CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+	})
 
-	scanDone := make(chan struct{})
+	scanDone := make(chan error, 2)
 	go func() {
-		defer close(scanDone)
-		w.watchStderr(stderr)
+		scanDone <- w.watchStderr(stderr, attempt)
 	}()
+	go func() { scanDone <- w.watchProgress(stdout, attempt) }()
 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
@@ -370,7 +427,8 @@ func (w *worker) runOnce() error {
 			w.setState(statusPaused, "", err.Error())
 		}
 	}
-	<-scanDone
+	firstScanErr := <-scanDone
+	secondScanErr := <-scanDone
 
 	w.mu.Lock()
 	if w.proc == cmd {
@@ -378,21 +436,91 @@ func (w *worker) runOnce() error {
 	}
 	w.mu.Unlock()
 	w.closeCurrent(time.Now().In(kst()).Unix())
-	return err
+	select {
+	case <-w.stop:
+		return err
+	default:
+		return errors.Join(err, firstScanErr, secondScanErr)
+	}
 }
 
-func (w *worker) watchStderr(stderr io.Reader) {
+func (w *worker) watchStderr(stderr io.Reader, attempt int) error {
 	scanner := bufio.NewScanner(stderr)
+	scanner.Buffer(make([]byte, 1024), 64<<10)
 	for scanner.Scan() {
-		path := ParseSegmentPath(scanner.Text())
+		line := scanner.Text()
+		path := ParseSegmentPath(line)
 		if path == "" {
+			w.logFFmpegLine(line, attempt)
 			continue
 		}
 		if err := w.openSegment(path); err != nil {
-			log.Printf("recorder segment handling failed stream=%s path=%s: %v", w.camera.StreamName, path, err)
 			w.setState(statusRunning, path, err.Error())
+			w.manager.log(opslog.Error, "segment_open_failed", opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: filepath.Base(path),
+				Attempt: attempt, ErrorCode: "segment_open_failed", Message: err.Error(),
+			})
+			continue
+		}
+		w.manager.log(opslog.Info, "segment_opened", opslog.Fields{
+			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: filepath.Base(path), Attempt: attempt,
+		})
+	}
+	return scanner.Err()
+}
+
+func (w *worker) watchProgress(progress io.Reader, attempt int) error {
+	scanner := bufio.NewScanner(progress)
+	scanner.Buffer(make([]byte, 1024), 64<<10)
+	var frame, mediaTimeUS int64
+	started := false
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "frame":
+			frame, _ = strconv.ParseInt(value, 10, 64)
+		case "out_time_us":
+			mediaTimeUS, _ = strconv.ParseInt(value, 10, 64)
+		case "progress":
+			if frame <= 0 && mediaTimeUS <= 0 {
+				continue
+			}
+			event, level := "media_progress", opslog.Debug
+			if !started {
+				started = true
+				event, level = "media_started", opslog.Info
+			}
+			w.manager.logFFmpeg(level, event, opslog.Fields{
+				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+				Frame: frame, MediaTimeMS: mediaTimeUS / 1000,
+			})
 		}
 	}
+	return scanner.Err()
+}
+
+func (w *worker) logFFmpegLine(line string, attempt int) {
+	message := strings.TrimSpace(line)
+	if message == "" {
+		return
+	}
+	lower := strings.ToLower(message)
+	level, event := opslog.Debug, "ffmpeg_output"
+	switch {
+	case strings.Contains(lower, "error"), strings.Contains(lower, "failed"), strings.Contains(lower, "invalid"),
+		strings.Contains(lower, "unable"), strings.Contains(lower, "permission denied"):
+		level, event = opslog.Error, "ffmpeg_error"
+	case strings.Contains(lower, "warning"), strings.Contains(lower, "timed out"), strings.Contains(lower, "timeout"),
+		strings.Contains(lower, "refused"), strings.Contains(lower, "non-monotonous"), strings.Contains(lower, "corrupt"):
+		level, event = opslog.Warn, "ffmpeg_warning"
+	}
+	w.manager.logFFmpeg(level, event, opslog.Fields{
+		CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
+		ErrorCode: event, Message: message,
+	})
 }
 
 func (w *worker) openSegment(path string) error {
@@ -443,12 +571,28 @@ func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
 	if err != nil {
 		_ = w.manager.db.MarkRecordingSegmentStatus(context.Background(), w.camera.StreamName, segment.filename, "failed", err.Error())
 		w.setState(statusRunning, segment.path, err.Error())
+		w.manager.log(opslog.Error, "segment_close_failed", opslog.Fields{
+			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: segment.filename,
+			ErrorCode: "segment_move_failed", Message: err.Error(),
+		})
 		return
 	}
 	if err := w.manager.db.CloseRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size); err != nil {
 		w.setState(statusRunning, segment.path, err.Error())
+		w.manager.log(opslog.Error, "segment_close_failed", opslog.Fields{
+			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: segment.filename,
+			ErrorCode: "segment_store_failed", Message: err.Error(),
+		})
 		return
 	}
+	fields := opslog.Fields{
+		CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: segment.filename,
+		DurationMS: int64((tsEnd - segment.tsStart) * 1000),
+	}
+	if size != nil {
+		fields.SizeBytes = *size
+	}
+	w.manager.log(opslog.Info, "segment_closed", fields)
 	w.manager.notifySegmentClosed()
 }
 
@@ -510,8 +654,9 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 	}
 	outputPattern := filepath.Join(outputDir, filenamePattern)
 	args := []string{
-		"ffmpeg", "-y",
+		"ffmpeg", "-y", "-hide_banner", "-loglevel", "info",
 		"-nostats",
+		"-stats_period", "60", "-progress", "pipe:1",
 		"-fflags", "+genpts",
 		"-rtsp_transport", "tcp",
 		"-i", input,
@@ -534,6 +679,23 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		"-avoid_negative_ts", "make_zero",
 		outputPattern,
 	)
+}
+
+func recorderErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, ErrRecordingDiskFull):
+		return "disk_full"
+	case strings.Contains(message, "start recorder ffmpeg"):
+		return "process_start_failed"
+	case strings.Contains(message, "progress pipe") || strings.Contains(message, "stderr pipe"):
+		return "process_pipe_failed"
+	default:
+		return "process_exited"
+	}
 }
 
 func RecordingArchiveName(cameraName, streamName string) string {

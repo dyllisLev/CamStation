@@ -44,12 +44,22 @@ function createWindow(): BrowserWindow {
   window.on("closed", () => app.quit());
   window.webContents.on("did-finish-load", () => {
     reportRenderer(rendererStateForEvent("did-finish-load"));
+    reportDiagnostic({ level: "info", component: "viewer.renderer", event: "document_loaded", state: "ready" });
   });
   window.on("enter-full-screen", () => window?.webContents.send("viewer:fullscreen-changed", true));
   window.on("leave-full-screen", () => window?.webContents.send("viewer:fullscreen-changed", false));
-  window.on("unresponsive", () => reportRenderer(rendererStateForEvent("unresponsive")));
-  window.on("responsive", () => reportRenderer(rendererStateForEvent("responsive")));
-  window.webContents.on("render-process-gone", () => reportRenderer(rendererStateForEvent("render-process-gone")));
+  window.on("unresponsive", () => {
+    reportRenderer(rendererStateForEvent("unresponsive"));
+    reportDiagnostic({ level: "warn", component: "viewer.renderer", event: "unresponsive", state: "unresponsive" });
+  });
+  window.on("responsive", () => {
+    reportRenderer(rendererStateForEvent("responsive"));
+    reportDiagnostic({ level: "info", component: "viewer.renderer", event: "responsive", state: "ready" });
+  });
+  window.webContents.on("render-process-gone", () => {
+    reportRenderer(rendererStateForEvent("render-process-gone"));
+    reportDiagnostic({ level: "error", component: "viewer.renderer", event: "process_gone", state: "failed" });
+  });
   return window;
 }
 
@@ -92,6 +102,7 @@ async function showLive(status: ViewerStatus): Promise<void> {
   if (!lease) {
     try {
       lease = await connection.acquireLease();
+      reportDiagnostic({ level: "info", component: "viewer.main", event: "lease_acquired", state: "running" });
     } catch (error) {
       if (error instanceof ManagementRequestError && error.code === "lease_busy") return app.quit();
       return showSetup(status);
@@ -101,8 +112,10 @@ async function showLive(status: ViewerStatus): Promise<void> {
   startHeartbeat();
   currentLiveURL = viewerURL(status.config.serverUrl);
   connection.reportViewer(lease.leaseId, "running");
+  reportDiagnostic({ level: "info", component: "viewer.main", event: "live_load_started", state: "running" });
   setupVisible = false;
   await createWindow().loadURL(currentLiveURL);
+  reportDiagnostic({ level: "info", component: "viewer.main", event: "live_loaded", state: "running" });
 }
 
 async function showSetup(status: ViewerStatus | null): Promise<void> {
@@ -117,6 +130,7 @@ async function showSetup(status: ViewerStatus | null): Promise<void> {
 function registerIPC(): void {
   ipcMain.on("viewer:renderer", (_event, payload: unknown) => reportRenderer((payload as { state?: string })?.state ?? "ready"));
   ipcMain.on("viewer:stream", (_event, payload: unknown) => lease && connection?.reportStream(lease.leaseId, payload));
+  ipcMain.on("viewer:diagnostic", (_event, payload: unknown) => reportDiagnostic(payload));
   ipcMain.on("viewer:command-result", (event, payload: unknown) => {
     if (!window || event.sender !== window.webContents || !payload || typeof payload !== "object") return;
     const result = payload as Record<string, unknown>;
@@ -155,6 +169,10 @@ async function executeViewerCommand(active: ManagementConnection, command: Viewe
   let succeeded = false;
   let errorCode = "viewer_command_failed";
   let relaunch = false;
+  reportDiagnostic({
+    level: "info", component: "viewer.main", event: "command_started", state: "running",
+    correlationId: command.operationKey,
+  });
   try {
     switch (command.type) {
       case "reload_live":
@@ -181,6 +199,12 @@ async function executeViewerCommand(active: ManagementConnection, command: Viewe
   } catch {
     return;
   }
+  reportDiagnostic({
+    level: succeeded ? "info" : "error", component: "viewer.main",
+    event: succeeded ? "command_succeeded" : "command_failed",
+    state: succeeded ? "running" : "failed", correlationId: command.operationKey,
+    ...(succeeded ? {} : { errorCode }),
+  });
   if (succeeded && relaunch) {
     explicitShutdown = true;
     app.relaunch();
@@ -205,6 +229,10 @@ function sendRendererCommand(target: BrowserWindow, command: Extract<ViewerComma
 
 function reportRenderer(state: string): void {
   if (lease) connection?.reportRenderer(lease.leaseId, { state, source: "viewer" });
+}
+
+function reportDiagnostic(payload: unknown): void {
+  if (lease) connection?.reportDiagnostic(lease.leaseId, payload);
 }
 
 function startHeartbeat(): void {

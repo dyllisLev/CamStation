@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"camstation/internal/opslog"
 )
 
 func TestLogRedactsSecretsAndBoundsJSONLine(t *testing.T) {
@@ -19,7 +21,7 @@ func TestLogRedactsSecretsAndBoundsJSONLine(t *testing.T) {
 		"Authorization: Bearer abc123 server=https://user:pass@cam.example/live?token=hidden " +
 		"rtsp://admin:camera@10.0.0.7/stream nonce=nonce-secret response body={\"secret\":\"body\"}\nline2-secret-body " +
 		"-----BEGIN PRIVATE KEY----- private -----END PRIVATE KEY-----" + strings.Repeat("x", MaxLogRecordBytes)
-	if err := logs.WriteService(LogRecord{Component: "service", State: "failed", Code: "pipe_error", CorrelationID: "corr-1", Detail: detail}); err != nil {
+	if err := logs.WriteService(LogRecord{Level: opslog.Warn, Component: "service", State: "failed", Code: "pipe_error", CorrelationID: "corr-1", Detail: detail}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, ServiceLogFilename))
@@ -39,7 +41,7 @@ func TestLogRedactsSecretsAndBoundsJSONLine(t *testing.T) {
 func TestLogAlwaysWritesUTCStateAndCorrelationID(t *testing.T) {
 	root := t.TempDir()
 	logs := newLogManager(root, DefaultLogRotateBytes, DefaultLogRetainedFiles, func(string, string) error { return nil })
-	if err := logs.WriteService(LogRecord{Component: "service"}); err != nil {
+	if err := logs.WriteService(LogRecord{Level: opslog.Warn, Component: "service"}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(root, ServiceLogFilename))
@@ -118,7 +120,7 @@ func TestLogRotationRetainsAtMostFiveBoundedFiles(t *testing.T) {
 	root := t.TempDir()
 	logs := newLogManager(root, 180, 5, func(string, string) error { return nil })
 	for i := 0; i < 30; i++ {
-		if err := logs.WriteService(LogRecord{Component: "service", State: "running", CorrelationID: "rotation", Detail: strings.Repeat("x", 60)}); err != nil {
+		if err := logs.WriteService(LogRecord{Level: opslog.Warn, Component: "service", State: "running", CorrelationID: "rotation", Detail: strings.Repeat("x", 60)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,6 +209,147 @@ func TestLogViewerRotationRetainsAtMostFiveFiles(t *testing.T) {
 		if info, err := os.Stat(match); err != nil || info.Size() > 180 {
 			t.Fatalf("viewer log %q info=%v err=%v", match, info, err)
 		}
+	}
+}
+
+func TestLogViewerWritesStructuredLevelFilteredRecordThroughAssignedIdentity(t *testing.T) {
+	root := t.TempDir()
+	secure := func(path, _ string) error {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		return file.Close()
+	}
+	logs := newLogManager(root, DefaultLogRotateBytes, DefaultLogRetainedFiles, secure)
+	policy, err := opslog.NewPolicy("info", "viewer.playback=debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs.policy = policy
+	peer := Peer{PID: 9, SessionID: 4, Interactive: true, UserSID: "S-1-5-21-1000"}
+	path, err := logs.AssignViewerLog(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.WriteViewer(peer, LogRecord{
+		Level: opslog.Debug, Component: "viewer.playback", Event: "first_media",
+		SessionID: "playback-12345678", StreamName: "gate-live", Transport: "webrtc",
+		Phase: "playing", Attempt: 2, DurationMS: 42,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line logLine
+	decodeJSON(t, bytes.TrimSpace(data), &line)
+	if line.Level != "debug" || line.Component != "viewer.playback" || line.Event != "first_media" ||
+		line.SessionID != "playback-12345678" || line.StreamName != "gate-live" || line.Transport != "webrtc" ||
+		line.Phase != "playing" || line.Attempt != 2 || line.DurationMS != 42 {
+		t.Fatalf("line=%+v", line)
+	}
+
+	foreign := Peer{PID: 10, SessionID: 5, Interactive: true, UserSID: "S-1-5-21-2000"}
+	if err := logs.WriteViewer(foreign, LogRecord{Component: "viewer.main", Event: "started"}); !errors.Is(err, ErrLoggingUnavailable) {
+		t.Fatalf("unassigned Viewer write error=%v", err)
+	}
+}
+
+func TestLogManagerEnvironmentControlsViewerLevelsAndRetention(t *testing.T) {
+	t.Setenv("CAMSTATION_VIEWER_LOG_LEVEL", "warn")
+	t.Setenv("CAMSTATION_VIEWER_LOG_LEVELS", "viewer.playback=debug")
+	t.Setenv("CAMSTATION_VIEWER_LOG_MAX_MB", "24")
+	t.Setenv("CAMSTATION_VIEWER_LOG_FILES", "21")
+	logs, err := NewLogManagerFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logs.rotateSize != 24<<20 || logs.retained != 21 {
+		t.Fatalf("Viewer retention size=%d files=%d", logs.rotateSize, logs.retained)
+	}
+	if !logs.policy.Enabled("viewer.playback", opslog.Debug) || logs.policy.Enabled("viewer.control", opslog.Info) ||
+		!logs.policy.Enabled("viewer.control", opslog.Warn) {
+		t.Fatal("Viewer component level policy was not applied")
+	}
+}
+
+func TestLogManagerEnvironmentDefaultsToMinimalViewerBlackBox(t *testing.T) {
+	for _, name := range []string{
+		"CAMSTATION_VIEWER_LOG_LEVEL",
+		"CAMSTATION_VIEWER_LOG_LEVELS",
+		"CAMSTATION_VIEWER_LOG_MAX_MB",
+		"CAMSTATION_VIEWER_LOG_FILES",
+		"CAMSTATION_LOG_LEVEL",
+		"CAMSTATION_LOG_LEVELS",
+	} {
+		t.Setenv(name, "")
+	}
+
+	logs, err := NewLogManagerFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logs.rotateSize != 5<<20 || logs.retained != 3 {
+		t.Fatalf("default Viewer retention size=%d files=%d", logs.rotateSize, logs.retained)
+	}
+	if logs.policy.Enabled("viewer.control", opslog.Info) ||
+		!logs.policy.Enabled("viewer.control", opslog.Warn) {
+		t.Fatal("default Viewer policy must retain warn/error only")
+	}
+}
+
+func TestLogManagerEnvironmentDoesNotInheritDaemonDebugPolicy(t *testing.T) {
+	t.Setenv("CAMSTATION_VIEWER_LOG_LEVEL", "")
+	t.Setenv("CAMSTATION_VIEWER_LOG_LEVELS", "")
+	t.Setenv("CAMSTATION_LOG_LEVEL", "debug")
+	t.Setenv("CAMSTATION_LOG_LEVELS", "viewer=debug")
+
+	logs, err := NewLogManagerFromEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logs.policy.Enabled("viewer.playback", opslog.Info) ||
+		!logs.policy.Enabled("viewer.playback", opslog.Warn) {
+		t.Fatal("daemon logging policy must not broaden Viewer local logging")
+	}
+}
+
+func TestLogManagerEnvironmentRejectsInvalidViewerRetention(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "CAMSTATION_VIEWER_LOG_MAX_MB", value: "0"},
+		{name: "CAMSTATION_VIEWER_LOG_MAX_MB", value: "many"},
+		{name: "CAMSTATION_VIEWER_LOG_FILES", value: "65"},
+	} {
+		t.Run(test.name+"="+test.value, func(t *testing.T) {
+			t.Setenv("CAMSTATION_VIEWER_LOG_MAX_MB", "")
+			t.Setenv("CAMSTATION_VIEWER_LOG_FILES", "")
+			t.Setenv(test.name, test.value)
+			if logs, err := NewLogManagerFromEnvironment(); err == nil {
+				t.Fatalf("invalid Viewer logging environment accepted: %+v", logs)
+			}
+		})
+	}
+}
+
+func TestLogViewerSuppressesDebugAtInfoLevel(t *testing.T) {
+	root := t.TempDir()
+	secure := func(path, _ string) error { return os.WriteFile(path, nil, 0o600) }
+	logs := newLogManager(root, DefaultLogRotateBytes, DefaultLogRetainedFiles, secure)
+	peer := Peer{PID: 9, SessionID: 4, Interactive: true, UserSID: "S-1-5-21-1000"}
+	path, err := logs.AssignViewerLog(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.WriteViewer(peer, LogRecord{Level: opslog.Debug, Component: "viewer.playback", Event: "socket_open"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+		t.Fatalf("suppressed debug file info=%v err=%v", info, err)
 	}
 }
 

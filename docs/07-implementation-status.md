@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -18,6 +18,35 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-13 level-based operational logging
+
+- `camstationd`, go2rtc, live-warm ffmpeg, recorder ffmpeg and HTTP playback now emit bounded JSONL
+  through a common `debug/info/warn/error/off` policy. Global and longest-prefix component levels are
+  controlled by `CAMSTATION_LOG_LEVEL` and `CAMSTATION_LOG_LEVELS`; invalid policy and retention values
+  fail startup instead of silently changing behavior.
+- The daemon writes both stdout and persistent `data/logs/camstationd.jsonl`, with 25 MiB × 8 files by
+  default and configurable size/count. Child output, process errors and structured fields redact URLs,
+  credentials, tokens, SDP/ICE, PEM and paths; commands and raw camera endpoints are not logged. A
+  persistent-file write failure leaves the original stdout copy intact and emits a rate-limited
+  `opslog/persistent_write_failed` error there.
+- Camera ingest now records worker attempts, first/periodic media progress, classified ffmpeg output,
+  exit duration and retry delay. Recorder logs media progress plus safe segment open/close filename,
+  duration and size, so process existence is no longer treated as proof of media receipt.
+- Windows Viewer Service applies the same level semantics, validates renderer diagnostic records behind
+  the active lease, and writes Service and per-session Viewer JSONL under ProgramData. Server and Viewer
+  playback records share the same `sessionId`; management pipe, control, lease, renderer and stream
+  transitions are recorded while repeated pulses are suppressed and progressing media gets a debug
+  summary at most once per minute. Viewer local logging is an independent minimal black box: `warn` by
+  default with 5 MiB × 3 files, and component debug is enabled only during a bounded incident reproduction.
+- Normal Viewer heartbeat no longer appends one DB event per request. The first observation and meaningful
+  agent/control/renderer/stream state changes produce one event; unchanged and concurrent duplicate
+  heartbeats do not.
+- Initial-soak and steady-state settings, live queries and cross-machine session joins are documented in
+  [the operational logging guide](2026-08-13_camstation2-operational-logging.md). Source implementation is
+  not proof of deployment. The official `monitoring-pc` audit passed for NUC/session 1 and found only two
+  tiny ProgramData log files, but its 13 existing records use the prior schema without `level`; the new
+  daemon and Viewer builds still require an approved production deployment before operational acceptance.
 
 ### 2026-08-12 Docker WebRTC first-attempt playback and diagnostics
 

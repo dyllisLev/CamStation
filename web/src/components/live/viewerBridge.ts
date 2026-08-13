@@ -4,6 +4,12 @@ const URL_LIKE = /^[a-z][a-z0-9+.-]*:/iu;
 const TRANSPORTS = new Set<PlaybackTransport>(["webrtc", "mse"]);
 const PHASES = new Set(["connecting", "retrying", "fallback", "recovering", "playing", "stalled", "cooldown", "unsupported"]);
 const ERRORS = new Set(["none", "setup_timeout", "media_stall", "socket", "signaling", "media", "unsupported", "episode_exhausted"]);
+const DIAGNOSTIC_LEVELS = new Set(["debug", "info", "warn", "error"]);
+const DIAGNOSTIC_COMPONENTS = new Set(["viewer.main", "viewer.renderer", "viewer.playback", "viewer.control"]);
+const DIAGNOSTIC_EVENT = /^[a-z][a-z0-9_]{1,63}$/u;
+const DIAGNOSTIC_CODE = /^[a-z][a-z0-9_]{0,63}$/u;
+const DIAGNOSTIC_CORRELATION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const DIAGNOSTIC_SESSION = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u;
 
 export type ViewerStreamTelemetry = {
   readonly streamName: string;
@@ -23,6 +29,7 @@ export type ViewerCommand = { readonly type: "resubscribe_stream"; readonly stre
 
 export type CamStationViewerBridge = {
   reportStream(telemetry: ViewerStreamTelemetry): void;
+  reportDiagnostic?(diagnostic: Record<string, unknown>): void;
   onCommand(handler: (command: unknown) => boolean | Promise<boolean>): void | (() => void);
   setFullscreen?(fullscreen: boolean): Promise<unknown> | void;
   onFullscreenChange?(handler: (fullscreen: boolean) => void): void | (() => void);
@@ -32,6 +39,48 @@ declare global {
   interface Window {
     camstationViewer?: CamStationViewerBridge;
   }
+}
+
+export function reportViewerDiagnostic(input: Record<string, unknown>, bridge = preloadBridge()): void {
+  const diagnostic = safeViewerDiagnostic(input);
+  if (!diagnostic || typeof bridge?.reportDiagnostic !== "function") return;
+  try {
+    bridge.reportDiagnostic(diagnostic);
+  } catch {
+    // Local logging must not affect video playback.
+  }
+}
+
+export function safeViewerDiagnostic(input: Record<string, unknown>): Record<string, unknown> | null {
+  if (
+    typeof input.level !== "string" || !DIAGNOSTIC_LEVELS.has(input.level)
+    || typeof input.component !== "string" || !DIAGNOSTIC_COMPONENTS.has(input.component)
+    || typeof input.event !== "string" || !DIAGNOSTIC_EVENT.test(input.event)
+  ) return null;
+  const diagnostic: Record<string, unknown> = {
+    level: input.level,
+    component: input.component,
+    event: input.event,
+  };
+  if (!copyPatternString(diagnostic, input, "correlationId", DIAGNOSTIC_CORRELATION)) return null;
+  if (!copyPatternString(diagnostic, input, "sessionId", DIAGNOSTIC_SESSION)) return null;
+  if (input.streamName !== undefined) {
+    if (!safeStreamName(input.streamName)) return null;
+    diagnostic.streamName = input.streamName;
+  }
+  if (!copyEnumString(diagnostic, input, "transport", TRANSPORTS)) return null;
+  if (!copyEnumString(diagnostic, input, "phase", PHASES)) return null;
+  if (!copyPatternString(diagnostic, input, "state", DIAGNOSTIC_CODE)) return null;
+  if (!copyPatternString(diagnostic, input, "errorCode", DIAGNOSTIC_CODE)) return null;
+  copyBoundedDiagnosticInteger(diagnostic, input, "attempt", 0, 32);
+  copyBoundedDiagnosticInteger(diagnostic, input, "durationMs", 0, 30 * 60_000);
+  copyBoundedDiagnosticInteger(diagnostic, input, "attemptElapsedMs", 0, 30 * 60_000);
+  copyBoundedDiagnosticInteger(diagnostic, input, "retryMs", 0, 30 * 60_000);
+  copyBoundedDiagnosticInteger(diagnostic, input, "readyState", 0, 4);
+  copyBoundedDiagnosticInteger(diagnostic, input, "reconnectCount", 0, 100);
+  copyBoundedDiagnosticInteger(diagnostic, input, "fallbackCount", 0, 100);
+  if (typeof input.usingFallback === "boolean") diagnostic.usingFallback = input.usingFallback;
+  return diagnostic;
 }
 
 export function reportViewerStream(input: Record<string, unknown>, bridge = preloadBridge()): void {
@@ -139,8 +188,48 @@ function safeStreamName(value: unknown): value is string {
     const code = character.charCodeAt(0);
     return code <= 31 || (code >= 127 && code <= 159);
   });
-  return trimmed.length > 0
+  return value === trimmed
+    && trimmed.length > 0
     && !containsControlCharacter
     && !URL_LIKE.test(trimmed)
     && !trimmed.startsWith("//");
+}
+
+function copyPatternString(
+  output: Record<string, unknown>,
+  input: Record<string, unknown>,
+  key: string,
+  pattern: RegExp,
+): boolean {
+  const value = input[key];
+  if (value === undefined) return true;
+  if (typeof value !== "string" || !pattern.test(value)) return false;
+  output[key] = value;
+  return true;
+}
+
+function copyEnumString(
+  output: Record<string, unknown>,
+  input: Record<string, unknown>,
+  key: string,
+  allowed: ReadonlySet<unknown>,
+): boolean {
+  const value = input[key];
+  if (value === undefined) return true;
+  if (typeof value !== "string" || !allowed.has(value)) return false;
+  output[key] = value;
+  return true;
+}
+
+function copyBoundedDiagnosticInteger(
+  output: Record<string, unknown>,
+  input: Record<string, unknown>,
+  key: string,
+  minimum: number,
+  maximum: number,
+): void {
+  const value = input[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    output[key] = Math.min(maximum, Math.max(minimum, Math.trunc(value)));
+  }
 }

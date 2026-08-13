@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"camstation/internal/opslog"
 	"camstation/internal/store"
 )
 
@@ -70,6 +72,45 @@ func TestPlaybackDiagnosticsRespectLogLevelAndWriteCorrelatedSafeEvents(t *testi
 		if strings.Contains(strings.ToLower(logText), forbidden) {
 			t.Fatalf("playback log contains forbidden %q: %s", forbidden, logText)
 		}
+	}
+}
+
+func TestPlaybackDiagnosticsUseSharedOperationalLoggerAndClientCorrelation(t *testing.T) {
+	server := newTestRouteServer(t)
+	camera, err := server.db.UpsertCamera(t.Context(), store.Camera{
+		Name: "Gate", StreamName: "gate-live", Enabled: true, State: "streaming",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "info", ComponentLevels: "playback=debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	deps := routeDeps{
+		db: server.db, playbackEvents: newPlaybackEventSinkWithLogger(logger),
+		playbackRateLimit: newPlaybackEventRateLimiter(100, time.Minute),
+	}
+	mux := http.NewServeMux()
+	deps.registerPlaybackDiagnosticRoutes(mux)
+	status := postPlaybackEventFrom(t, mux, "192.0.2.40:45000", `{
+		"sessionId":"playback-12345678","event":"first_media","streamName":"gate-live",
+		"transport":"webrtc","phase":"connecting","attempt":1,"elapsedMs":42,"readyState":4
+	}`)
+	if status != http.StatusNoContent {
+		t.Fatalf("status=%d", status)
+	}
+	var record opslog.Record
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("decode shared log: %v: %s", err, output.String())
+	}
+	if record.Component != "playback" || record.Level != "debug" || record.Event != "first_media" ||
+		record.SessionID != "playback-12345678" || record.StreamName != "gate-live" ||
+		record.CameraID != camera.ID || record.ClientIP != "192.0.2.40" ||
+		record.Transport != "webrtc" || record.ReadyState != 4 {
+		t.Fatalf("record=%+v", record)
 	}
 }
 

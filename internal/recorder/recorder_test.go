@@ -1,10 +1,15 @@
 package recorder
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"camstation/internal/opslog"
+	"camstation/internal/store"
 )
 
 func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
@@ -19,6 +24,9 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	if !strings.Contains(joined, "%Y-%m-%d_%H-%M.mp4") {
 		t.Fatalf("expected dated strftime output pattern, got %s", joined)
 	}
+	if !strings.Contains(joined, "-stats_period 60 -progress pipe:1") {
+		t.Fatalf("expected bounded ffmpeg progress output, got %s", joined)
+	}
 }
 
 func TestBuildFFmpegArgsGeneratesPtsForMp4Playback(t *testing.T) {
@@ -30,6 +38,65 @@ func TestBuildFFmpegArgsGeneratesPtsForMp4Playback(t *testing.T) {
 	if strings.Contains(joined, "-use_wallclock_as_timestamps") {
 		t.Fatalf("expected not to force wallclock timestamps, got %s", joined)
 	}
+}
+
+func TestRecorderProgressLogsFirstMediaThenDebugProgress(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	worker := &worker{camera: store.Camera{ID: 7, StreamName: "gate-recording"}, manager: &Manager{logger: logger}}
+	progress := strings.NewReader("frame=30\nout_time_us=2000000\nprogress=continue\nframe=900\nout_time_us=60000000\nprogress=continue\n")
+	if err := worker.watchProgress(progress, 2); err != nil {
+		t.Fatal(err)
+	}
+	records := decodeRecorderOperationalLines(t, output.String())
+	if len(records) != 2 || records[0].Event != "media_started" || records[0].Level != "info" ||
+		records[0].CameraID != 7 || records[0].StreamName != "gate-recording" || records[0].Attempt != 2 ||
+		records[0].Frame != 30 || records[0].MediaTimeMS != 2000 ||
+		records[1].Event != "media_progress" || records[1].Level != "debug" || records[1].Frame != 900 {
+		t.Fatalf("records=%+v", records)
+	}
+}
+
+func TestRecorderFFmpegWarningIsRedactedAndClassified(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	worker := &worker{camera: store.Camera{ID: 7, StreamName: "gate-recording"}, manager: &Manager{logger: logger}}
+	worker.logFFmpegLine(`Connection timed out for rtsp://admin:secret@10.0.0.2/live?token=bad at /var/lib/camstation/media/temp/file.mp4`, 3)
+	records := decodeRecorderOperationalLines(t, output.String())
+	if len(records) != 1 || records[0].Event != "ffmpeg_warning" || records[0].Level != "warn" || records[0].Attempt != 3 {
+		t.Fatalf("records=%+v", records)
+	}
+	lower := strings.ToLower(output.String())
+	for _, forbidden := range []string{"admin", "secret", "10.0.0.2", "token=", "rtsp://", "/var/lib"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("recorder log leaked %q: %s", forbidden, output.String())
+		}
+	}
+}
+
+func decodeRecorderOperationalLines(t *testing.T, value string) []opslog.Record {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(value), "\n")
+	result := make([]opslog.Record, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var record opslog.Record
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode log %q: %v", line, err)
+		}
+		result = append(result, record)
+	}
+	return result
 }
 
 func TestBuildFFmpegArgsResetsAudioPtsForSegmentPlayback(t *testing.T) {

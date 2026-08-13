@@ -15,6 +15,7 @@ import (
 	"camstation/internal/backup"
 	"camstation/internal/camera"
 	"camstation/internal/cleanup"
+	"camstation/internal/opslog"
 	"camstation/internal/recorder"
 	"camstation/internal/store"
 	"camstation/internal/stream"
@@ -39,8 +40,20 @@ func main() {
 		maxStorageGB      = flag.Float64("max-storage-gb", getenvFloat("CAMSTATION_MAX_STORAGE_GB", 0), "maximum recording storage in GB; 0 disables automatic cleanup")
 	)
 	flag.Parse()
+	operationalLogger, err := opslog.NewFromEnvironment(os.Stdout, *dbPath)
+	if err != nil {
+		log.Fatalf("configure operational logging: %v", err)
+	}
+	defer operationalLogger.Close()
+	log.SetFlags(0)
+	log.SetOutput(opslog.NewLineWriter(operationalLogger, "daemon.legacy", opslog.Info))
+	_ = operationalLogger.Log(opslog.Info, "daemon", "startup_started", opslog.Fields{State: "starting"})
+
 	parsedWebRTCCandidates, err := stream.ParseWebRTCCandidates(*webrtcCandidates)
 	if err != nil {
+		_ = operationalLogger.Log(opslog.Error, "daemon", "startup_failed", opslog.Fields{
+			Phase: "webrtc_config", ErrorCode: "invalid_webrtc_candidates", Message: err.Error(),
+		})
 		log.Fatalf("parse WebRTC candidates: %v", err)
 	}
 
@@ -49,25 +62,34 @@ func main() {
 
 	db, err := store.Open(*dbPath)
 	if err != nil {
+		_ = operationalLogger.Log(opslog.Error, "daemon", "startup_failed", opslog.Fields{
+			Phase: "store_open", ErrorCode: "store_open_failed", Message: err.Error(),
+		})
 		log.Fatalf("open store: %v", err)
 	}
 	defer db.Close()
 
 	if err := db.Migrate(ctx); err != nil {
+		_ = operationalLogger.Log(opslog.Error, "daemon", "startup_failed", opslog.Fields{
+			Phase: "store_migrate", ErrorCode: "store_migrate_failed", Message: err.Error(),
+		})
 		log.Fatalf("migrate store: %v", err)
 	}
 	if err := db.AppendEvent(ctx, store.Event{
 		Source:  "camstationd",
 		Level:   "info",
 		Message: "camstationd started",
-		Details: map[string]any{"addr": *addr, "db": *dbPath},
+		Details: map[string]any{"state": "running"},
 	}); err != nil {
+		_ = operationalLogger.Log(opslog.Warn, "daemon", "startup_event_failed", opslog.Fields{
+			ErrorCode: "event_append_failed", Message: err.Error(),
+		})
 		log.Printf("append startup event: %v", err)
 	}
 
 	prober := camera.NewFFProbe()
-	streamer := stream.NewGo2RTC("./data/go2rtc.yaml", stream.WithWebRTCCandidates(parsedWebRTCCandidates))
-	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes)
+	streamer := stream.NewGo2RTC("./data/go2rtc.yaml", stream.WithWebRTCCandidates(parsedWebRTCCandidates), stream.WithLogger(operationalLogger))
+	recorderManager := recorder.New(db, *recordingsDir, *tempDir, *segmentMinutes, recorder.WithLogger(operationalLogger))
 	policyCoordinator := stream.NewApplyCoordinator(db, streamer, recorderManager)
 	cleaner := cleanup.New(db, *recordingsDir)
 	backupRunner := backup.NewRunner(db)
@@ -155,13 +177,20 @@ func main() {
 
 	if *probeOnly {
 		if *cameraURL == "" {
+			_ = operationalLogger.Log(opslog.Error, "daemon", "probe_failed", opslog.Fields{
+				ErrorCode: "camera_url_missing",
+			})
 			log.Fatal("missing -camera-url or CAMSTATION_CAMERA_URL")
 		}
 		result, err := prober.Probe(ctx, *cameraURL, 12*time.Second)
 		printProbe(result, err)
 		if err != nil {
+			_ = operationalLogger.Log(opslog.Error, "camera.probe", "probe_failed", opslog.Fields{
+				ErrorCode: "probe_failed", Message: err.Error(),
+			})
 			os.Exit(1)
 		}
+		_ = operationalLogger.Log(opslog.Info, "camera.probe", "probe_succeeded", opslog.Fields{State: "ready"})
 		return
 	}
 
@@ -170,10 +199,21 @@ func main() {
 			result, err := prober.Probe(ctx, *cameraURL, 12*time.Second)
 			level := "info"
 			message := "camera probe succeeded"
+			operationalLevel := opslog.Info
+			operationalEvent := "probe_succeeded"
 			if err != nil {
 				level = "error"
 				message = "camera probe failed"
+				operationalLevel = opslog.Error
+				operationalEvent = "probe_failed"
 			}
+			operationalFields := opslog.Fields{State: "ready"}
+			if err != nil {
+				operationalFields.State = "failed"
+				operationalFields.ErrorCode = "probe_failed"
+				operationalFields.Message = err.Error()
+			}
+			_ = operationalLogger.Log(operationalLevel, "camera.probe", operationalEvent, operationalFields)
 			_ = db.AppendEvent(context.Background(), store.Event{
 				Source:  "camera.probe",
 				Level:   level,
@@ -185,8 +225,12 @@ func main() {
 
 	startBackupScheduler(ctx, db, backupRunner, *recordingsDir)
 
-	mux, err := routesWithPolicyApplier(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir, maxStorageBytes, *recordingEnabled, backupRunner, policyCoordinator, *viewerReleasesDir)
+	mux, err := routesWithPolicyApplierAndLogger(db, prober, streamer, recorderManager, cleaner, *recordingsDir, *tempDir,
+		maxStorageBytes, *recordingEnabled, backupRunner, policyCoordinator, operationalLogger, *viewerReleasesDir)
 	if err != nil {
+		_ = operationalLogger.Log(opslog.Error, "daemon", "startup_failed", opslog.Fields{
+			Phase: "routes", ErrorCode: "route_build_failed", Message: err.Error(),
+		})
 		log.Fatalf("build routes: %v", err)
 	}
 
@@ -198,14 +242,20 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
+		_ = operationalLogger.Log(opslog.Info, "daemon", "shutdown_started", opslog.Fields{State: "stopping"})
 		recorderManager.StopAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
+	_ = operationalLogger.Log(opslog.Info, "daemon", "listening", opslog.Fields{State: "ready"})
 	log.Printf("camstationd listening on %s", listenURL(*addr))
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		_ = operationalLogger.Log(opslog.Error, "daemon", "server_failed", opslog.Fields{
+			ErrorCode: "listen_failed", Message: err.Error(),
+		})
 		log.Fatalf("serve: %v", err)
 	}
+	_ = operationalLogger.Log(opslog.Info, "daemon", "stopped", opslog.Fields{State: "stopped"})
 }

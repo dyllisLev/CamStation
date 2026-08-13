@@ -15,7 +15,88 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"camstation/internal/opslog"
 )
+
+func TestServiceLoggingOnlyEmitsMeaningfulConnectionStateChanges(t *testing.T) {
+	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	records := make([]LogRecord, 0, 12)
+	server.SetServiceLogWriter(func(record LogRecord) error {
+		records = append(records, record)
+		return nil
+	})
+
+	server.SetConnection("connecting")
+	server.SetConnection("connecting")
+	server.SetConnection("online")
+	peer := Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"}
+	grantResponse, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "acquire", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%+v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	for index, request := range []Request{
+		{Version: PipeProtocolVersion, RequestID: "viewer-1", Type: "viewer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "running"})},
+		{Version: PipeProtocolVersion, RequestID: "viewer-2", Type: "viewer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "running"})},
+		{Version: PipeProtocolVersion, RequestID: "renderer-1", Type: "renderer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "ready"})},
+		{Version: PipeProtocolVersion, RequestID: "renderer-2", Type: "renderer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "ready"})},
+		{Version: PipeProtocolVersion, RequestID: "stream-1", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{"streamName": "gate-live", "transport": "webrtc", "phase": "playing"})},
+		{Version: PipeProtocolVersion, RequestID: "stream-2", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{"streamName": "gate-live", "transport": "webrtc", "phase": "playing"})},
+		{Version: PipeProtocolVersion, RequestID: "stream-3", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{"streamName": "gate-live", "transport": "webrtc", "phase": "stalled"})},
+	} {
+		response, handleErr := server.Handle(t.Context(), "connection-a", peer, request)
+		if handleErr != nil || !response.OK {
+			t.Fatalf("request[%d] response=%+v err=%v", index, response, handleErr)
+		}
+	}
+	server.mu.Lock()
+	server.streamProgressLoggedAt["gate-live"] = time.Now().Add(-viewerProgressLogEvery)
+	server.mu.Unlock()
+	progressAt := time.Now().UnixMilli()
+	for index := 0; index < 2; index++ {
+		response, handleErr := server.Handle(t.Context(), "connection-a", peer, Request{
+			Version: PipeProtocolVersion, RequestID: fmt.Sprintf("progress-%d", index), Type: "stream_telemetry",
+			Payload: leasePayload(t, grant.LeaseID, map[string]any{
+				"streamName": "gate-live", "transport": "webrtc", "phase": "stalled", "lastProgressAt": progressAt,
+			}),
+		})
+		if handleErr != nil || !response.OK {
+			t.Fatalf("progress[%d] response=%+v err=%v", index, response, handleErr)
+		}
+	}
+
+	assertLogCount := func(component, event, state string, want int) {
+		t.Helper()
+		got := 0
+		for _, record := range records {
+			if record.Component == component && record.Event == event && record.State == state {
+				got++
+			}
+		}
+		if got != want {
+			t.Fatalf("records %s/%s/%s=%d want=%d all=%+v", component, event, state, got, want, records)
+		}
+	}
+	assertLogCount("viewer.control", "connection_state_changed", "connecting", 1)
+	assertLogCount("viewer.control", "connection_state_changed", "online", 1)
+	assertLogCount("viewer.main", "state_changed", "running", 1)
+	assertLogCount("viewer.renderer", "state_changed", "ready", 1)
+	assertLogCount("viewer.playback", "stream_state_changed", "playing", 1)
+	assertLogCount("viewer.playback", "stream_state_changed", "stalled", 1)
+	assertLogCount("viewer.playback", "media_progress", "stalled", 1)
+	for _, record := range records {
+		if record.Component == "viewer.playback" && record.Event == "stream_state_changed" &&
+			record.State == "stalled" && record.Level != opslog.Warn {
+			t.Fatalf("stalled record level=%s", record.Level)
+		}
+	}
+}
 
 func TestServiceRunsWithoutConfigurationOrViewer(t *testing.T) {
 	listener := newFakePipeListener()
@@ -148,6 +229,7 @@ func TestServiceWritesBoundedLifecycleLog(t *testing.T) {
 	root := t.TempDir()
 	listener := newFakePipeListener()
 	logs := newLogManager(root, DefaultLogRotateBytes, DefaultLogRetainedFiles, func(string, string) error { return nil })
+	logs.policy, _ = opslog.NewPolicy("info", "")
 	runtime := Service{Store: missingConfigStore{}, Listener: listener, Logs: logs}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -538,6 +620,7 @@ func TestRequestStatusNeverExposesPrivateConfiguration(t *testing.T) {
 
 func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	server.SetViewerLogWriter(func(Peer, LogRecord) error { return nil })
 	peer := Peer{PID: 10, SessionID: 2, Interactive: true}
 	grantResponse, err := server.Handle(context.Background(), "connection-a", peer, Request{
 		Version: PipeProtocolVersion, RequestID: "acquire", Type: "acquire_lease",
@@ -558,7 +641,9 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 			"streamName": "yard-live", "transport": "webrtc", "phase": "playing",
 			"lastBinaryAt": time.Now().Add(-2 * time.Second).UnixMilli(), "lastProgressAt": time.Now().Add(-time.Second).UnixMilli(),
 		})},
-		{Version: PipeProtocolVersion, RequestID: "diagnostic", Type: "diagnostic_event", Payload: leasePayload(t, grant.LeaseID, map[string]any{"code": "renderer_ready"})},
+		{Version: PipeProtocolVersion, RequestID: "diagnostic", Type: "diagnostic_event", Payload: leasePayload(t, grant.LeaseID, map[string]any{
+			"level": "info", "component": "viewer.renderer", "event": "renderer_ready", "state": "ready",
+		})},
 	}
 	for _, request := range requests {
 		response, err := server.Handle(context.Background(), "connection-a", peer, request)
@@ -595,6 +680,59 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 	}
 	if snapshot.Viewer != "closed" || snapshot.Renderer != "not_ready" || len(snapshot.Streams) != 0 {
 		t.Fatalf("released monitoring snapshot=%+v", snapshot)
+	}
+}
+
+func TestDiagnosticEventRequiresLeaseValidatesFieldsAndWritesCorrelation(t *testing.T) {
+	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	peer := Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"}
+	grantResponse, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "acquire", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%+v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	var got LogRecord
+	server.SetViewerLogWriter(func(writerPeer Peer, record LogRecord) error {
+		if writerPeer.PID != peer.PID || writerPeer.UserSID != peer.UserSID {
+			t.Fatalf("writer peer=%+v", writerPeer)
+		}
+		got = record
+		return nil
+	})
+	payload := leasePayload(t, grant.LeaseID, map[string]any{
+		"level": "debug", "component": "viewer.playback", "event": "first_media",
+		"sessionId": "playback-12345678", "streamName": "gate-live", "transport": "webrtc",
+		"phase": "playing", "attempt": 2, "durationMs": 42, "attemptElapsedMs": 21, "readyState": 4,
+		"reconnectCount": 1, "fallbackCount": 1, "usingFallback": true,
+	})
+	response, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "diagnostic", Type: "diagnostic_event", Payload: payload,
+	})
+	if err != nil || !response.OK || got.Component != "viewer.playback" || got.Event != "first_media" ||
+		got.SessionID != "playback-12345678" || got.StreamName != "gate-live" || got.Attempt != 2 ||
+		got.DurationMS != 42 || got.AttemptElapsedMS != 21 || got.ReadyState != 4 || !got.UsingFallback {
+		t.Fatalf("response=%+v record=%+v err=%v", response, got, err)
+	}
+
+	invalid := leasePayload(t, grant.LeaseID, map[string]any{
+		"level": "debug", "component": "viewer.playback", "event": "first_media",
+		"sessionId": "playback-12345678", "streamName": "rtsp://admin:secret@example/live",
+	})
+	response, err = server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "invalid", Type: "diagnostic_event", Payload: invalid,
+	})
+	if err != nil || response.OK || response.ErrorCode != CodeInvalidRequest {
+		t.Fatalf("invalid response=%+v err=%v", response, err)
+	}
+	if _, err := server.Handle(t.Context(), "connection-b", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "foreign", Type: "diagnostic_event", Payload: payload,
+	}); !errors.Is(err, ErrPeerIdentity) {
+		t.Fatalf("foreign diagnostic error=%v", err)
 	}
 }
 
