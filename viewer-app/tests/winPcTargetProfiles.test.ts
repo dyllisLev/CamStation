@@ -92,6 +92,28 @@ test("the command line has no implicit or arbitrary target path", () => {
     ]),
     /valid only for cleanup/u,
   );
+  assert.equal(
+    parseArguments([
+      "--target", "test-pc", "--mode", "artifact-pull",
+      "--artifact-name", "CamStationViewer-2.0.25.msi",
+      "--expected-sha256", "a".repeat(64),
+    ]).artifactName,
+    "CamStationViewer-2.0.25.msi",
+  );
+  assert.throws(
+    () => parseArguments([
+      "--target", "test-pc", "--mode", "artifact-push",
+      "--artifact-name", "../Viewer.msi", "--expected-sha256", "a".repeat(64),
+    ]),
+    /safe --artifact-name/u,
+  );
+  assert.throws(
+    () => parseArguments([
+      "--target", "test-pc", "--mode", "artifact-push",
+      "--artifact-name", "Viewer.msi", "--expected-sha256", "a".repeat(64),
+    ]),
+    /requires --local-file/u,
+  );
 });
 
 test("Viewer configuration accepts only a strict public four-field document", async () => {
@@ -164,4 +186,7 @@ test("the wrapper pins SSH, proves Windows identities, hashes scripts, and clean
   assert.doesNotMatch(source, /Buffer\.from\(source, "utf16le"\)/u);
   assert.match(source, /\{ input: source, timeout \}/u);
   assert.doesNotMatch(source, /execSync|shell\s*:\s*true/u);
+  assert.match(source, /CAMSTATION_WINDOWS_ARTIFACT_PULLED/u);
+  assert.match(source, /CAMSTATION_WINDOWS_ARTIFACT_PUSHED/u);
+  assert.match(source, /Artifact SHA-256 mismatch/u);
 });

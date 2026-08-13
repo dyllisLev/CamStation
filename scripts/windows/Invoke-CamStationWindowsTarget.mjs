@@ -32,7 +32,12 @@ export const modes = Object.freeze([
   "viewer-configure",
   "cleanup",
   "system",
+  "artifact-pull",
+  "artifact-push",
 ]);
+
+const artifactNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(?:msi|json|sha256)$/u;
+const sha256Pattern = /^[a-f0-9]{64}$/u;
 
 const canonicalScripts = Object.freeze([
   "Install-CamStationWindowsControl.ps1",
@@ -205,6 +210,9 @@ export function parseArguments(argv) {
     ["--script", "script"],
     ["--intent", "intent"],
     ["--configuration", "configuration"],
+    ["--artifact-name", "artifactName"],
+    ["--local-file", "localFile"],
+    ["--expected-sha256", "expectedSha256"],
   ]);
   const booleanFlags = new Map([
     ["--full-audit", "fullAudit"],
@@ -252,6 +260,17 @@ export function parseArguments(argv) {
       fail("system mode requires --intent read-only or --intent change");
     }
   }
+  if (["artifact-pull", "artifact-push"].includes(options.mode)) {
+    if (!options.artifactName || !artifactNamePattern.test(options.artifactName)) {
+      fail(`${options.mode} requires a safe --artifact-name`);
+    }
+    if (!options.expectedSha256 || !sha256Pattern.test(options.expectedSha256)) {
+      fail(`${options.mode} requires lowercase --expected-sha256`);
+    }
+    if (options.mode === "artifact-push" && !options.localFile) {
+      fail("artifact-push requires --local-file");
+    }
+  }
   if (options.archive && options.mode !== "setup") fail("--archive is valid only for setup mode");
   if (options.plan && options.mode !== "plan") fail("--plan is valid only for plan mode");
   if (options.runId && options.mode !== "cleanup") fail("--run-id is valid only for cleanup mode");
@@ -262,6 +281,15 @@ export function parseArguments(argv) {
   if (options.intent && options.mode !== "system") fail("--intent is valid only for system mode");
   if (options.configuration && options.mode !== "viewer-configure") {
     fail("--configuration is valid only for viewer-configure mode");
+  }
+  if (options.artifactName && !["artifact-pull", "artifact-push"].includes(options.mode)) {
+    fail("--artifact-name is valid only for artifact transfer modes");
+  }
+  if (options.localFile && options.mode !== "artifact-push") {
+    fail("--local-file is valid only for artifact-push");
+  }
+  if (options.expectedSha256 && !["artifact-pull", "artifact-push"].includes(options.mode)) {
+    fail("--expected-sha256 is valid only for artifact transfer modes");
   }
   if (options.fullAudit && options.mode !== "status") fail("--full-audit is valid only for status mode");
   return options;
@@ -1124,6 +1152,97 @@ try {
   };
 }
 
+function artifactDirectory(profile) {
+  return windowsJoin(profile.remoteProjectRoot, "work", "windows-control-artifacts");
+}
+
+function localArtifactDirectory(alias) {
+  const root = join(repositoryRoot, "work", "windows-control-artifacts", alias);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return root;
+}
+
+function inspectRemoteArtifact(profile, artifactName, expectedSha256, { createDirectory = false } = {}) {
+  const directory = artifactDirectory(profile);
+  const path = windowsJoin(directory, artifactName);
+  const result = parseLastJson(invokePowerShell(profile, `
+$ErrorActionPreference = "Stop"
+$directory = ${psLiteral(directory)}
+$path = ${psLiteral(path)}
+${createDirectory ? 'New-Item -ItemType Directory -Path $directory -Force | Out-Null' : 'if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw "Artifact directory is missing" }'}
+if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Artifact file is missing" }
+$item = Get-Item -LiteralPath $path -ErrorAction Stop
+if ($item.Length -lt 1 -or $item.Length -gt 536870912) { throw "Artifact size is outside the allowed range" }
+$sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($sha256 -ne ${psLiteral(expectedSha256)}) { throw "Artifact SHA-256 mismatch" }
+[ordered]@{ Result = "WINDOWS_ARTIFACT_VERIFIED"; Name = ${psLiteral(artifactName)}; SizeBytes = [long]$item.Length; SHA256 = $sha256 } | ConvertTo-Json -Compress
+`, { timeout: 180_000 }), "Windows artifact verification");
+  if (result.Result !== "WINDOWS_ARTIFACT_VERIFIED" || result.Name !== artifactName ||
+      result.SHA256 !== expectedSha256 || !Number.isSafeInteger(result.SizeBytes)) {
+    fail("Windows artifact verification result did not match its contract");
+  }
+  return result;
+}
+
+function pullArtifact(alias, profile, artifactName, expectedSha256) {
+  const preflight = getPreflight(profile);
+  requireNoTaskResidue(preflight);
+  const remote = inspectRemoteArtifact(profile, artifactName, expectedSha256);
+  const output = join(localArtifactDirectory(alias), artifactName);
+  if (existsSync(output)) fail("Local artifact output already exists");
+  copyFromRemote(profile, windowsJoin(artifactDirectory(profile), artifactName), output, { timeout: 600_000 });
+  if (sha256File(output) !== expectedSha256 || statSync(output).size !== remote.SizeBytes) {
+    rmSync(output, { force: true });
+    fail("Retrieved artifact did not match the verified remote file");
+  }
+  const post = getPreflight(profile);
+  requireNoTaskResidue(post);
+  return {
+    SchemaVersion: 1, Result: "CAMSTATION_WINDOWS_ARTIFACT_PULLED", Target: alias,
+    Machine: post.Machine, Name: artifactName, SizeBytes: remote.SizeBytes,
+    SHA256: expectedSha256, LocalPath: output,
+  };
+}
+
+function pushArtifact(alias, profile, artifactName, expectedSha256, localFile) {
+  const preflight = getPreflight(profile);
+  requireNoTaskResidue(preflight);
+  const localPath = realpathSync(resolve(localFile));
+  const allowedRoot = realpathSync(localArtifactDirectory(alias));
+  if (!localPath.startsWith(`${allowedRoot}${process.platform === "win32" ? "\\" : "/"}`) ||
+      !statSync(localPath).isFile() || basename(localPath) !== artifactName ||
+      statSync(localPath).size < 1 || statSync(localPath).size > 536870912 ||
+      sha256File(localPath) !== expectedSha256) {
+    fail("Local artifact is outside the verified artifact directory or does not match its contract");
+  }
+  const directory = artifactDirectory(profile);
+  const remotePath = windowsJoin(directory, artifactName);
+  invokePowerShell(profile, `
+$ErrorActionPreference = "Stop"
+$directory = ${psLiteral(directory)}
+$path = ${psLiteral(remotePath)}
+New-Item -ItemType Directory -Path $directory -Force | Out-Null
+if (Test-Path -LiteralPath $path) { throw "Remote artifact already exists" }
+`, { timeout: 30_000 });
+  try {
+    copyToRemote(profile, localPath, remotePath, { timeout: 600_000 });
+    const remote = inspectRemoteArtifact(profile, artifactName, expectedSha256, { createDirectory: true });
+    if (remote.SizeBytes !== statSync(localPath).size) fail("Remote artifact size mismatch");
+  } catch (error) {
+    try {
+      invokePowerShell(profile, `if (Test-Path -LiteralPath ${psLiteral(remotePath)}) { Remove-Item -LiteralPath ${psLiteral(remotePath)} -Force }`, { timeout: 30_000 });
+    } catch {}
+    throw error;
+  }
+  const post = getPreflight(profile);
+  requireNoTaskResidue(post);
+  return {
+    SchemaVersion: 1, Result: "CAMSTATION_WINDOWS_ARTIFACT_PUSHED", Target: alias,
+    Machine: post.Machine, Name: artifactName, SizeBytes: statSync(localPath).size,
+    SHA256: expectedSha256,
+  };
+}
+
 function cleanupControlRun(alias, profile, runId) {
   const preflight = getPreflight(profile);
   if (preflight.SetupTaskCount !== 0 || preflight.ViewerCaptureTaskCount !== 0 ||
@@ -1157,7 +1276,9 @@ function usage() {
   node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode viewer-capture [--viewer-operation Capture|LaunchAndCapture]
   node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode viewer-configure --configuration <viewer-config.json>
   node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode cleanup --run-id <exact-run-id>
-  node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode system --intent <read-only|change> --script <operation.ps1>`;
+  node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode system --intent <read-only|change> --script <operation.ps1>
+  node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode artifact-pull --artifact-name <file> --expected-sha256 <sha256>
+  node scripts/windows/Invoke-CamStationWindowsTarget.mjs --target <alias> --mode artifact-push --artifact-name <file> --expected-sha256 <sha256> --local-file <path>`;
 }
 
 export function execute(options, profiles = loadProfiles()) {
@@ -1172,6 +1293,8 @@ export function execute(options, profiles = loadProfiles()) {
     case "viewer-configure": return configureViewer(options.target, profile, options.configuration);
     case "cleanup": return cleanupControlRun(options.target, profile, options.runId);
     case "system": return runSystemScript(options.target, profile, options.script, options.intent);
+    case "artifact-pull": return pullArtifact(options.target, profile, options.artifactName, options.expectedSha256);
+    case "artifact-push": return pushArtifact(options.target, profile, options.artifactName, options.expectedSha256, options.localFile);
     default: fail("Unsupported mode");
   }
 }

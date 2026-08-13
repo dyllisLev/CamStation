@@ -67,6 +67,10 @@ the setup runbook.
   or create the private client identity without printing it, and delete the exact task/run.
 - `cleanup --run-id <exact-id>`: recover one retained control run; ordinary successful wrapper runs
   download and hash-check evidence, then clean themselves.
+- `artifact-pull` / `artifact-push`: transfer an approved MSI or metadata file only through the
+  pinned target transport and the fixed project `work/windows-control-artifacts` directory. Require
+  an exact safe filename, size bound, and expected SHA-256 before and after transfer; never use an
+  ad hoc `scp` command or transfer camera/configuration data this way.
 
 `scripts/windows/Invoke-CamStationWindowsControl.ps1` remains the only Windows-side interactive
 launcher. It owns active-session discovery, a one-shot `TASK_LOGON_INTERACTIVE_TOKEN` task, UTF-8
