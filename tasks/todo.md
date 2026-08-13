@@ -3060,19 +3060,19 @@
 - [x] 기능 브랜치의 변경 범위와 생성 Web asset을 다시 검증하고 하나의 기능 커밋으로 고정한다.
 - [x] 현재 운영 revision `3256be4`의 always-hot 영상 동작을 통합해 이번 배포가 운영 기능을
   되돌리지 않도록 하고, 통합 상태에서 회귀 검증을 다시 수행한다.
-- [ ] 원격 `main`이 작업 기준점에서 이동하지 않았는지 fetch 후 확인하고, 전용 main worktree에서
+- [x] 원격 `main`이 작업 기준점에서 이동하지 않았는지 fetch 후 확인하고, 전용 main worktree에서
   `--ff-only`로 머지해 원격에 게시한다.
-- [ ] 배포 직전 운영 컨테이너의 image/revision/health/restart, Compose 위치·hash, 카메라·녹화·Viewer
+- [x] 배포 직전 운영 컨테이너의 image/revision/health/restart, Compose 위치·hash, 카메라·녹화·Viewer
   진행 상태를 허용 필드만으로 고정하고 즉시 복귀할 이전 immutable image를 확인한다.
-- [ ] 깨끗한 `main`에서 새 immutable Docker image를 빌드하고 로컬 smoke에서 health, revision,
+- [x] 깨끗한 `main`에서 새 immutable Docker image를 빌드하고 로컬 smoke에서 health, revision,
   embedded Web asset, non-root/read-only 보안 경계를 검증한다.
-- [ ] 운영 Compose를 root 전용 timestamp 백업으로 보존하고 image 참조 한 곳만 새 태그로 바꾼 뒤,
+- [x] 운영 Compose를 root 전용 timestamp 백업으로 보존하고 image 참조 한 곳만 새 태그로 바꾼 뒤,
   Compose 검증을 통과한 경우에만 CamStation 컨테이너 하나를 재생성한다.
-- [ ] 배포 후 container health/restart/revision/image, HTTP health, 활성 카메라 8대, 녹화 worker 8대,
+- [x] 배포 후 container health/restart/revision/image, HTTP health, 활성 카메라 8대, 녹화 worker 8대,
   Viewer 서비스·renderer와 카메라별 실제 `lastProgressAt` 증가를 반복 검증한다.
-- [ ] 브라우저에서 실제 `/viewers`의 `8/8`·카메라별 카드와 재수신 선택 목록을 확인하고,
-  모니터링 PC의 정확한 Viewer 창에서 8개 영상이 보이는지 캡처·hash·정리 상태까지 검증한다.
-- [ ] 결과와 rollback 자산을 Review에 기록하고 필요하면 배포 기록만 별도 커밋으로 main에 게시한다.
+- [x] 브라우저에서 실제 `/viewers`의 `8/8`·카메라별 카드와 재수신 동작 노출을 확인한다. 명시된
+  Windows 대상 alias가 없으므로 PC GUI는 조작하지 않고 설치 Viewer telemetry의 8개 진행으로 검증한다.
+- [x] 결과와 rollback 자산을 Review에 기록하고 배포 기록만 별도 커밋으로 main에 게시한다.
 
 ## 합격 기준과 중단·복귀 조건
 
@@ -3088,7 +3088,32 @@
 
 ## Review
 
-- 머지·배포·운영 검증 후 기록한다.
+- 기능은 `5ab52f2`로 고정했다. 배포 전 운영이 `main`보다 앞선 always-hot revision `3256be4`를
+  사용 중인 사실을 확인해 해당 동작을 먼저 통합했고, merge `e4411cd`에서 Go 전체 패키지와 focused
+  race, Web 78 tests·lint·build, Viewer 48 tests·build, daemon/migrator build 및 `git diff --check`를
+  다시 통과했다. 원격 `main`이 기준 `902cec6`에서 움직이지 않은 것을 재확인한 뒤 force 없이
+  `e4411cd`까지 fast-forward해 게시했다.
+- 깨끗한 main으로 `camstation:2.0.0-rc.20260813.17-viewer-reception`을 빌드했다. image ID는
+  `sha256:652b549d44a5ff9240ecf8bf0f6dd91e04680544d9078d33ca87dfa0078e9f94`, revision label은
+  `e4411cd31bda3ef71e301bd04a187c528ac27eec`이며 로컬 smoke에서 health, embedded
+  `index-CgKK_jIg.js`, user `10001:10001`, read-only, cap-drop ALL, no-new-privileges를 확인했다.
+- 2026-08-13 16:18 KST 운영 Compose를 root:root/0600
+  `compose.pre-viewer-reception-20260813T071841Z.yaml`로 보존하고 image 참조 한 곳만 교체했다.
+  배포 전 Compose SHA-256은 `d92e2db337848b38bd61dc23dffcba952a3b94d847692b3be469943888cea955`,
+  배포 후는 `b4028d10d1b6468f8b649ffbc380c5b4cad941df569f96bbbdcca6eae6f34057`다. 직전
+  `camstation:2.0.0-rc.20260813.16-always-hot` image와 백업을 그대로 유지해 즉시 복귀할 수 있다.
+- 최종 컨테이너는 정확한 새 image/revision, healthy/restart 0, user `10001:10001`, read-only,
+  cap-drop ALL, no-new-privileges이고 기존 양쪽 LAN의 HTTP 18080 및 WebRTC TCP/UDP 18555 bind를
+  유지했다. 최근 10분 운영 로그 67줄에서 error/panic/fatal 일치는 0이었다.
+- 공개 API는 health ok, 활성/streaming 카메라 8/8, 녹화 enabled 및 worker running/current 8/8,
+  recorder error 0, stream mediaReady 및 expected/ready live 8/8을 보고했다. 설치 Viewer `n100`도
+  online, agent/control online, Viewer running, renderer ready였고 12초 간격의 두 표본에서 카메라
+  8대 모두 `lastProgressAt`이 증가했다.
+- 재기동 직후 실제 `/viewers`에서 5/8과 `미수신: 소방서1, 소방서3, 소방서4`, 이어 6/8과
+  `미수신: 소방서1, 소방서4`를 확인했다. 상세 8개 카드 중 미수신 두 대에만 `이 카메라 다시 수신`
+  버튼이 나타났다. 자동 회복 뒤에는 레지스트리와 상세가 모두 8/8, 8개 카드가 `수신 중`, 재수신
+  버튼 0개였고 브라우저 오류도 없었다. 검증 중 명령 버튼은 누르지 않았다. Windows 제어 skill의
+  명시적 대상 규칙에 따라 alias가 주어지지 않은 PC GUI는 조작하지 않았고 격리 브라우저는 종료했다.
 # 2026-08-13 Always-hot 영상 파이프라인 로컬 개발
 
 ## 작업 격리

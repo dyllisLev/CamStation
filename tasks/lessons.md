@@ -1,5 +1,18 @@
 # Lessons
 
+## 2026-08-13 — 배포 후보는 현재 운영 revision을 먼저 포함한다
+
+- 원격 `main`이 깨끗하고 최신이어도 운영 컨테이너가 아직 main에 없는 검증된 feature revision을
+  실행 중일 수 있다. 새 기능을 main 기준으로만 빌드하면 정상 운영 기능을 되돌리므로, 배포 전에
+  image revision label과 Git ancestry를 대조하고 현재 운영 tree의 동작을 후보에 먼저 통합한다.
+- 운영 revision을 통합한 뒤에는 충돌 파일만 확인하는 것으로 끝내지 않는다. 생성 Web asset을 다시
+  만들고 서버·Web·Viewer 전체 회귀와 focused race를 새 merge tree에서 반복한 뒤에만 main과 image를
+  승격한다.
+- 배포 verifier는 과거 문서의 port나 DTO key를 가정하지 말고 배포 직전 실제 publish bind와 공개
+  응답을 기준선으로 고정한다. Compose는 root 전용 timestamp 백업과 정확한 이전 immutable image를
+  함께 남기고, image 참조 한 곳만 교체하며 health·보안·카메라·녹화·Viewer가 유한 시간 안에 회복되지
+  않으면 같은 transaction에서 원복한다.
+
 ## 2026-08-13 — Viewer 재수신은 현재 설정과 실제 영상 진행을 함께 기준으로 삼는다
 
 - Viewer 카메라 수신 분모는 활성 카메라 설정이고, 한 카메라의 `live`와 `focus`는 별도 두 대가 아니라
