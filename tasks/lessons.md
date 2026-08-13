@@ -9,6 +9,9 @@
   `0 behind / N ahead`인 경우에만 일반 push로 fast-forward하며 force push를 사용하지 않는다.
 - 긴 운영 작업 뒤 dirty worktree를 바로 승격하지 않는다. 변경을 책임별 커밋으로 나누고 전체
   테스트·빌드를 통과시켜 새 세대 브랜치에 먼저 게시한 뒤 release와 `main`을 갱신한다.
+- 브랜치가 새 `main`에 병합됐다는 사실만으로 연결된 worktree까지 지우지 않는다. 각 worktree의
+  tracked/untracked 변경 수와 열린 PR을 먼저 확인하고, dirty 또는 외부 도구가 관리하는 worktree는
+  보존한다. 삭제된 원격을 가리키는 upstream만 해제해 로컬 작업을 손상시키지 않는다.
 
 ## 2026-08-13 — portable 구 Viewer 제거는 실행 파일과 재실행 경로를 따로 고정한다
 

@@ -8,7 +8,7 @@
 - [x] 기존 1.x `main` 커밋을 원격 `archive/camstation-1.x-final` 브랜치와 annotated tag로 보존한다.
 - [x] 준비된 release 브랜치에 최신 2.0을 병합하고 결과 tree가 승인된 2.0 tree와 같은지 확인한다.
 - [x] 원격 `main`을 force push 없이 2.0 release로 fast-forward하고 원격 포인터·포함 관계를 검증한다.
-- [ ] obsolete 작업 브랜치의 삭제 여부를 안전하게 판정하고 최종 보존/정리 상태를 기록한다.
+- [x] obsolete 작업 브랜치의 삭제 여부를 안전하게 판정하고 최종 보존/정리 상태를 기록한다.
 
 ## 검토
 
@@ -22,7 +22,15 @@
   승인된 2.0의 tree는 `d6fcdab094c364aaba1055158a7fc3b5ad75bb12`로 동일하다.
 - 원격 `main`은 force 없이 `21e1e24 -> 3336c0b`로 fast-forward됐다. 재조회에서 기존 1.x와 최신
   2.0이 모두 `main`의 ancestor이고 원격 `main` tree가 승인된 2.0 tree와 같음을 확인했다.
-- obsolete 브랜치 정리는 각 worktree의 dirty 상태와 새 `main` 포함 여부를 확인한 뒤 수행한다.
+- 새 `main` 포함과 열린 PR 0건을 확인한 뒤 원격 `camstation2-initial`, `viewer-mobile-page`,
+  `codex/windows-viewer-session-shortcut`을 원자 삭제했다. 해당 커밋은 모두 `main`에서 도달 가능하다.
+- 로컬 `camstation2-initial`, `viewer-mobile-page`, release 브랜치와 clean release 임시 worktree를
+  정리하고 현재 기본 worktree를 `main`으로 전환했다.
+- `feature/always-hot-video`는 `main` 미병합이며 worktree 변경 2개가 있어 보존했다. prep 브랜치는
+  커밋 자체는 병합됐지만 worktree 변경 24개가 있어 보존하고 삭제된 원격 upstream만 해제했다.
+  Paseo 관리 worktree의 `analyze-viewer-command-features`도 임의 제거하지 않았다.
+- 최종 원격 장기 브랜치는 `main`, `archive/camstation-1.x-final`, 미병합
+  `feature/always-hot-video`만 남긴다. 1.x annotated tag `camstation-1.x-final`도 보존한다.
 
 ---
 
