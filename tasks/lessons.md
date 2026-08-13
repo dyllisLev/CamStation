@@ -1,5 +1,15 @@
 # Lessons
 
+## 2026-08-13 — 제품 세대 `main` 교체는 복구 참조와 tree 동일성을 먼저 고정한다
+
+- 서로 다른 제품 세대의 이력을 합칠 때 기존 `main`을 먼저 원격 archive 브랜치와 annotated tag에
+  같은 커밋으로 고정한다. 그 뒤 두 세대를 parent로 보존하는 release merge를 만들고, release tree가
+  검증한 새 세대 tree와 byte-for-byte 동일한지 확인해야 이력 보존과 제품 교체를 동시에 증명할 수 있다.
+- `main` 갱신 직전에는 원격 포인터를 다시 fetch하고 기존 `main`이 release의 ancestor인지 확인한다.
+  `0 behind / N ahead`인 경우에만 일반 push로 fast-forward하며 force push를 사용하지 않는다.
+- 긴 운영 작업 뒤 dirty worktree를 바로 승격하지 않는다. 변경을 책임별 커밋으로 나누고 전체
+  테스트·빌드를 통과시켜 새 세대 브랜치에 먼저 게시한 뒤 release와 `main`을 갱신한다.
+
 ## 2026-08-13 — portable 구 Viewer 제거는 실행 파일과 재실행 경로를 따로 고정한다
 
 - 구 Viewer가 설치 제품이 아니라 사용자 Desktop의 portable EXE일 수 있고, Startup 바로가기는
