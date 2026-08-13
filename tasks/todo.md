@@ -1,3 +1,667 @@
+# 2026-08-13 CamStation 2.0 `main` 승격 및 브랜치 정리
+
+## 계획
+
+- [x] 현재 워크트리의 완료 변경과 로컬·원격 `main`/`camstation2-initial` 포인터를 감사한다.
+- [ ] 이전 작업의 미커밋 변경을 목적별로 검토하고 테스트한 뒤 2.0 브랜치에 커밋·푸시한다.
+- [ ] Web lint/build, Viewer 테스트/build, Go 전체 테스트/build로 승격 후보를 검증한다.
+- [ ] 기존 1.x `main` 커밋을 원격 `archive/camstation-1.x-final` 브랜치와 annotated tag로 보존한다.
+- [ ] 준비된 release 브랜치에 최신 2.0을 병합하고 결과 tree가 승인된 2.0 tree와 같은지 확인한다.
+- [ ] 원격 `main`을 force push 없이 2.0 release로 fast-forward하고 원격 포인터·포함 관계를 검증한다.
+- [ ] obsolete 작업 브랜치의 삭제 여부를 안전하게 판정하고 최종 보존/정리 상태를 기록한다.
+
+## 검토
+
+- 진행 중.
+
+---
+
+# 2026-08-12 로컬 Docker 2.0 전체 카메라 검증·모니터링 PC 준비
+
+## 2026-08-13 즉시 전환 실행 — 07:43 KST 시작
+
+- [x] 전환 전 로컬·운영·모니터링 PC 기준선과 양쪽 네트워크, rollback 자산을 재확인한다.
+- [x] 로컬 Docker 2.0을 녹화 비활성으로 시작하고 자체 브라우저에서 8대 실제 영상과 레이아웃을
+      확인한다.
+- [x] 사용자 요청에 따라 자동 제어는 Viewer 2.0의 로컬 Docker 192 주소 설정까지만 수행한다.
+      Viewer 1.0 종료와 Viewer 2.0 실행은 사용자가 직접 수행한다.
+- [x] 모니터링 PC가 로컬 2.0으로 서비스되는 동안 운영 1.0 receiver를 종료하고 준비된 운영
+      Docker 2.0을 시작한다.
+- [x] 운영 10·192 직접 주소에서 8대 영상과 WebRTC를 확인한 뒤 nginx/domain을 2.0으로 전환한다.
+- [x] 모니터링 PC Viewer 2.0 주소를 운영 도메인으로 변경하고 8대 전체화면을 확인한다.
+- [x] 운영 Viewer 합격 뒤 로컬 Docker를 종료하고 운영 녹화 파일 증가·30분 rollover를 확인한다.
+- [x] 각 단계의 KST 시각, 로그·캡처·해시, rollback 여부와 최종 상태를 검토 섹션에 기록한다.
+
+### 즉시 전환 최종 검토 — 2026-08-13 09:31 KST
+
+- 모니터링 PC는 Viewer 2.0.25로 업그레이드됐고 기존 config/client ID를 보존했다. 사용자가 Viewer
+  1.0을 종료한 뒤 로컬 Docker에서 8대 영상을 확인했으며, 운영 전환 후에는 서버 주소를
+  `https://cctv2.nuc.hmini.me`로 변경하고 `autoStart=true`로 인계했다.
+- 운영 1.0 backend/backup/go2rtc를 정지한 뒤 Docker `camstation2`를 시작했다. 첫 실행에서 listener
+  검사기의 `ss` 열 선택 오류로 자동 rollback이 한 차례 동작했고, 검사기를 고친 두 번째 실행은
+  09:09:36 KST에 `running/healthy/restart 0`, 카메라 9/활성 8, recorder 8/8로 합격했다.
+- nginx 후보의 기존 loopback upstream은 Docker bind와 맞지 않아 10대역 HTTP bind로 교정했다.
+  graceful reload 직후 구 worker가 한 요청을 처리해 502가 발생한 첫 시도는 symlink를 자동 복구했고,
+  reload convergence를 기다리는 재시도는 09:13:28 KST에 합격했다. HTTP는 HTTPS로 307 이동하며
+  HTTPS health와 `/live`는 정상이다.
+- 운영 직접 브라우저와 도메인 브라우저에서 8개 타일·`8 / 8 online`을 확인했다. 도메인 브라우저는
+  약 32초 뒤 video 8개 모두 `readyState=4`, 재생 중으로 수렴했다.
+- 로컬 Docker를 정지한 뒤 다시 얻은 모니터링 PC 최종 캡처는
+  `work/windows-control-evidence/monitoring-pc/viewer-20260813T002850818Z-f202dc44c37f4182aa2290a85a83839c/viewer-window.png`
+  이며 SHA-256은 `e3513d306c175464dbacf6206e9b260a499cf16dfcc1a23e5603d22eeb127296`다.
+  실제 1/8 레이아웃의 영상 8개와 우측 `8 / 8 online`을 직접 확인했다. `소방서4`는 primary transport
+  연결 제한 뒤 같은 카메라의 focus/MSE 대체 스트림으로 재생 중이며 영상 단절은 없다.
+- Viewer 설정 전환은 기존 client ID를 보존했고 Service `Running/Auto`, Viewer 1.0 process 0,
+  Viewer 2.0 process 4/session 1, MSI 2.0.25로 감사됐다. 일회성 Windows task/run 잔여물은 0이다.
+- recorder는 활성, 30분, 700GB이고 worker 8/8 running이다. 열린 녹화 파일 8개는 5초 표본에서
+  동일 inode 모두 증가했다. 09:30:24 KST의 30분 벽시계 경계에서 기존 8개 inode가 모두 교체됐고,
+  1MiB보다 큰 완료 파일 8개(합계 1,461,211,303 bytes)가 새로 생성됐다. 뒤이어 열린 새 파일 8개도
+  5초 표본에서 모두 증가했으며 recorder 8/8 running을 유지했다.
+- 모니터링 PC의 운영 연결 합격 후 로컬 검증 Docker는 compose stop으로 `exited/0`이 됐고 데이터는
+  보존했다. 운영 Docker는 무중단으로 `restart: unless-stopped`에 맞췄고, 1.0 세 unit은 설치·설정을
+  보존한 채 disabled/inactive로 전환했다. rollback용 compose 백업과 1.0 unit은 삭제하지 않았다.
+
+### Viewer 2.0 로컬 연결 실패 진단
+
+- [x] 모니터링 PC의 Viewer/Service 프로세스와 최근 Windows crash 이벤트를 읽기 전용으로 확인한다.
+- [x] Viewer Service의 관리 로그와 로컬 Docker의 Viewer 등록·HTTP/WebSocket 로그를 같은 시각축으로
+      대조한다.
+- [x] 실제 종료인지 설정 화면 전환인지, 서버 연결 실패인지, lease 충돌인지 원인을 판정한다.
+- [x] 원인 판정 전에는 Viewer 재실행·설정 재변경·운영 서버 전환을 수행하지 않는다.
+
+#### 연결 실패 진단 검토
+
+- Viewer 2.0과 Service는 종료·충돌하지 않았다. Viewer browser/renderer/GPU/utility와 Service가 계속
+  실행 중이고 Viewer 관련 crash event/dump도 없었다. 실제 창 캡처는 새 주소
+  `192.168.0.154:18080`이 저장된 연결 설정 화면을 보여 주었다.
+- 07:56:13~07:56:31 KST 로컬 Docker 로그에서 8대 WebRTC 시도와 WebSocket open은 확인됐지만
+  `playing`/첫 media 성공 전에 페이지가 다시 로드됐다. 재시도는 07:56:26, 28, 30 KST에 반복됐다.
+- 모니터링 PC renderer는 `192.168.0.154:18080`에 established 연결을 유지하지만 Viewer Service는
+  변경 전 `192.168.0.172:18080`에 `SynSent`를 반복했다. 새 로컬 HTTP health와 WebRTC 18555 TCP,
+  UDP route는 모두 `192.168.0.13` source로 정상이다. 로컬 `/api/viewers`가 빈 배열인 것도 Service가
+  새 서버에 heartbeat하지 못한 상태와 일치한다.
+- 원인은 설정 저장 후 실행 중인 Service control loop가 새 구성을 다시 읽지 않는 결함이다.
+  Electron은 저장 응답의 새 URL로 즉시 live를 열지만 Service는 시작 시 캡처한 이전 URL로 재접속을
+  계속해 connection을 `degraded`로 유지한다. Viewer 재연결 경로는 이 상태를 읽으면 setup 화면을
+  선택하므로 사용자가 본 `잠깐 live -> 서버 입력 화면` 전이가 발생한다.
+- 진단 중 Viewer/Service 재시작, 설정 재변경, 운영 전환은 하지 않았다. 연결 버튼 반복만으로는
+  Service의 고정된 이전 URL이 바뀌지 않는다.
+
+### Viewer 2.0 설정 hot-reload 수정·배포
+
+- [x] 설정 commit 뒤 실행 중인 Service control loop가 취소되고 새 `serverUrl`로 재시작되는 실패
+      재현 테스트를 먼저 추가한다.
+- [x] config-change 신호를 Service lifecycle에 최소 범위로 연결하고 종료·동시 변경·재접속 경계를
+      테스트한다.
+- [x] Viewer가 저장 직후 잠깐 live를 연 뒤 degraded 상태로 setup에 복귀하지 않도록 상태 전이를
+      회귀 테스트한다.
+- [x] Go/Viewer 전체 테스트와 빌드, diff/비밀정보 검사를 통과시킨다.
+- [x] 새 immutable Viewer MSI를 Windows 빌드 호스트에서 만들고 version/ProductCode/UpgradeCode,
+      파일 수, SHA-256과 unsigned 내부 배포 경계를 확인한다.
+- [x] 테스트 PC와 모니터링 PC 사이의 MSI 전달을 임의 SSH/SCP가 아니라 대상·파일명·크기·SHA-256을
+      전후 검증하는 표준 artifact pull/push 경로로 고정하고 관련 테스트를 통과시킨다.
+- [x] 모니터링 PC에 정확한 MSI만 업그레이드하고 기존 config/client ID와 Viewer 1.0 안전망을 보존한다.
+- [x] 모니터링 PC에서 Service가 새 로컬 주소로 heartbeat하고 Viewer 2.0이 8대 live를 유지하는지
+      구조화 로그·서버 등록·정확한 Viewer 창 캡처로 확인한다.
+- [ ] 실패 시 새 Viewer 2.0만 닫고 이전 MSI 또는 Viewer 1.0 화면으로 복구하며 결과를 기록한다.
+
+#### 수정 검토
+
+- 실패 재현 테스트는 구현 전 Service control reload와 live 진입 시 reconnect timer 정리에서 각각
+  실패했고, 구현 후 모두 통과했다.
+- 수정 revision은 `448bee922b440c4a129e3d0efdc0d7c97d5ced5e`이며 Viewer 관련 5개 파일만
+  커밋했다. 기존 camera import·전환 문서의 미커밋 변경은 포함하지 않았다.
+- Service race test, Go 전체 패키지, Web 64개, Viewer 48개, Web lint/build와 Viewer build가
+  통과했다.
+- 모니터링 PC는 target/session/driver/task/script parity Status가 통과했고 Viewer Service는 계속
+  Running이다. MSI 빌드용 `test-pc`는 현재 대상 사용자의 Explorer가 0개라 표준 target preflight가
+  fail-closed 되었으며, 우회 빌드·모니터링 PC 빌드·설치 파일 직접 덮어쓰기는 수행하지 않았다.
+
+### Viewer 2.0 설치본 동일성 확인
+
+- [x] 테스트 PC와 모니터링 PC의 설치 제품/파일 버전과 Viewer·Service 핵심 SHA-256을 조회한다.
+- [x] 두 PC의 `C:\Program Files\CamStation Viewer` 전체 파일 manifest SHA-256을 비교한다.
+- [x] 테스트 PC에서 실영상 검증한 최종 설치본과 byte-for-byte 동일한지 판정한 뒤 연결 실패 진단에
+      반영한다. 확인 중 프로그램 실행·종료·재설치는 하지 않는다.
+
+#### 설치본 동일성 검토
+
+- 두 PC 모두 Windows Installer 표시 버전 `2.0.24`, ProductCode
+  `{3C8F9398-58AD-4F51-A77A-D8E612720CC8}`이다.
+- 현재 MSI 소유 runtime 76개는 상대 경로·크기·SHA-256이 모두 일치했다. 핵심 SHA-256은 Viewer
+  `9f1684db...2140bd`, Service `b8d84276...374245`, `app.asar`
+  `0cfb6489...30f136`으로 동일하다.
+- 모니터링 PC의 설치 root에만 구 bootstrap 세대의 비소유 잔여물
+  `CamStationViewerBootstrap.exe`와 `current.json`이 있다. 두 파일의 합계가 정확히 전체 file count
+  `78-76` 및 byte 차이를 설명하며, 현재 Viewer 2.0 프로세스와 Service는 표준 MSI 경로의 직접
+  실행 파일을 사용한다. 따라서 연결 실패는 다른/구형 Viewer runtime 때문이 아니다.
+- 테스트 PC는 현재 대화형 Explorer가 없어 일반 GUI preflight가 fail-closed 되었으므로, 고정 SSH
+  host key·전용 관리 계정과 machine/identity/hash 검증을 유지한 읽기 전용 설치 감사만 수행했다.
+  임시 감사 파일은 제거됐고 두 PC의 Viewer 실행·종료·설정은 변경하지 않았다.
+
+실행 중 한 gate라도 실패하면 다음 단계로 진행하지 않고
+[최소중단 전환 계획](../docs/2026-08-12_camstation2-simple-cutover-plan.md)의 해당 복구 경로를 따른다.
+
+## 낮 시간 최소중단 전환 순서 — 고정
+
+- [x] 실행 순서를 `로컬 Docker 자체 브라우저 8대 확인 → Viewer 1.0 종료 후 모니터링 PC의 Viewer
+      2.0을 로컬 Docker에 연결 → 운영 1.0 종료 및 Docker 2.0 시작 → 운영 직접 브라우저 확인 →
+      Viewer 2.0 주소를 운영 서버로 변경·재시작`으로 고정한다.
+- [x] 로컬 Compose가 HTTP `10.0.0.16:18080`·`192.168.0.154:18080`과 WebRTC
+      `10.0.0.16:18555`·`192.168.0.154:18555` TCP+UDP를 모두 공개하는지 확인한다.
+- [x] 운영 Compose가 HTTP `10.0.0.26:18080`·`192.168.0.160:18080`과 WebRTC
+      `10.0.0.26:18555`·`192.168.0.160:18555` TCP+UDP를 모두 공개하는지 확인한다.
+- [x] 로컬은 녹화 비활성, 운영은 녹화 활성·30분 세그먼트이며 운영 `camstation2`가 검증 DB와
+      이미지로 `Created` 상태인지 확인한다.
+- [x] 로컬 Docker를 시작해 브라우저에서 8대 실제 영상과 동일 8타일 레이아웃을 다시 확인한다.
+- [x] 모니터링 PC의 Viewer 1.0을 종료하고 Viewer 2.0을 로컬 `192.168.0.154`에 연결해 8대
+      전체화면을 확인한다. 이후 모니터링 서비스는 로컬 Docker 2.0으로 계속 유지한다.
+- [x] 모니터링 PC가 로컬 Viewer 2.0으로 안정적으로 서비스 중인 상태에서 운영 1.0 receiver를
+      종료한 뒤 준비된 Docker 2.0만 시작한다.
+- [x] 운영 직접 주소에서 8대와 양쪽 HTTP/WebRTC를 확인한 뒤 nginx/domain을 2.0으로 전환한다.
+- [x] 운영 브라우저 검증 뒤 모니터링 PC의 기존 Viewer 2.0 주소를 운영 도메인으로 변경하고
+      8대 전체화면을 확인한 뒤 로컬 Docker를 종료한다.
+- [x] 화면 복구 뒤 recorder 8개, 열린 파일 증가와 30분 rollover를 확인한다.
+
+상세 실행·90초 복구 기준은
+[최소중단 전환 계획](../docs/2026-08-12_camstation2-simple-cutover-plan.md)을 따른다. 운영 1.0과
+운영 Docker 2.0은 같은 출발 IP이므로 절대 동시에 카메라를 수신하지 않는다. 로컬 개발 Docker는
+다른 출발 IP이므로 운영 1.0을 유지한 채 사전 검증한다.
+
+## Paseo 예약 전환 — 2026-08-13 01:00 KST
+
+- [x] 예약 시각을 `2026-08-13 01:00 Asia/Seoul`로 절대 고정한다.
+- [x] 서버·nginx·도메인·모니터링 PC를 read-only 사전 확인하고 현재 전환 입력과 rollback 자산을
+      확인한다.
+- [x] 서버 direct browser → nginx/domain → monitoring Viewer 2.0 → 30분 rollover 순서와 모든 단계의
+      full rollback을 포함한 일회성 Paseo prompt를 준비한다.
+- [x] 인증된 Paseo MCP로 cron `0 1 13 8 *`, timezone `Asia/Seoul`, max-runs 1을 등록하고
+      schedule ID·nextRunAt·prompt/cwd/provider를 재조회한다.
+- [ ] 실행 후 Paseo 로그에서 `CUTOVER_COMPLETE` 또는 rollback 결과와 증거 SHA를 확인한다.
+
+## Paseo 예약 등록 검토
+
+- 실행 프롬프트는 `work/paseo-cutover-20260813/prompt.md`에 준비했고 SHA-256은
+  `b49cd6b022eed7deb42ef9f7601de161294b970f1d776b6576010af69e11b2f1`이다. 전환·검증·전체
+  rollback과 최종 결과 marker를 포함하며 필수 문구 검사를 통과했다.
+- 예약 계약은 cron `0 1 13 8 *`, timezone `Asia/Seoul`, max-runs `1`, cwd
+  `/workspace/CamStation`, provider `codex`로 고정했다.
+- CLI에는 평문 인증값이 없었으나 현재 Paseo 세션에 주입된 인증 MCP를 사용해 daemon password나
+  설정을 변경하지 않고 등록했다. schedule ID는 `8c1a18df`, 상태는 `active`, nextRunAt은
+  `2026-08-12T16:00:00Z` = `2026-08-13 01:00 KST`, max-runs는 `1`, 만료는
+  `2026-08-13 10:19:39 KST`다.
+- 독립 `inspect_schedule` 재조회에서 cwd `/workspace/CamStation`, isolation `local`, provider/model
+  `codex/gpt-5.6-sol`, mode `full-access`, thinking `max`, plan mode, 원본 prompt, 실행 이력 0건을
+  확인했다.
+
+
+## 현재 실행 범위
+
+- [x] 운영 서버의 `camstation2-canary`만 정상 정지하고 기존 1.0 서비스·카메라 수신은 유지한다.
+- [x] 현재 1.0 전체화면과 camera `9/8/1`, layout `1/8` online snapshot을 보존한다.
+- [x] legacy 설정·이력은 승계하지 않고 camera 연결 graph와 layout만 fresh 2.0 DB로 가져온다.
+- [x] 별도 IP를 사용하는 로컬 Docker 2.0을 녹화 비활성(`CAMSTATION_RECORDING_ENABLED=false`,
+      recorder 0)으로 기동해 활성 카메라 8대의 실제 live 수신을 확인한다.
+- [x] 로컬 브라우저에서 현재 1.0과 동일한 8타일 레이아웃과 영상 8개 실제 재생을 확인한다.
+- [x] 모니터링 PC의 Viewer 설정·실행 상태는 변경하지 않고 운영 1.0도 유지한다.
+
+## 운영 Docker stopped-stage 준비
+
+- [x] 로컬 브라우저에서 8대 live·동일 레이아웃을 확인한 현재 2.0 컨테이너를 정상 정지하고,
+      그 승인된 DB를 SQLite 일관성·해시 확인 후 그대로 운영에 사용한다. 다시 import해 별도 DB를
+      만들지 않는다.
+- [x] 운영 서버의 카나리와 분리된 production 전용 deploy/state/media 경로를 만들고, 검증한 `.12`
+      이미지 ID, 양쪽 LAN HTTP/WebRTC, 운영 녹화 활성 정책을 고정한 Compose를 root 전용으로 배치한다.
+- [x] Compose render, DB SHA-256·SQLite quick-check, 파일 소유권과 경로를 검증한다.
+- [x] 기존 중지된 카나리 컨테이너·전용 DB/media/deploy 경로를 정확히 제거하고, 새 최종 2.0
+      컨테이너는 `docker compose create`까지만 수행한다.
+- [x] 새 컨테이너가 `Created`이고 PID·포트 bind·카메라 연결·녹화가 0이며, 기존 1.0은
+      active/enabled이고 기존 포트 소유권을 유지하는지 최종 확인한다.
+- [x] 운영 staging manifest에 이미지 ID·DB/Compose 해시와 롤백 경계를 기록하고 검토 결과를 남긴다.
+
+## 운영 Docker stopped-stage 검토
+
+- 로컬 검증 컨테이너는 정상 종료(exit 0)했고, 승인 DB를 다시 변환하지 않고 그대로 배치했다.
+  DB SHA-256은 `7c60dd8a8a23dafb4eabf6d0893bfed95010deeebb47921b1143c7252b7caa96`이다.
+- 운영 DB는 SQLite quick-check `ok`, camera `9/8/1`, `소방서2` 비활성, recording stream 9,
+  layout `1/8`, 정책 `30분/30일/700GB`, recording segment 0을 확인했다.
+- 기존 `camstation2-canary` 컨테이너·네트워크와 전용 deploy/state/media 경로는 사용자 승인에 따라
+  삭제했다. 카나리 데이터는 복구할 수 없지만 검증 이미지와 로컬 승인 DB, 기존 1.0 원본은 보존했다.
+- 최종 Compose는 `/opt/camstation2/docker-production`, state는
+  `/var/lib/camstation2-production/data`, media는 `/mnt/hdd/camstation2-production`에 분리했다.
+  Compose SHA-256은 `9a7eab5fb167004cf06cc64e737c0c24d619d09145b98cb69ad5802dda970880`이다.
+- 최종 컨테이너 `camstation2`는 `created`, PID 0, start timestamp 없음, restart `no`, network endpoint
+  0이다. 10·192 대역용 18080/18555 TCP·UDP mapping은 구성됐지만 listener는 0이며 녹화 파일도 0이다.
+- 기존 1.0 핵심 서비스는 모두 active/enabled이고 PID `248/326/247/396/246`이 작업 전후 동일하다.
+  모니터링 PC는 변경하지 않았다.
+
+## 금지 경계
+
+- 운영 1.0 서비스·DB·카메라 설정·Viewer 1.0을 중지하거나 변경하지 않는다.
+- 현재 단계에서 production Docker 전환, nginx handoff 또는 운영 Viewer 자동시작 인계를 하지 않는다.
+- 운영 카나리 DB를 로컬 전체 카메라 DB나 최종 운영 DB로 재사용하지 않는다.
+- 로컬 검증 중에는 녹화 파일을 생성하지 않는다. 운영 이관 때만 운영 저장경로·녹화 정책을 별도로
+  적용한다.
+
+---
+
+# 2026-08-12 CamStation 1.0 → Docker 2.0 단순 전환 계획 기록
+
+## 고정된 범위
+
+- [x] 현재 1.0 전체화면을 기준 캡처로 보관한다.
+- [x] 카메라 연결정보 `9대/활성 8대/소방서2 비활성`과 현재 8타일 레이아웃 원본을 안전한 온라인 snapshot으로 보존한다.
+- [ ] fresh 2.0 DB에 위 두 항목만 반영하고 오프라인 무결성을 확인한다.
+- [ ] 최종 Docker 2.0과 Viewer 2.0을 실행하지 않은 상태로 준비한다.
+- [ ] 전환 시 Viewer/서버 1.0을 내린 뒤 Docker/Viewer 2.0을 올린다.
+- [ ] 처음 수행하는 2.0 실제 연결 시험에서 동일한 전체화면 8대 라이브를 확인한다.
+- [ ] 실패 시 Viewer/Docker 2.0을 내리고 보존된 서버/Viewer 1.0을 다시 올린다.
+
+상세 순서는 [단순 전환 계획](../docs/2026-08-12_camstation2-simple-cutover-plan.md)을 따른다.
+운영 서버의 1.0과 운영 Docker 2.0은 같은 출발 IP이므로 동시에 카메라를 수신하지 않는다. 로컬
+개발 Docker는 다른 출발 IP이므로 운영 1.0을 유지한 채 사전 수신 시험을 수행한다. 기준 화면 캡처는
+사전에 한 번만 수행한다.
+
+## 검토
+
+- 기준 전체화면은 2560×1440 PNG로 보관했다. 8대 모두 live이고 현재 1.0 레이아웃이 보인다.
+  PNG SHA-256은 `4233fc1e359bdea59469b041598c32d55d42f88e65118d6637e8579a324fb2a4`다.
+- 1.0 online snapshot은 root 전용 `0600` 파일로 생성했고 SQLite quick-check `ok`, 카메라
+  `9/8/1`, substream 9, layout `1/8`을 확인했다. snapshot SHA-256은
+  `b51abc213db94a1aca1472722865ba435771f558fa0838eecf56269d15178fe0`, secret-safe canonical
+  fingerprint는 `636af019dce2debb7c30e54b49966be9a1afe2679d3f0a30c0d0fa305bc80874`다.
+- 현재 importer는 camera/layout뿐 아니라 legacy settings도 함께 변환하므로 사용자 승인 범위와
+  일치하지 않는다. 기존 candidate DB도 canonical mismatch여서 사용하지 않았다. camera/layout-only
+  import와 명시적인 fresh 2.0 운영 설정 모드를 추가한 뒤 새 target DB를 만들어야 한다.
+- 현재 `.12-canary`는 healthy지만 3-camera/1분/20GB/restart=no 카나리다. production Docker
+  Compose/env/start-stop/rollback 계약은 아직 없고 기존 전환 helper는 systemd 전용이다. 카나리 DB나
+  systemd rollback helper를 최종 Docker 전환에 재사용하지 않는다.
+- 모니터링 PC에는 Viewer 2.0.24와 Viewer Service가 설치돼 있고 UI process 0,
+  `autoStart=false`다. 저장 서버 주소는 최종 주소가 아니므로 production Docker 주소가 확정된 뒤
+  전환 직전에 한 번만 갱신한다. 기존 CamViewer 1.0 process 6개는 그대로 유지했다.
+- 운영 1.0 서비스와 현재 카나리 컨테이너는 중지·재시작·재생성하지 않았고 카메라 연결 시험도
+  수행하지 않았다. Windows 제어 task/worker residue는 0이다.
+
+## 감사 후 고정한 준비 구현
+
+- [ ] `camstation-migrate`에 camera+layout-only source scope와 명시적인 fresh 2.0 recording/backup
+      정책을 추가하고 기존 import 계약은 보존한다.
+- [ ] 새 모드의 synthetic test에서 camera `9/8/1`, layout `1/8`, 과거 recording/backup/viewer 이력
+      0, secret-free manifest, atomic/no-overwrite/idempotent verify를 증명한다.
+- [ ] 카나리와 경로·project name이 분리된 production Docker Compose/env 예제와 Docker 전용
+      start/stop/rollback 절차를 추가한다. 기본 상태에서는 컨테이너를 자동 시작하지 않는다.
+- [ ] Compose render/policy test와 전체 Go/Web/Viewer 검사를 통과시킨 뒤에만 운영 서버의 별도
+      stopped staging 경로에 파일·fresh DB를 준비한다.
+
+---
+
+# 2026-08-12 과거 확대 전환안 — 실행 기준 아님
+
+> 아래 섹션은 범위가 확대됐던 과거 검토 기록이다. 실제 전환에는 문서 맨 위의 단순 전환 계획과
+> [단순 전환 계획](../docs/2026-08-12_camstation2-simple-cutover-plan.md)만 사용한다.
+
+## 목표와 전환 경계
+
+- 소스의 기본 브랜치를 1.x `main`에서 승인된 CamStation 2.0 tree로 교체하되, 두 이력이 공통
+  조상이 없으므로 일반 병합이나 파일 혼합을 하지 않는다. 1.x tip을 보호 branch/tag로 보존하고
+  두 parent를 가진 교체형 merge commit의 결과 tree가 승인된 2.0 tree와 byte-for-byte 같아야 한다.
+- 현재 운영 1.x와 Docker 2.0 카나리, 모니터링 PC의 CamViewer 1.0 화면은 실제 유지보수 창 전까지
+  계속 유지한다. 사전 준비는 inactive/side-by-side 상태로 끝내며 nginx active target, 정식 운영
+  포트, recorder/backup 소유권, Viewer auto-start를 미리 넘기지 않는다.
+- 최종 런타임은 과거 systemd 2.0 초안이 아니라 현재 검증 중인 Docker 2.0을 기준으로 한다. 기존
+  systemd 전환 문서·helper를 그대로 실행하지 않고 Docker compose, state/media mount, WebRTC
+  monitoring-LAN candidate, nginx, restart policy, rollback image/DB를 다시 하나의 계약으로 맞춘다.
+- 모니터링 PC는 Viewer 2.0 목표 장비다. CamViewer 1.0 실행 상태는 전환 전 rollback 기준선일 뿐
+  영구 보존 정책이 아니다. 검증된 Viewer 2.0 MSI를 미리 설치·사전 구성하되 `autoStart=false`와
+  UI 미실행으로 두고, 실제 전환 gate 통과 뒤 1.0 정상 종료 → 2.0 실행/auto-start 인계 순서를 쓴다.
+- 2.0은 fresh DB로 시작한다. 1.x에서 이관하는 것은 카메라 연결 정의와 현재 모니터링 화면의
+  레이아웃이다. 기존 recordings와 녹화 metadata, 일반 settings, backup history/mark, Viewer
+  registry/command/telemetry는 이관하지 않는다. 1.x 원본 DB/media는 rollback 자산으로만 보존하고
+  2.0 DB에 혼합하지 않는다.
+
+## 사전 준비 계획 및 합격 기준
+
+- [ ] Git fetch 후 원격 `main`, 정리 후 깨끗한 `camstation2-initial`, 열린 통합 PR, branch protection,
+      merge-base, commit/tree hash를 기록한다. 현재 작업트리의 미커밋 제어 변경은 사용자가 별도로
+      정리하므로 전환 blocker나 통합 후보 입력으로 취급하지 않는다.
+- [x] `control-camstation-windows-pc`를 테스트 PC/모니터링 PC의 실제 기술 경로에 맞게 완성한다.
+      대상 alias 선택, pinned SSH, hostname/maintenance identity, Explorer session, Cua/UIA, 전체 화면과
+      exact-window 캡처, foreground 입력, PID/HWND 수명주기, artifact hash, exact cleanup을 테스트한다.
+- [x] 위 미커밋 변경을 전체 Viewer 테스트·skill validator·PowerShell 5.1 parser·두 PC `Status`와
+      무해 batch로 검증하고 2.0 브랜치에 독립 커밋·push한다.
+- [ ] 전용 clean worktree에서 `origin/main` 기반 통합 branch를 만들고, `legacy/1.x` 보호 branch와
+      1.x/2.0 release tag 후보를 준비한 뒤 교체형 merge commit을 생성한다. 두 parent와 tree equality,
+      1.x 파일 혼입 0건을 검사한다.
+- [ ] 교체형 merge 후보에서 Go/Web/Viewer 전체 test·lint·build, production policy, release/importer/
+      Docker compose/nginx 파일 존재와 비밀정보 검사를 통과시킨 뒤 review 가능한 원격 branch/PR로
+      게시한다. `main` 갱신은 이 gate가 모두 통과한 뒤 수행한다.
+- [ ] 모니터링 PC의 현재 CamViewer 1.0/Viewer Service/설치 MSI/registry/auto-start/CPU 기준선을
+      수집한다. 운영 서버가 게시한 검증된 Viewer 2.0 artifact의 version, size, SHA-256, signer/API
+      compatibility를 release manifest와 대조한다.
+- [ ] 검증된 Viewer 2.0을 모니터링 PC에 side-by-side/upgrade 설치하고 management service만 준비한다.
+      기존 운영 URL·승인된 display/client identity를 보존하되 `autoStart=false`, 2.0 UI 미실행,
+      CamViewer 1.0 PID/화면 유지, 재부팅 미실행을 합격 조건으로 한다.
+- [ ] 운영 서버에서 1.x, Docker 2.0 카나리, 포트/nginx, camera `9/8/1`, recorder/backup, state/media
+      mount, restart policy, rollback image/DB를 읽기 전용 재확인한다. 카나리 3-camera DB를 최종 DB로
+      오인하지 않고 최신 1.x online snapshot에서 카메라 연결 정의와 승인된 현재 레이아웃만 별도
+      비활성 Docker state로 import/verify한다. 녹화·backup·Viewer 이력 row는 0건이어야 한다.
+- [ ] Docker 최종 release/compose/nginx 전환·rollback 절차를 작성/검증한다. 전환 전에는 정식
+      운영 주소, 1.x 서비스, 1.x DB/media, CamViewer 1.0 startup을 바꾸지 않는다.
+
+## 실제 전환 창 순서
+
+1. 변경 freeze 공지 → 최종 1.x online snapshot·hash, 카메라 연결 정의 `9/8/1`, 현재 운영
+   레이아웃 fingerprint와 모니터링 PC 전체 화면을 확인.
+2. 별도 fresh Docker state에 camera+layout import/verify/idempotency → recordings/settings/
+   backup/Viewer 이력 미이관 확인 → release/compose/env/ACL/hash 고정.
+3. nginx maintenance → 1.x backend/backup/go2rtc 정확한 정상 정지 → 충돌 포트 해제 확인.
+4. Docker 2.0 최종 state/media로 기동 → health, `9/8/1`, 8 live/WebRTC, recorder 8 증가 확인.
+5. nginx 정식 운영 주소를 2.0으로 전환 → 외부 UI/API/WebSocket과 임시 1.0 Viewer 표시 경로 확인.
+6. 새 2.0 녹화의 첫 rollover 8개·재생 가능·운영 backup upload/mark 8/8 확인 후 60분 server soak 통과.
+7. 모니터링 PC CamViewer 1.0 정상 종료 → Viewer 2.0 설정을 정식 URL/`autoStart=true`로 원자 적용
+   → 활성 console에서 실행 → 현재 1.0과 같은 레이아웃의 활성 8대가 모두 라이브 재생되는지와
+   Viewer telemetry/focus/fullscreen/reconnect를 확인.
+8. 승인된 logoff/logon 또는 reboot 1회로 Viewer 2.0 자동 복귀 확인. 1.x 실행 자산은 7일,
+   서버/DB snapshot은 최소 30일 보존한다.
+
+## 즉시 중단·롤백 기준
+
+- 카메라 `9/8/1` 불일치, 활성 live/recorder가 8 미만, 비활성 카메라 자동 활성화, DB quick-check 실패,
+  crash loop, 운영 backup target/mark 불일치, secret 노출은 server rollback 조건이다.
+- 서버 gate가 정상인데 Viewer 2.0 화면/telemetry/auto-start만 실패하면 서버를 되돌리지 않고
+  Viewer 2.0만 중지·`autoStart=false`로 복원한 뒤 CamViewer 1.0을 재실행하는 client-only rollback을 쓴다.
+- runtime rollback은 Git `main` force-push와 분리한다. 운영 복구는 보존한 1.x branch/tag, DB/media,
+  nginx include와 정확한 lifecycle 명령으로 수행한다.
+
+## 검토
+
+- 진행 중. 계획 기준은 정리 후 clean 2.0 branch다. 남은 선행 작업은 교체형 merge 후보 생성,
+  모니터링 PC Viewer artifact 재판정, 그리고 과거 systemd 절차와 현재 Docker 런타임의 정합화다.
+
+---
+
+# 2026-08-12 테스트 PC·모니터링 PC 제어 프로필 정규화
+
+## 목표와 안전 경계
+
+- 기존 프로젝트 스킬 `control-camstation-windows-pc` 하나를 유지하되 `test-pc`와
+  `monitoring-pc`를 명시적으로 선택하는 로컬 프로필 계층을 추가한다. 두 PC를 별도 스킬로
+  복제하지 않는다.
+- host, 유지보수 계정, private-key/known-hosts 경로는 Git에 넣지 않고 ignored local profile에만
+  둔다. tracked 스킬에는 비밀이 아닌 machine/interactive-user/역할 기준선과 선택 절차만 둔다.
+- 모든 원격 동작은 대상 alias → pinned SSH profile → 원격 hostname/maintenance identity → 표준
+  `Status`의 TargetUser/session 검증을 통과한 뒤에만 수행한다. 불일치·모호한 대상·stale script는
+  mutation 전에 fail closed한다.
+
+## 계획 및 합격 기준
+
+- [x] 현재 두 PC의 hostname, maintenance identity, interactive user/session, Viewer/Cua 기준선과
+      canonical script hash를 읽기 전용으로 다시 확인한다.
+- [x] ignored local target profile과 tracked schema/example을 만들고, exact alias 외 입력·중복
+      machine·누락 파일·느슨한 SSH 옵션을 거부하는 deterministic target wrapper를 구현한다.
+- [x] 스킬 본문과 대상별 reference에는 두 PC의 접속·identity/session·display 등 제어 설정만
+      기록한다. Viewer 버전, 전환 단계, 운영 역할은 PC 제어 프로필에 고정하지 않고 요청 시점의
+      관찰 및 별도 배포 절차에서 결정한다.
+- [x] SSH 대상 확정, Windows identity/session preflight, Cua/UIA 호출, background→foreground 입력
+      승격, 전체 데스크톱/정확한 창 캡처 선택, 프로세스 수명주기, artifact hash와 exact cleanup 등
+      재현 가능한 기술 계약을 스킬 reference에 기록한다.
+- [x] CPU 포화 진단, desktop/window capture 차이, UIA `element_index`, UWP host cleanup,
+      foreground escalation 등 실제 제어 실패 교훈을 plan/cleanup 기술 절차에 반영한다.
+- [x] source-policy/target-profile 회귀 테스트, 전체 Viewer 테스트, skill validator, shell/PowerShell
+      parser, local/remote hash parity를 통과시킨다.
+- [x] 두 target alias로 실제 `Status`를 실행해 서로 다른 PC·사용자·기준선이 선택되고 mutation과
+      임시 task/run 없이 종료됨을 증명한 뒤 Review와 lessons를 갱신한다.
+- [x] SSH remote command에는 stdin 전체를 읽는 짧은 고정 PowerShell bootstrap만 두고 실제 source는
+      stdin으로 보내 Windows 명령줄 길이 제한과 인라인 quoting 재발을 막는다.
+- [x] Viewer 버전·이관 범위·전환 순서·clean-state 정책은 범용 PC 제어 스킬과 target reference에서
+      제거하고 독립 운영 문서에 둔다. 스킬에는 명시적으로 요청된 설정을 수행하는 기술 경로만 남긴다.
+
+## 검토
+
+- 기존 프로젝트 스킬 하나를 유지하고 `test-pc`와 `monitoring-pc`를 필수 alias로 만들었다. 실제
+  접속 주소·키·known-hosts 경로는 ignored `work/windows-control-targets.json`에만 두고, tracked
+  example에는 placeholder와 비밀이 아닌 machine/Windows identity/session 계약만 남겼다. Viewer
+  버전이나 전환 정책은 PC 제어 스킬·프로필에서 분리해 독립 운영 문서에만 남겼다.
+- 새 `Invoke-CamStationWindowsTarget.mjs`는 임의 host/중복 옵션을 받지 않는다. public-key-only,
+  strict known-host, exact machine/maintenance identity, Explorer owner/session, WTS session state를
+  검증한다. script sync, pinned setup, elevated system script, Cua/UIA batch, 전체 데스크톱, 정확한
+  Viewer 창, exact cleanup을 같은 target 경계로 실행하며 전송 파일 parser/SHA-256과 증거 파일
+  SHA-256을 확인하고 원격 staging/run을 삭제한다.
+- 일반 Windows 관리와 대화형 GUI를 기술적으로 분리했다. system mode는 1MiB 이하 `.ps1`을
+  hash/parser 검사해 maintenance context에서 실행하고, Plan은 one-shot InteractiveToken task와
+  UTF-8 stdin으로 session 1 Cua daemon을 사용한다. UIA는 fresh PID/window ID/element token,
+  background-first, `verifyWith`, `element_index`, exact PID cleanup을 요구한다. 전체 데스크톱과
+  Viewer exact-window 캡처도 서로 대체하지 않는다.
+- 정확한 Viewer 캡처가 기존 최대화 창을 `SW_RESTORE`하던 부작용을 제거했다. 최대화 상태는
+  보존하고 minimized 창은 배치를 바꾸지 않은 채 실패한다. VM display에서 driver desktop JSON이
+  깨질 때만 interactive GDI fallback을 허용하지만, WTS가 `Disconnected`이면 task를 만들기 전에
+  중단한다.
+- 실제 alias 검증은 `test-pc -> WIN11-DELL\\dyllislev/session 1`, `monitoring-pc ->
+  NUC\\dyllislev/session 1`로 일치했다. 최종 Status는 각각 약 3.76초/2.58초였고 Cua 0.19.3,
+  telemetry off, TCP/firewall 0, control/setup/capture/configure task 0이다. 일곱 canonical Windows script는
+  두 PC 모두 로컬/원격 SHA-256 parity가 참이다.
+- WTS 기준으로 WIN11-DELL session 1은 현재 `Disconnected`라 GUI/capture가 mutation 전에 정확한
+  재연결 안내와 함께 실패했다. NUC session 1은 `Active`이며 표준 전체 화면 캡처가 worker 8.29초에
+  완료됐다. PNG 4,837,036 bytes, SHA-256
+  `5b16cdc9deac4977ead552e8ee2cd010ada723b55bab98d78bb28346ad88e9de`, driver capture 2560x1440을
+  직접 열어 현재 CamViewer 화면과 8개 온라인 영상을 확인했다. `TaskDeleted=true`, remote run 제거,
+  사후 task 0개다.
+- 최종 읽기 전용 상태에서 두 PC의 `CamStationViewerService`는 모두 `Running`이다. 이번 script sync는
+  서비스·Viewer 프로세스·방화벽을 변경하지 않았고 제어 스킬에도 애플리케이션 상태를 고정하지 않았다.
+- 전체 Viewer 테스트 47개, skill validator, Node syntax, 두 PC의 원격 Windows PowerShell 5.1 parser,
+  로컬/원격 hash parity와 `git diff --check`가 통과했다. 검증된 변경 묶음은 2.0 브랜치의 독립
+  커밋으로 원격에 push한다.
+
+---
+
+# 2026-08-12 모니터링 PC 표준 제어 편입
+
+## 범위와 목표
+
+- 사용자가 모니터링 PC도 테스트 PC와 같은 수준으로 화면 확인·일반 PC 조작·Viewer 검증을
+  수행할 수 있도록 명시적으로 승인했다. 테스트 PC 전용 임시 경로를 복제하지 않고 프로젝트
+  스킬 `control-camstation-windows-pc`의 동일 설치기·launcher·worker 계약에 편입한다.
+- 저장된 환경에서 모니터링 PC의 정확한 host, 고정 host key, 유지보수 계정과 현재 로그인된
+  대화형 사용자를 먼저 식별한다. 여러 대상이거나 불일치하면 mutation 전에 멈춘다.
+- 새 외부 원격제어 서비스·listener·방화벽 규칙·저장 비밀번호는 추가하지 않는다. 기존 승인된
+  SSH 경로와 대상 사용자 session의 local Cua daemon만 사용한다.
+
+## 계획 및 합격 기준
+
+- [x] 저장된 운영 자료와 SSH 자산으로 정확한 모니터링 PC 한 대 및 대화형 사용자/session을
+      식별하고 현재 Viewer·네트워크·방화벽·예약 작업 기준선을 수집한다.
+- [x] 기존 고정 SSH 경로가 없으면 프로젝트의 reviewed SSH bootstrap 절차로 host key를 직접
+      확인하고 전용 유지보수 키/계정을 최소 권한 범위로 구성한다.
+- [x] 동일한 pinned Cua 0.19.3 설치기와 프로젝트 control scripts를 동기화하고 파일/archive 해시,
+      Authenticode, telemetry, autostart, session daemon을 검증한다.
+- [x] 정확한 AnyDesk 서비스·프로세스만 종료하고, 종료 유지 여부와 동일 카운터의 CPU 전후 차이를
+      측정해 CPU 여유 회복을 증명한다. SSH·Viewer·Cua는 변경하지 않는다.
+- [x] 표준 `Status`와 무해한 한 batch로 화면 확인·입력·창 종료·사후 assertion·실패 cleanup을
+      실제 검증하고 경과 시간을 기록한다.
+- [x] NUC 제어 지연이 CPU·메모리·디스크 병목인지, SSH/PowerShell·Task Scheduler 지연인지,
+      중단된 진단/제어 프로세스나 일회성 task 잔여물인지 분리해 현재 시점 증거로 판정한다.
+- [x] 임시 task/run/artifact를 정리하고 Viewer 서비스/프로세스, listener, 방화벽, 로그인 session의
+      의도하지 않은 변화가 없음을 최종 감사한다.
+- [x] 로컬 프로젝트 테스트·skill validator·PowerShell parser·원격 script hash parity를 재검증한다.
+- [x] 사용자의 후속 요청대로 특정 프로그램 창이 아닌 session 1 전체 데스크톱을 표준 Plan으로
+      캡처하고, PNG 해시·실제 화면·task/run cleanup 및 Viewer/Cua 연속성을 검증한다.
+
+## 검토
+
+- 2026-08-12 18:37~18:42 KST의 읽기 전용 성능 카운터에서 4개 논리 CPU의 전체 사용률은
+  최초 표본과 후속 3개 표본이 모두 100%였다. 같은 시점의 정규화된 상위 점유율은 CamViewer
+  renderer/GPU/utility 합계 약 50.7%, AnyDesk 27.5%, DWM 9.0%, TiWorker 3.8%, System 2.5%로,
+  제어 응답 지연의 현재 주원인은 CPU 포화다.
+- 사용 가능 메모리는 25,975MB/32,653MB, commit 17%, paging 0/s였고 물리 디스크 사용률·대기열·
+  처리량은 모두 0이었다. 따라서 메모리나 디스크 압박으로 판정할 증거는 없다.
+- CamViewer 6개 프로세스는 main 2, GPU 1, renderer 1, utility 2의 Electron 프로세스 트리이며
+  모든 부모 PID가 존재했다. 중단된 control/setup task, Calculator, 이전 진단 PowerShell은 없고
+  Cua daemon만 session 1에서 예상대로 유지된다. 중단된 acceptance run에는 비어 있는 run
+  directory 하나만 남았으며 실행 중인 task/process나 result/error는 없어 좀비 프로세스가 아니다.
+- 모니터링 PC 편입과 실제 무해한 제어 acceptance는 사용자의 성능 확인 질문을 우선하기 위해
+  중단했으며, 이후 사용자의 요청에 따라 AnyDesk 종료와 acceptance를 재개했다.
+- 2026-08-12 18:48 KST에 정확한 `AnyDesk` 서비스와 설치 경로가 일치하는 프로세스만 종료했다.
+  서비스는 `Stopped`, 프로세스는 0개이고 `StartMode=Auto`는 유지했다. 종료 후 5개 CPU 표본은
+  28~43%, 평균 33.4%였고 최종 3개 표본도 29~44%, 평균 36%였다. 기존 100%에서 약 64~67%
+  여유가 생겼으며 표준 `Status` 내부 시간도 20,288ms에서 2,184~2,286ms로 단축됐다.
+- 계산기 무해 batch를 재개하면서 heterogeneous UIA 요소 중 선택 조건 필드가 없는 항목을 전체
+  오류로 처리하는 `$select` 결함을 발견했다. canonical worker가 해당 항목을 비일치로 건너뛰도록
+  최소 수정하고 회귀 테스트를 추가했으며, 실제 닫기 요소의 정확한 필드 `element_index=4`를 사용했다.
+- 최종 run `20260812T100202505Z-27b15e9f25c04b70abefacd918c304bc`는 session 1에서 14,122ms에
+  완료됐다. 계산기 `0` 화면을 캡처하고 버튼 `1`을 background UIA로 클릭해 `1` 화면을 캡처한 뒤
+  title-bar 버튼으로 닫았으며, 최종 해당 창 0개 assertion과 `TaskDeleted=true`를 통과했다. 두 PNG의
+  원격 기록/재계산 SHA-256은 각각 `d3b39c8d43232c49722c864e4b574fd2417c92420bd9dff27a61f62afc963ab4`,
+  `b0f71140f3e254a604e4453edb4f1ba0064867f5c3090d15c6f5b7da06e134b0`로 일치했고 직접 `0 -> 1`을
+  확인했다.
+- 성공 run과 이전 중단 run은 표준 Cleanup으로 제거했다. 전송 계획, 임시 캡처, 창 없는 계산기 host
+  PID도 정확히 정리했으며 최종 control/setup task, worker, run directory, Calculator/
+  ApplicationFrameHost는 모두 0개다. AnyDesk는 `Stopped`/프로세스 0, Viewer Service는 Running,
+  기존 CamViewer 6개 PID와 Cua PID 1608은 그대로이고 Cua TCP/firewall 수는 0이다.
+- 전체 Viewer 테스트 42개, skill validator, 원격 PowerShell parser 오류 0, installer/launcher/worker
+  로컬·원격 SHA-256 parity와 `git diff --check`가 통과했다. Cua 0.19.3 공식 파일 해시는 일치하며
+  실행 파일 Authenticode 상태는 기존과 같이 `NotSigned`다.
+
+---
+
+# 2026-08-12 WinPC 제어 프로젝트 스킬 정규화
+
+## 문제와 목표
+
+- 기존 `verify-windows-viewer-gui`는 Viewer 캡처에만 최적화되어 있어 같은 Windows 세션 제어를
+  범용 조작마다 다시 조립하게 만든다. 실제 단순 제어에서 예약 작업, PowerShell JSON/UTF-8,
+  Session 0/1, named-pipe 사용자 경계와 사후 검증을 반복 해결하느라 약 51분이 걸렸다.
+- 기존 스킬을 별도 스킬로 복제하지 않고 `control-camstation-windows-pc`로 승격한다. Viewer
+  exact-window 검증은 보존하고, driver 설치·상태 점검·일반 창/화면/입력 제어를 같은 표준 실행
+  경로의 작업 모드로 합친다.
+- 단순 제어의 목표는 이미 설치된 테스트 PC에서 하나의 batch를 한 번 실행해
+  `preflight -> observe -> act -> verify -> cleanup`을 끝내는 것이다. chat에서 인라인 예약 작업이나
+  긴 EncodedCommand를 다시 작성하지 않는다.
+
+## 계획 및 합격 기준
+
+- [x] 기존 스킬·하네스·테스트를 범용 WinPC 제어 기준으로 이름과 트리거를 통합한다.
+- [x] 세션 사용자·UTF-8·stdin JSON·일회성 InteractiveToken task·atomic result·cleanup을 구현한
+      재사용 가능한 batch launcher/worker를 추가한다.
+- [x] Cua driver의 pinned 설치·autostart·telemetry·해시/서명·rollback 상태를 빠르게 감사하는
+      표준 setup 경로를 추가한다.
+- [x] driver call의 종료 코드뿐 아니라 structured effect와 사후 snapshot assertion을 검사하며,
+      임시 artifact와 task가 실패 시에도 남지 않게 한다.
+- [x] 기존 Viewer exact-window 캡처 계약과 범용 제어 계약을 자동 테스트하고 skill validator,
+      PowerShell parser, Viewer 테스트, 실제 WIN11-DELL 무해 batch를 통과시킨다.
+- [x] 실제 warm-control 경과 시간과 최종 listener/firewall/Viewer/cleanup 상태를 기록한다.
+
+## 검토
+
+- 기존 `verify-windows-viewer-gui`를 별도 스킬로 남기지 않고 프로젝트 스킬
+  `control-camstation-windows-pc`로 승격했다. 일반 `Status/Plan/Cleanup`과 Viewer의
+  `ViewerCapture` exact-window 모드가 하나의 권한·세션·증거 규칙을 공유한다.
+- `Invoke-CamStationWindowsControl.ps1` 한 진입점과 interactive worker를 추가했다. 계획의 모든
+  변경 단계는 뒤쪽 관찰 단계와 screenshot 또는 assertion을 요구하며, `$ref`/`$select`, UTF-8
+  stdin JSON, 단일 InteractiveToken task, 100 ms atomic-result polling, 정확한 task/run 정리를
+  실행기가 담당한다. UIA 전체 값은 완료 파일에 저장하지 않고 안전한 요약과 raw-output SHA만
+  남긴다.
+- 실제 정상 batch는 session 1에서 계산기를 실행하고 `0` 화면을 캡처한 뒤 `1`을 UIA로 클릭해
+  `1` 화면을 다시 캡처하고 닫았다. 최신 최종 실행은 13,112 ms였고 `TaskDeleted=true`, 해당
+  window ID `countEquals=0` assertion을 통과했다. PNG SHA-256은 각각
+  `af25e44e3f88b3ee6da04d28ef9567ac97fd0c7d929069717489559b6cf5e536`와
+  `6cdab648753c08fd10230f921188a98a9665bbce359774cd078830164935abe2`이며 실제 화면에서 `0 -> 1`을
+  확인했다.
+- 정상 설치 PC의 기본 `Status`는 전체 관리 cmdlet 열거를 줄여 13,917 ms에서 3,434 ms로
+  단축했다. 최신 정상 batch와 합친 warm 경로는 약 16.5초다. `-FullAudit`는 5,854 ms로 별도
+  유지해 ActiveStore 전체 감사가 필요할 때만 비용을 낸다.
+- 기존 설치에 표준 setup을 실제 재실행해 `InstalledNow=false`, 6개 파일 해시 일치,
+  telemetry 비활성, 정확한 session 1 daemon, vendor autostart, 임시 setup task 0개를 24,524 ms에
+  확인했다. 공식 archive/file 해시는 맞지만 실행 파일 Authenticode는 `NotSigned`다.
+- 의도적으로 존재하지 않는 컨트롤을 선택한 실패 batch도 실행했다. 결과는 명확히 실패했고,
+  `closeWindowOnFailure`가 fresh UIA titlebar로 그 launch의 창을 닫아
+  `RemainingWindowIds=[]`, `Passed=true`를 반환했다. 이어진 조회에서 Calculator 프로세스/창은
+  0개였다. 실패 run/task도 자동 삭제됐다.
+- 프로젝트 스크립트 세 개를 테스트 PC의 canonical repo 경로에 동기화했고 로컬/원격 SHA-256과
+  Windows PowerShell 5.1 parser 오류 0개를 확인했다. 전체 Viewer 테스트 42개, 새/기존 WinPC
+  계약 테스트, skill validator, `git diff --check`가 모두 통과했다.
+- 최종 감사는 TCP listener 27개, 활성 firewall rule 258개로 기존 기준선과 같고 driver TCP와
+  Cua firewall rule은 각각 0개다. control/setup task, worker, run directory, Calculator process는
+  모두 0개이며 Viewer service와 Explorer session 1은 유지됐다. 원격 임시 계획/증거는 삭제했고
+  검증한 로컬 증거 사본은 복구 가능한 휴지통으로 이동했다.
+
+---
+
+# 2026-08-12 WIN11-DELL 범용 데스크톱 제어 구성
+
+## 승인 범위와 설계
+
+- 대상은 사용자가 전 권한을 승인한 테스트 VM `WIN11-DELL` 한 대다. 모니터링 PC와 운영
+  서버는 제외한다.
+- 기존 host-key 고정 SSH를 제어 채널로 유지하고, 로그인된 session 1에는 검증된 Windows
+  computer-use driver만 둔다. 새 인바운드 포트나 외부 공개 원격 데스크톱은 추가하지 않는다.
+- 기본 조작은 UIA/백그라운드 방식으로 하고, Electron처럼 필요한 동작에만 foreground 입력을
+  사용한다. 화면 확인 후 조작하고 다시 확인하는 폐쇄 루프를 합격 기준으로 삼는다.
+
+## 계획 및 합격 기준
+
+- [x] 공식 소스·릴리스·권한 모델·설치/제거 절차를 확인하고 현재 PC 기준선을 수집한다.
+- [x] 버전과 해시를 고정한 driver를 테스트 PC에 설치하고 interactive session 1에서 실행한다.
+- [x] SSH에서 driver CLI를 통해 창 목록과 정확한 화면 캡처를 조회한다.
+- [x] 무해한 실제 조작으로 창 전환, 클릭 또는 단축키, 입력, 스크롤 중 대표 경로를 검증하고
+      각 동작 뒤 화면/상태를 재확인한다.
+- [x] 외부 listener·firewall delta, 잔여 설치 task, Viewer/운영 상태를 감사하고 rollback을 기록한다.
+
+## 검토
+
+- 공식 `cua-driver-rs` 0.19.3 Windows x86_64 릴리스 ZIP을 SHA-256
+  `e48b0117e343cec2577fc12693c741e094f389f8d4aef91e06284960bb03bce1`로 고정해
+  `C:\Program Files\Cua Driver\0.19.3`에 설치했다. 설치된 6개 파일은 공식 ZIP에서 확인한
+  개별 해시와 모두 일치한다. 단, 실행 파일·DLL·Node 모듈의 Authenticode 상태는 모두
+  `NotSigned`이므로 서명된 배포물로 간주하지 않는다.
+- 텔레메트리는 비활성화했고 기본 `standard` 권한 모드를 유지했다. 공급자 로그온 작업
+  `cua-driver-serve`가 `dyllislev`의 `Interactive/Highest`로 등록되어 있으며 driver PID 9400은
+  정확히 session 1에서 실행 중이다. SSH 유지보수 계정은 사용자별 named pipe에 직접 접근하지
+  않고, 매 호출마다 `TASK_LOGON_INTERACTIVE_TOKEN` 일회성 작업으로 실행한 뒤 삭제한다.
+- 실제 전체 화면과 창 목록을 조회했다. 첫 캡처는 1920x1200이었고 Viewer PID 13368의 최대화된
+  `CamStation 2.0`에서 세 카메라가 모두 재생 중이었다. 작업 중 RDP 표시 크기는 1280x768로
+  동적으로 바뀌었지만 해상도 변경 명령이나 세션 재접속 이벤트는 없었고, 마지막 캡처에서도
+  Viewer 최대화와 세 영상 재생이 유지됐다.
+- 무해한 계산기 창을 열어 UIA background click으로 `1`, 검증된 background 실패 후 foreground
+  key 입력으로 `2`를 보내 실제 화면의 `12`를 확인한 뒤 정상 종료했다. 반면 desktop-scope
+  `Win+R`/문자 입력은 CLI가 `effect=unverifiable`로 종료 코드 0을 냈지만 사후 캡처에서 실제
+  변화가 없어 성공으로 인정하지 않았다. 시스템 전역 hotkey는 향후에도 화면 재검증과 별도
+  fallback이 필요하다.
+- 앱 단위 문자 입력은 새 임시 파일만 지정해 연 메모장에서 별도로 증명했다. UIA `type_text`가
+  안전한 검증 문구를 현재 커서에 추가한 화면과 readback을 확인했고, 짧은 action-scoped 저장
+  단축키가 적용되지 않은 뒤에는 정확한 메모장 HWND를 전경에 유지해 `Ctrl+S`를 보냈다. 파일의
+  73자 전체 내용이 일치한 뒤 정상 `WM_CLOSE`로 닫고 Viewer PID 13368을 다시 전경으로 복구했다.
+- 메모장은 Windows가 기존 미저장 복구 탭을 열어 입력 대상으로 사용하지 않았다. 정상
+  `WM_CLOSE`만 session 1에서 보내 저장을 강제하거나 내용을 변경하지 않고 창과 프로세스가
+  종료된 것을 확인했다. 예상 밖으로 UIA provider가 한 차례 문서 값을 반환한 산출물은 즉시
+  삭제했고 이후 문서 UIA 수집을 중단했다.
+- 최종 감사에서 TCP listener 27개와 활성 firewall rule 258개가 기준선과 같고, driver TCP 연결과
+  Cua firewall rule은 각각 0개다. 일회성 작업·계산기·메모장·설치 ZIP·원격/로컬 증거 파일은
+  모두 0개이며 Viewer service는 `Running`이다. 기존 Viewer GUI 스크립트 두 개도 로컬/원격
+  SHA-256이 정확히 일치한다.
+- 롤백은 대상 사용자의 `cua-driver autostart disable`, 실행 중 daemon 종료, 정확한 0.19.3 설치
+  디렉터리와 해당 사용자 `.cua-driver` 설정 제거 순서다. 외부 port·firewall·계정·저장 자격증명은
+  추가하지 않았으므로 별도 네트워크 롤백은 없다.
+
+---
+
+# 2026-08-12 WinPC Viewer 최대화 및 화면 증거
+
+## 범위와 수락 기준
+
+- [x] 승인된 대화형 세션의 기존 Viewer 창에 Windows 최대화 명령 한 번만 적용한다.
+- [x] Windows 최대화 상태와 정확한 Viewer 창 캡처를 확인한다.
+- [x] 일회성 작업·worker·전송용 임시 파일을 모두 정리하고 Viewer 서비스를 보존한다.
+
+## 검토
+
+- session 1의 기존 Viewer PID 13368에만 명령을 적용했으며 새 Viewer를 실행하지 않았다.
+- Windows가 `IsMaximized=true`, 창 크기 `1936x1168`을 반환했고 실제 캡처에서도 최대화된
+  `CamStation 2.0` 창과 정상 재생 중인 세 카메라를 확인했다.
+- 일회성 task/worker와 전송용 임시 파일은 모두 0개이고 Viewer 서비스는 `Running`, Explorer는
+  기존 session 1을 유지한다. Viewer 제품 코드·설정·서버에는 변경이 없다.
+
+---
+
 # CamStation 2.0 Paseo development environment
 
 ## Scope and decisions
@@ -2116,3 +2780,218 @@
 - `./scripts/check-dev.sh`의 Go 전 패키지, Web 64 tests·lint·build, Viewer 38 tests·build,
   daemon build가 통과했다. production policy, `.12` exact Compose JSON render, 변경 문서
   상대 링크 10개, changed-diff secret pattern과 `git diff --check`도 통과했다.
+
+# 2026-08-13 모니터링 Viewer 영상 정지·커넥션 진단
+
+## 범위와 계획
+
+- [x] 기존 작업 변경을 보존하고 `monitoring-pc` 대상·대화형 세션·Viewer Service·제어 경계를 확인한다.
+- [x] Viewer renderer/stream 텔레메트리에서 카메라별 상태, 마지막 프레임 진행, 정지 시간, 재연결 횟수를 수집한다.
+- [x] 같은 시간대 서버 로그와 public stream별 producer/consumer 수를 secret-safe하게 수집한다.
+- [x] Viewer와 서버 증거를 대조해 클라이언트 정지, 서버 producer 장애, 연결 유실을 구분한다.
+- [x] 실패 테스트로 일회성 저빈도 probe가 끝난 뒤 재연결이 영구 정지하는 회귀를 고정한다.
+- [x] 30초 집중 복구와 5분 cooldown은 유지하되, 프레임 진행이 돌아올 때까지 단일 저빈도 probe를 반복한다.
+- [x] Web 테스트·lint·build, Viewer 테스트, Go 전체 테스트·build와 변경 diff를 검증한다.
+- [ ] 배포 전후 서버 연결 수·Viewer 프레임 진행·실제 8타일 화면을 다시 검증하고 Review에 기록한다.
+
+## 합격 기준
+
+- 카메라별로 Viewer 재생 상태와 서버-side consumer 수가 같은 시각 기준으로 대응된다.
+- `playing` 표시에 의존하지 않고 실제 media progress가 계속 증가하는지 판정한다.
+- 멈춘 채널이 있으면 실패 계층과 현재 재연결 동작을 증거로 특정한다.
+- 재연결은 카메라별로 격리되고 cooldown 동안 최대 5분당 한 번만 probe한다.
+- 진단 중 Viewer 설정, 서버 설정, 카메라, 프로세스와 서비스 상태를 변경하지 않는다.
+
+## Review
+
+- 2026-08-13 10:38 KST의 세 반복 표본에서 Viewer는 `online`, renderer는 `ready`였고 8개
+  카메라 모두 `lastProgressAt`이 주기적으로 최신값으로 바뀌었다. 서버는 `live` 7개에 Viewer 1개씩,
+  `소방서4-focus`에 Viewer 1개를 보고했으며 recording consumer 8개는 Viewer 수에서 분리했다.
+- 최근 25분 playback log에서 `소방서4-live`는 session 8개, attempt 19개, setup timeout 12개,
+  playback success 0개였다. 현재 `소방서4-focus` MSE가 대신 실제 재생 중이다. 나머지 카메라는
+  일시 실패 뒤 재생 성공이 있었고, 최근 30분의 non-playback error/warn은 0건이다.
+- 10:41 KST exact Viewer 캡처에서 8개 영상과 `8 / 8 online`을 직접 확인했다. PNG SHA-256은
+  `1ed312b747af08360edf2a2738722c1b77d31235101d6ac061260c923f73654b`이며 task/run은 정리됐다.
+- 근본 결함은 30초 복구 episode 뒤 5분 저빈도 probe를 한 번만 예약한 `lowFrequencyProbeUsed`
+  gate다. 마지막 probe도 실패하면 새 timer가 없어 설정 재연결이나 페이지 reload 전까지 멈췄다.
+- 회귀 테스트는 새 scheduler export 부재로 먼저 실패했고, 구현 후 cooldown마다 정확히 한 probe를
+  다시 예약하고 unmount/새 attempt 때 기존 timer를 취소하도록 통과했다. 정상 타일과 Viewer 전체는
+  재시작하지 않는다.
+- Web 65 tests·lint·build, Viewer 48 tests, 고정 Go 1.25.12 컨테이너의 `go test ./...`, daemon과
+  migration build, `git diff --check`가 통과했다. 수정 커밋은 `d04100e`다.
+- 깨끗한 커밋에서 immutable image
+  `camstation:2.0.0-rc.20260813.13-viewer-recovery`를 빌드했다. image ID는
+  `sha256:5f9eb3ef1bd4fd2760c0678b1c50b9445df7aba8a4a9a691f057d92a15692d90`이며 로컬 스모크
+  컨테이너가 healthy/restart 0과 새 embedded asset을 반환한 뒤 제거됐다. 운영 배포는 아직 하지 않았다.
+
+## 사용자 피드백 반영 — 대체 스트림 자동 원복
+
+- [x] `focus/MSE`는 임시 대체 경로이며 정상 재생 중에도 원본 후보를 다시 확인해야 한다는 제품 계약을 확정한다.
+- [x] 대체 영상은 중단하지 않은 채 1분마다 원본을 백그라운드 probe하고 WebRTC/MSE 실제 media progress를 검증한다.
+- [x] 원본 progress가 확인된 경우에만 해당 타일을 원본으로 전환하고, 실패 시 대체 영상을 유지한 채 다음 probe를 예약한다.
+- [x] 자동 원복·반복 실패·unmount 정리·다른 타일 격리를 실패 우선 테스트로 고정한다.
+- [x] Web tests/lint/build, Viewer tests, Go tests/build와 embedded asset을 검증한다.
+- [ ] 운영 배포 전후 로그·연결 수·Viewer progress와 `소방서4` 화면에서 원본 자동 원복을 확인한다.
+
+### 자동 원복 합격 기준
+
+- 대체 스트림의 실제 프레임 진행 중에는 원본 probe 실패가 현재 화면을 끊거나 `offline`으로 바꾸지 않는다.
+- 원본은 선호 전송 방식부터 반대 전송 방식까지 각각 유한 시간만 확인하며, 실제 영상 시간이 연속 진행해야 복구로 판정한다.
+- 성공 시 `activeStreamName`이 원본으로 돌아가고 `usingFallback=false`가 되며, 실패 시 최대 1분당 한 번의 probe sequence만 실행한다.
+- 원본 전환 뒤 다시 실패하더라도 기존 격리 복구 순서로 대체 스트림을 재사용하고 다른 카메라 타일은 재시작하지 않는다.
+
+### 자동 원복 구현 Review
+
+- 화면 재생과 probe가 서로 다른 판정을 쓰지 않도록 WebRTC/MSE 연결 수명주기를
+  `playbackConnection.ts`로 분리했다. probe는 DOM에 붙인 비표시 전용 video에서 원본을 열고,
+  8초 유한 deadline 안에 video clock이 연속 1초 이상 진행해야만 성공한다.
+- fallback 재생은 그대로 유지한 채 1분 뒤 선호 transport와 반대 transport를 순서대로 확인한다.
+  둘 다 실패하면 상태·영상 연결을 바꾸지 않고 다음 1분 cycle을 예약하며, unmount/재시도/현재
+  fallback stall은 AbortController로 진행 중 probe를 정리한다.
+- 성공할 때만 해당 타일의 원본 후보로 전환하고 recovery episode를 새로 부여한다. 전환 연결이
+  다시 실패하더라도 30초 유한 복구 순서가 원본 transport와 fallback을 다시 시도한다.
+- 실패 우선 테스트는 scheduler/export 부재로 먼저 실패했다. 구현 후 Web 70 tests, lint, production
+  build와 Viewer 48 tests가 통과했고, 고정 Go 1.25.12 컨테이너의 `go test ./...` 및 daemon/migration
+  build가 통과했다. 새 embedded JS는 `index-CSV3hA32.js`다.
+- 2026-08-13 11:32 KST 배포 전 표본에서 `소방서4-focus/MSE`의 `lastProgressAt`은 최신이었고
+  `소방서4-live`는 consumer 0의 on-demand idle이었다. 따라서 배포 후 probe 시점의 일시적인 live
+  consumer와 로그를 함께 관찰해야 하며, 원본이 계속 실패하면 정상적으로 fallback 화면을 유지한다.
+
+# 2026-08-13 클라이언트·브라우저 영상 연결 지연 및 보기 전환 재연결 진단
+
+## 범위와 계획
+
+- [x] 현재 운영 배포 revision, 컨테이너/카메라/녹화/Viewer 상태와 기존 연결 로그를 읽기 전용으로 고정한다.
+- [x] 카메라→go2rtc→recorder와 go2rtc→WebRTC/MSE 클라이언트 경로를 코드와 런타임에서 분리해 확인한다.
+- [x] `/live`, `/viewer`, 설치 Viewer의 transport 우선순위와 다중↔집중 전환 시 컴포넌트·미디어 세션 수명주기를 추적한다.
+- [x] 카메라별 upstream producer 준비/byte 진행, downstream consumer, 협상·첫 media 시간을 동일 조건으로 비교한다.
+- [x] 격리 브라우저에서 `/live`와 `/viewer`의 다중→집중→다중 전환을 재현하고 설치 Viewer 초기 연결은 서버 telemetry와 로그로 대응시킨다.
+- [x] 소방서4가 다른 카메라보다 느린 계층과 원본 `live` 실패/대체 `focus` 성공 차이를 증거로 판정한다.
+- [x] 설정·카메라 상태를 변경하지 않고 결과, 외부 배포 교체, 직접 Windows 조작을 생략한 한계와 후속 수정 범위를 Review에 기록한다.
+
+## 합격 기준
+
+- 카메라→서버가 상시 연결인지, 녹화 consumer 때문에 유지되는지, public live/focus producer가 on-demand인지 구분된다.
+- 보기 전환 때 실제로 폐기·생성되는 브라우저/Viewer 연결과 서버 consumer가 코드 및 런타임 증거로 대응된다.
+- 카메라별 `요청→협상→playing→실제 video progress` 시간이 수치로 비교되고 소방서4 병목 계층이 특정된다.
+- `연결됨` 상태와 실제 프레임 진행을 구분하며, 서버 미송신·클라이언트 재생·카메라 입력 문제 중 하나로 성급히 단정하지 않는다.
+- 진단 중 운영 Viewer 설정, 서버 설정, 카메라, 서비스, 컨테이너를 재시작하거나 변경하지 않는다.
+
+## Review
+
+- 조사 시작 시 운영 구 이미지 revision `723dc3d`에서 HTTPS `/live`를 새로 열자 일반 7대는 첫
+  WebRTC 시도에서 1.02~4.18초에 재생됐지만 소방서4는 `live`의 WebRTC 5초, 재시도 WebRTC 5초,
+  MSE 5초를 연속 소모한 뒤 `focus/MSE`로 전환해 16.80초에 재생됐다.
+- 같은 시각 소방서4 `recording` 입력은 video byte가 계속 증가했고 녹화 worker도 running이었다.
+  반면 별도 `live` 입력은 RTSP producer와 audio packet만 살아 있고 video byte/packet이 반복 표본에서
+  정확히 0이었다. public `live` 변환 producer는 생성되지 못했고 `focus`는 정상 video를 송신했다.
+- 서버 코드는 private `live` 입력을 preload하지만 public `live/focus` 출력은 현재 모두
+  `on_demand`다. 또한 runtime 정상 판정은 producer 메타데이터 존재만 보며 per-track byte 진행을
+  읽지 않는다. 따라서 audio-only로 남은 부분 고장을 `running`으로 오판하고 자동 복구하지 못했다.
+- 조사 중 별도 운영 작업이 컨테이너를 두 차례 재생성했다. 첫 재생성은 같은 구 이미지였지만
+  소방서4 `live` video packet을 즉시 회복시켰고, 두 번째는 최신 revision `491a0f5`를 배포했다.
+  이 전후 비교로 카메라 설정의 영구 오류가 아니라 장시간 살아 있던 입력 relay의 부분 정지와
+  서버-side per-track watchdog 부재가 소방서4 고유 장애의 직접 원인임을 확인했다.
+- 최종 revision에서 HTTPS 브라우저 8대는 첫 WebRTC 시도 1.14~3.28초, 소방서4는 2.30초였다.
+  설치 Viewer의 서버 재시작 직후 cold start는 3.07~11.04초였고 일부 타일은 5초 setup timeout을
+  한 번 넘겼다. 안정화 뒤 Viewer `n100`은 8대 모두 WebRTC `playing`, 최신 progress를 보고했다.
+- 8개 live 출력이 모두 software H.264 변환이고 steady container CPU는 8 vCPU 제한 중
+  531~602%, ffmpeg 30개(녹화 8개 포함)였다. 카메라 입력은 상시여도 on-demand 변환기의 cold start와
+  동시 CPU 경쟁, 5초 setup deadline 때문에 첫 연결이 1~11초 범위로 늘어난다.
+- `/live`는 선택 타일의 일반 `live`만 unmount하고 `focus`를 새로 연다. 다른 7대는 계속 진행했고
+  소방서4 focus 첫 프레임은 4.27초, warm live 복귀는 1.04초였다. `/viewer`는 집중 진입 때 grid
+  8개를 전부 unmount하고, 복귀 때 8개 MSE session을 모두 다시 생성했다. 복귀 첫 프레임은
+  1.37~4.66초, 소방서4는 2.70초였다.
+- 최종 `/viewer` 8타일 화면에서 모두 실제 영상과 녹색 상태를 확인했다. 격리 브라우저만 조작했고
+  Windows 대상 alias가 요청에 명시되지 않아 Viewer PC GUI를 직접 클릭하지 않았다. 운영
+  설정·카메라·서비스·컨테이너 변경은 수행하지 않았으며 위 두 컨테이너 교체는 외부 작업이었다.
+- 진단용 브라우저 탭은 종료했으며 자동화 세션에 열린 탭이 0개임을 확인해 추가 viewer 부하를 제거했다.
+
+# 2026-08-13 cooldown 전체 영상 복구 순환 보완
+
+## 범위와 계획
+
+- [x] 5분 cooldown 뒤 새 복구 episode가 원본 WebRTC/MSE, 대체 MSE, 격리 재구독까지 다시 순회하는 실패 우선 테스트를 추가한다.
+- [x] 일회성 primary terminal probe를 제거하고, 매 cooldown마다 30초로 제한된 새 per-stream 복구 episode를 시작한다.
+- [x] fallback 정상 재생 중 원본 자동 원복 probe와의 역할 분리를 명세에 반영한다.
+- [x] Web tests/lint/build, Viewer tests, Go tests/build와 변경 diff를 검증한다.
+- [x] immutable 이미지를 운영에 배포하고 Viewer를 갱신한 뒤 8개 스트림의 실제 progress·연결 수·로그를 반복 확인한다.
+
+## 합격 기준
+
+- 원본 영상이 장시간 복구되지 않아도 5분마다 해당 타일만 전체 후보를 유한하게 다시 시도한다.
+- 대체 스트림이 실제 재생되면 화면을 유지하면서 1분마다 원본 복구를 별도로 검증하고 성공할 때만 원복한다.
+- 실패 순환은 30초를 넘겨 빠르게 반복하지 않으며 다른 타일이나 Viewer 전체를 재시작하지 않는다.
+- 서버 연결 수만으로 성공 판정하지 않고 각 영상의 `lastProgressAt` 증가를 함께 확인한다.
+
+## Review
+
+- 기존 cooldown timer는 `live/WebRTC`를 terminal attempt로 한 번만 열고 실패 즉시 다시 5분
+  cooldown으로 들어가, 다음 episode에서 `live/MSE`, `focus/MSE`, 격리 재구독을 영구히 건너뛰었다.
+  실패 우선 테스트는 `restartEpisode` 부재로 먼저 실패했고, 추가 관측 테스트는 과거
+  `stallStartedAt`에 episode가 다시 묶여 즉시 cooldown으로 돌아가는 결합도 잡았다.
+- cooldown wake-up은 현재 시각을 새 30초 예산 기준으로 명시하고 단계만 초기화한다. 누적
+  `stalledForMs`는 보존한다. fallback이 이미 진행 중일 때는 기존 화면을 유지하는 별도 1분
+  primary WebRTC/MSE probe가 실제 video-clock 진행을 확인한 뒤에만 원본으로 승격한다.
+- clean commit `01d0f28`에서 Web 71 tests, lint/build, Viewer 48 tests, 고정 Go 1.25.12의 전 패키지
+  테스트와 daemon/migration build가 통과했다. embedded asset은 `index-Br62lnoB.js`다.
+- immutable image `camstation:2.0.0-rc.20260813.15-viewer-full-recovery`의 ID는
+  `sha256:8e3793ac200f7307b965bde3edb5ae3bbd22ee54c40ce4e0f3279d2805dc5a4d`다. 로컬 스모크에서
+  healthy/restart 0, non-root/read-only, revision과 새 asset을 확인했다.
+- 2026-08-13 12:27 KST 운영 배포 후 compose SHA-256은
+  `4e251f4ad4cef0babe0dba6b1d9a605e9e60db24f46b2fc4772f022ce9c6d9fe`다. 배포는 rollback 없이
+  성공했고, 직전 `.14` compose는 root 전용
+  `/opt/camstation2/docker-production/compose.pre-full-recovery-20260813T032755Z.bak`으로 보존했다.
+- Viewer 명령 7 `reload_live`, 초기 cold-start 중 멈춘 한 타일씩 보낸 명령 8 `소방서1-live`,
+  9 `소방서5-live` 격리 재구독은 모두 succeeded였다. Viewer 전체 프로세스나 정상 타일은
+  재시작하지 않았다.
+- 12:32~12:35 KST 반복 표본에서 8개 원본 `*-live`의 `lastProgressAt`이 모두 계속 전진했다.
+  최종 소방서4는 대체 `focus`가 아니라 `소방서4-live/MSE`였고, 서버도 카메라별 원본 live를
+  producer/consumer/viewer `1/1/1`로 보고했다. 12:31:57 KST의 마지막 WebRTC setup timeout 뒤
+  추가 playback warn/error는 없었다. 녹화 worker도 8/8 running/current, error 0이다.
+- 컨테이너는 image/revision 일치, healthy/restart 0, user 10001, read-only,
+  no-new-privileges, cap-drop ALL과 기존 양쪽 LAN HTTP/WebRTC TCP+UDP bind를 유지했다.
+  `monitoring-pc` 최종 status는 NUC/session 1 Active, ViewerService Running, renderer ready,
+  제어·설정·캡처 task 0, driver TCP/firewall 0, script parity 전부 true였다.
+- 최종 구간에는 모든 타일이 원본에서 재생되어 자연 발생한 fallback→primary 승격 이벤트 자체는
+  관측되지 않았다. 자동 승격은 video-clock 검증 회귀 테스트로, cooldown 전체 재순환은 새 실패
+  우선 테스트로 검증했다. NUC가 CPU 포화였던 직전 두 캡처 시도는 SSH timeout이어서 배포 후 새
+  화면 PNG는 확보하지 못했으며, 최종 판정은 Viewer progress·서버 연결 수·playback log를 사용했다.
+
+# 2026-08-13 모니터링 PC Viewer 1.0 제거
+
+## 범위와 계획
+
+- [x] `monitoring-pc`가 NUC/승인된 사용자 세션과 일치하고 제어 task·listener·firewall 잔여가 0인지 확인한다.
+- [x] Viewer 1.0의 정확한 제품 등록, 버전, 실행 파일, PID/창, 자동실행 항목, 서비스·작업·바로가기와 설치 경로를 읽기 전용으로 식별한다.
+- [x] 식별된 Viewer 1.0 창을 정상 종료하고, 정확한 1.0 제품 및 자동실행 자산만 제거한다.
+- [x] Viewer 1.0 프로세스·창·제품 등록·자동실행·서비스·작업·바로가기·설치 파일 잔여가 0인지 검증한다.
+- [x] 현재 Viewer 2.x 제품과 `CamStationViewerService`, Windows-control driver 및 활성 사용자 세션이 보존됐는지 검증한다.
+- [x] 최종 status에서 일회성 task/run 잔여와 Cua listener/firewall 변화가 0인지 확인하고 Review를 기록한다.
+
+## 합격 기준
+
+- Viewer 1.0의 실행 및 재실행 경로가 모두 사라지고 정확한 1.0 설치 자산만 제거된다.
+- Viewer 2.x 제품·서비스·설정과 CamStation Windows-control 인프라는 변경되지 않는다.
+- 제거 전후 대상·세션 identity가 일치하며 제어 task, staging/run, TCP listener, firewall rule 잔여가 0이다.
+
+## Review
+
+- 2026-08-13 12:38~12:44 KST 읽기 전용 감사에서 Viewer 1.0은 설치 제품이나 서비스가 아니라
+  `C:\Users\dyllislev\Desktop\CamViewer.exe`의 portable `CamViewer 1.0.4`로 확인됐다. 파일은
+  71,284,641 bytes, SHA-256
+  `3e9a8b7691224512eef50fd0940ea5b9956cd47bf85e8339e62c73f4fb05c98b`였고 실행 프로세스는 0개였다.
+- 사용자 Startup 폴더에는 SHA-256
+  `40f0a3948a19a3d6c10da490280f0365bb390280c9779d45566ba607d07cb3b0`인 legacy 바로가기 하나가
+  남아 있었고, 1.0 전용 `AppData\Roaming\camviewer`는 reparse point 없이 159 files/23
+  directories/53,815,340 bytes였다. exact executable, shortcut, profile root만 영구 삭제했다.
+- 별도 사후 감사에서 CamViewer executable/process/startup/Run/task/service/profile은 모두 0이었다.
+  Viewer 2.0.25는 Service `Running/Auto`, 동일 PID 2060, session 1 process 4개를 유지했고 설정 및
+  auto-start SHA-256도 각각
+  `da085b9b21138f1d44f7e6e6d6d059023e3e8b7a550d2a0e03843f2b247e8710`,
+  `aeb98a24ada8489b65b37e93a585a12f9c4ef7290fb76a068905c63e01854ae1`로 불변이었다.
+- 실제 Viewer 2.0 창에서 8개 영상과 `8 / 8 online`을 확인했다. PNG는
+  `work/windows-control-evidence/monitoring-pc/viewer-20260813T034426881Z-f0c61cbd2d484231a560bbef4a1073cb/viewer-window.png`,
+  SHA-256 `20e1f6b19eef4acb2d585afd9c20c2cd26f731a6eb8e55cbf1b208a2230b8c4a`다.
+  최종 status는 NUC/session 1 Active, 제어·설정·캡처 task 0, Cua TCP/firewall 0,
+  telemetry disabled였으며 모든 원격 run/staging은 정리됐다. 재부팅·로그오프는 수행하지 않았다.

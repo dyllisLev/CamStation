@@ -1,0 +1,4 @@
+interface:
+  display_name: "CamStation Windows PC Control"
+  short_description: "Verified control and Viewer 2.0 transition for two PCs"
+  default_prompt: "Use $control-camstation-windows-pc to select test-pc or monitoring-pc explicitly, verify its Windows session, perform a controlled action or Viewer 2.0 transition, inspect evidence, and clean up exactly."

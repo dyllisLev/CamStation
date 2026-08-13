@@ -39,6 +39,9 @@ func createCLIFixture(t *testing.T) (string, []string) {
 			t.Fatalf("insert setting: %v", err)
 		}
 	}
+	if _, err := db.Exec(`INSERT INTO layouts VALUES('layout-cli','기본','[{"i":"테스트1","x":0,"y":0,"w":48,"h":48,"minW":8,"minH":8}]',1,48,48,1,1)`); err != nil {
+		t.Fatalf("insert layout: %v", err)
+	}
 	return path, []string{rawURL, username, password, token}
 }
 
@@ -66,6 +69,38 @@ func TestRunRejectsMissingTarget(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), []string{"import", "-source", "snapshot.db"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
+	}
+}
+
+func TestRunCameraLayoutRequiresAndUsesExplicitTargetPolicy(t *testing.T) {
+	t.Parallel()
+	source, forbidden := createCLIFixture(t)
+	var missingOut, missingErr bytes.Buffer
+	missingCode := run(context.Background(), []string{
+		"dry-run", "-source", source, "-scope", "camera-layout",
+	}, &missingOut, &missingErr)
+	if missingCode != 2 || !strings.Contains(missingOut.String(), `"TARGET_POLICY_REQUIRED"`) {
+		t.Fatalf("missing target policy exit=%d stdout=%q stderr=%q", missingCode, missingOut.String(), missingErr.String())
+	}
+
+	target := filepath.Join(t.TempDir(), "camera-layout.db")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"import", "-source", source, "-target", target, "-scope", "camera-layout",
+		"-expect-cameras", "1", "-expect-enabled", "1", "-expect-layouts", "1", "-expect-layout-items", "1",
+		"-target-segment-minutes", "7", "-target-retention-days", "14", "-target-max-storage-gb", "42",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("camera-layout CLI exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, secret := range forbidden {
+		if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
+			t.Fatalf("camera-layout CLI leaked synthetic secret")
+		}
+	}
+	if !strings.Contains(stdout.String(), `"scope": "camera-layout"`) || !strings.Contains(stdout.String(), `"targetStatus": "created"`) ||
+		!strings.Contains(stdout.String(), `"segmentMinutes": 7`) || !strings.Contains(stdout.String(), `"retentionDays": 14`) || !strings.Contains(stdout.String(), `"maxStorageGB": 42`) {
+		t.Fatalf("unexpected camera-layout CLI manifest: %s", stdout.String())
 	}
 }
 

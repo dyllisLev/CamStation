@@ -1,22 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { withAppBase } from "../../app/basePath";
 import {
   reportPlaybackDiagnostic,
   type PlaybackDiagnosticEvent,
 } from "../../app/playbackDiagnosticsApi";
-import { parseMseControlMessage } from "./msePlayback";
+import { openPlaybackConnection, probePlaybackProgress } from "./playbackConnection";
 import {
-  PLAYBACK_COOLDOWN_MS,
   PLAYBACK_SETUP_MS,
   PLAYBACK_STALL_MS,
+  PlaybackPrimaryPromoter,
+  PlaybackProbeScheduler,
   PlaybackRecovery,
   recoveryAttemptPresentation,
   type PlaybackRecoveryStep,
   type PlaybackTransport,
 } from "./playbackRecovery";
-import { inboundVideoReceipt, receiptAdvanced } from "./webrtcReceipt";
-
-const CODECS = ["avc1.640029", "avc1.64002A", "avc1.640033", "mp4a.40.2", "mp4a.40.5", "opus"];
 
 export type PlaybackPhase =
   | "connecting"
@@ -78,20 +75,17 @@ export function useWebRtcMseStream(
     const video: HTMLVideoElement = videoElement;
 
     const recovery = new PlaybackRecovery(candidates);
+    const recoveryProbeScheduler = new PlaybackProbeScheduler();
+    const primaryPromoter = new PlaybackPrimaryPromoter((transport, signal) => (
+      probePlaybackProgress(candidates[0], transport, signal)
+    ));
     const sessionId = newPlaybackSessionId();
     const sessionStartedAt = Date.now();
     let destroyed = false;
     let generation = 0;
-    let ws: WebSocket | null = null;
-    let peer: RTCPeerConnection | null = null;
-    let mediaSource: MediaSource | null = null;
-    let objectURL = "";
+    let closeConnection: (() => void) | null = null;
     let setupTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
-    let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
-    let statsTimer: ReturnType<typeof setInterval> | null = null;
-    let terminalAttempt = false;
-    let lowFrequencyProbeUsed = false;
     let lastVideoTime = -1;
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
@@ -114,6 +108,7 @@ export function useWebRtcMseStream(
         readonly streamName?: string;
         readonly transport?: PlaybackTransport;
         readonly attempt?: number;
+        readonly usingFallback?: boolean;
       } = {},
     ) {
       const now = Date.now();
@@ -129,7 +124,7 @@ export function useWebRtcMseStream(
         attemptElapsedMs: now - attemptStartedAt,
         errorCategory: override.errorCategory ?? "none",
         readyState: video.readyState,
-        usingFallback: streamName !== candidates[0],
+        usingFallback: override.usingFallback ?? streamName !== candidates[0],
         reconnectCount: counts.reconnect,
         fallbackCount: counts.fallback,
       });
@@ -147,46 +142,16 @@ export function useWebRtcMseStream(
     function clearTimers() {
       if (setupTimer) clearTimeout(setupTimer);
       if (stallTimer) clearTimeout(stallTimer);
-      if (cooldownTimer) clearTimeout(cooldownTimer);
-      if (statsTimer) clearInterval(statsTimer);
+      recoveryProbeScheduler.clear();
+      primaryPromoter.stop();
       setupTimer = null;
       stallTimer = null;
-      cooldownTimer = null;
-      statsTimer = null;
     }
 
     function teardownAttempt() {
       clearTimers();
-      if (ws) {
-        ws.onopen = null;
-        ws.onmessage = null;
-        ws.onclose = null;
-        ws.onerror = null;
-        ws.close();
-        ws = null;
-      }
-      if (peer) {
-        peer.ontrack = null;
-        peer.onicecandidate = null;
-        peer.onconnectionstatechange = null;
-        peer.close();
-        peer = null;
-      }
-      if (mediaSource) {
-        try {
-          if (mediaSource.readyState === "open") mediaSource.endOfStream();
-        } catch {
-          // best-effort browser cleanup
-        }
-        mediaSource = null;
-      }
-      if (objectURL) {
-        URL.revokeObjectURL(objectURL);
-        objectURL = "";
-      }
-      video.removeAttribute("src");
-      video.srcObject = null;
-      video.load();
+      closeConnection?.();
+      closeConnection = null;
       lastVideoTime = video.currentTime;
     }
 
@@ -211,7 +176,7 @@ export function useWebRtcMseStream(
       }));
     }
 
-    function enterCooldown(until: number, scheduleProbe = true) {
+    function enterCooldown(until: number) {
       diagnosticPhase = "cooldown";
       emitDiagnostic("episode_exhausted", {
         phase: "cooldown",
@@ -226,18 +191,15 @@ export function useWebRtcMseStream(
         stalledForMs: recovery.stalledForMs(Date.now()),
         errorCategory: "episode_exhausted",
       }));
-      if (scheduleProbe && !lowFrequencyProbeUsed) {
-        lowFrequencyProbeUsed = true;
-        cooldownTimer = setTimeout(() => {
-          cooldownTimer = null;
-          beginAttempt({
-            transport: preferredTransport,
-            streamName: candidates[0],
-            attempt: activeAttempt.attempt + 1,
-            phase: "retrying",
-          }, "episode_exhausted", true);
-        }, Math.max(0, until - Date.now()));
-      }
+      recoveryProbeScheduler.arm(until, () => {
+        recovery.restartEpisode(Date.now());
+        beginAttempt({
+          transport: preferredTransport,
+          streamName: candidates[0],
+          attempt: 1,
+          phase: "retrying",
+        }, "episode_exhausted");
+      });
     }
 
     function advance(step: PlaybackRecoveryStep, errorCategory: PlaybackErrorCategory) {
@@ -279,16 +241,58 @@ export function useWebRtcMseStream(
       recovery.recordFailure(now);
       generation++;
       teardownAttempt();
-      if (terminalAttempt) {
-        enterCooldown(now + PLAYBACK_COOLDOWN_MS, false);
-        return;
-      }
       advance(recovery.nextFailure(now), errorCategory);
     }
 
     function resetStallTimer(token: number) {
       if (stallTimer) clearTimeout(stallTimer);
       stallTimer = setTimeout(() => failAttempt(token, "media_stall"), PLAYBACK_STALL_MS);
+    }
+
+    function ensurePrimaryPromotion() {
+      if (
+        candidates.length < 2
+        || activeAttempt.streamName === candidates[0]
+        || primaryPromoter.active
+      ) return;
+      primaryPromoter.start(preferredTransport, {
+        onProbeStarted: (transport) => {
+          emitDiagnostic("primary_probe_started", {
+            streamName: candidates[0],
+            transport,
+            phase: "fallback",
+            attempt: activeAttempt.attempt + 1,
+            usingFallback: true,
+          });
+        },
+        onProbeFailed: (transport) => {
+          emitDiagnostic("primary_probe_failed", {
+            streamName: candidates[0],
+            transport,
+            phase: "fallback",
+            attempt: activeAttempt.attempt + 1,
+            usingFallback: true,
+          });
+        },
+        onRecovered: (transport) => {
+          if (destroyed || activeAttempt.streamName === candidates[0] || diagnosticPhase !== "playing") return;
+          emitDiagnostic("primary_probe_succeeded", {
+            streamName: candidates[0],
+            transport,
+            phase: "recovering",
+            attempt: activeAttempt.attempt + 1,
+            usingFallback: true,
+          });
+          counts.reconnect++;
+          recovery.resetForPrimaryPromotion();
+          beginAttempt({
+            transport,
+            streamName: candidates[0],
+            attempt: activeAttempt.attempt + 1,
+            phase: "recovering",
+          });
+        },
+      });
     }
 
     function markProgress(token: number) {
@@ -307,9 +311,8 @@ export function useWebRtcMseStream(
         counts.reconnect = 0;
         counts.fallback = 0;
         counts.resubscribe = 0;
-        terminalAttempt = false;
-        lowFrequencyProbeUsed = false;
       }
+      ensurePrimaryPromotion();
       if (now - lastProgressStateAt < 1_000) return;
       lastProgressStateAt = now;
       setPlayback((current) => ({
@@ -335,13 +338,12 @@ export function useWebRtcMseStream(
     function beginAttempt(
       options: AttemptOptions,
       previousError: PlaybackErrorCategory = "none",
-      terminal = false,
     ) {
       if (destroyed) return;
       teardownAttempt();
       const now = Date.now();
       const remainingMs = recovery.remainingMs(now);
-      if (!terminal && remainingMs === 0) {
+      if (remainingMs === 0) {
         recovery.recordFailure(now);
         advance(recovery.nextFailure(now), "episode_exhausted");
         return;
@@ -351,7 +353,6 @@ export function useWebRtcMseStream(
       attemptStartedAt = now;
       diagnosticPhase = options.phase;
       attemptEvents.clear();
-      terminalAttempt = terminal;
       publishAttempt(options, previousError);
       emitDiagnostic("attempt_started", {
         phase: options.phase,
@@ -359,189 +360,24 @@ export function useWebRtcMseStream(
       });
       setupTimer = setTimeout(
         () => failAttempt(token, "setup_timeout"),
-        terminal ? PLAYBACK_SETUP_MS : recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
+        recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
       );
-      if (options.transport === "webrtc") connectWebRTC(token, options.streamName);
-      else connectMSE(token, options.streamName);
-    }
-
-    function connectWebRTC(token: number, streamName: string) {
-      if (!("RTCPeerConnection" in window)) {
-        queueMicrotask(() => failAttempt(token, "unsupported"));
-        return;
-      }
-      const connection = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
-      peer = connection;
-      connection.addTransceiver("video", { direction: "recvonly" });
-      connection.addTransceiver("audio", { direction: "recvonly" });
-      connection.ontrack = (event) => {
-        if (destroyed || token !== generation) return;
-        emitAttemptDiagnosticOnce("first_track");
-        const media = video.srcObject instanceof MediaStream ? video.srcObject : new MediaStream();
-        if (!media.getTracks().some((track) => track.id === event.track.id)) media.addTrack(event.track);
-        video.srcObject = media;
-        void video.play().catch(() => undefined);
-      };
-      connection.onicecandidate = (event) => {
-        if (token !== generation || !ws || ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({ type: "webrtc/candidate", value: event.candidate?.candidate ?? "" }));
-      };
-      connection.onconnectionstatechange = () => {
-        if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
-          failAttempt(token, "media");
-        }
-      };
-
-      let statsPending = false;
-      let previousReceipt = { bytesReceived: 0, packetsReceived: 0 };
-      statsTimer = setInterval(async () => {
-        if (statsPending || destroyed || token !== generation) return;
-        statsPending = true;
-        try {
-          const receipt = inboundVideoReceipt(await connection.getStats());
-          if (token !== generation) return;
-          if (receiptAdvanced(previousReceipt, receipt)) {
-            const now = Date.now();
-            emitAttemptDiagnosticOnce("first_media");
-            setPlayback((current) => ({ ...current, lastBinaryAt: now, readyState: video.readyState }));
-          }
-          previousReceipt = receipt;
-        } catch {
-          // Setup and media-progress deadlines remain authoritative.
-        } finally {
-          statsPending = false;
-        }
-      }, 1_000);
-
-      ws = openPlayerSocket(streamName);
-      ws.onopen = async () => {
-        emitAttemptDiagnosticOnce("socket_open");
-        try {
-          const offer = await connection.createOffer();
-          await connection.setLocalDescription(offer);
-          if (token !== generation || !ws || ws.readyState !== WebSocket.OPEN) return;
-          ws.send(JSON.stringify({ type: "webrtc/offer", value: offer.sdp ?? "" }));
-        } catch {
-          failAttempt(token, "signaling");
-        }
-      };
-      ws.onmessage = (event) => {
-        if (token !== generation || typeof event.data !== "string") return;
-        let message: { type?: unknown; value?: unknown };
-        try {
-          message = JSON.parse(event.data) as { type?: unknown; value?: unknown };
-        } catch {
-          failAttempt(token, "signaling");
-          return;
-        }
-        if (message.type === "webrtc/answer" && typeof message.value === "string") {
-          emitAttemptDiagnosticOnce("signaling_answer");
-          void connection.setRemoteDescription({ type: "answer", sdp: message.value }).catch(() => failAttempt(token, "signaling"));
-        } else if (message.type === "webrtc/candidate" && typeof message.value === "string") {
-          void connection.addIceCandidate({ candidate: message.value, sdpMid: "0" }).catch(() => failAttempt(token, "signaling"));
-        } else if (message.type === "error") {
-          failAttempt(token, "signaling");
-        }
-      };
-      ws.onclose = () => failAttempt(token, "socket");
-      ws.onerror = () => failAttempt(token, "socket");
-    }
-
-    function connectMSE(token: number, streamName: string) {
-      const MediaSourceClass = mediaSourceClass();
-      if (!MediaSourceClass) {
-        queueMicrotask(() => failAttempt(token, "unsupported"));
-        return;
-      }
-      const source = new MediaSourceClass();
-      mediaSource = source;
-      let sourceBuffer: SourceBuffer | null = null;
-      const pending = new Uint8Array(2 * 1024 * 1024);
-      let pendingLength = 0;
-
-      function flush() {
-        if (!sourceBuffer || sourceBuffer.updating || pendingLength === 0) return;
-        const data = pending.slice(0, pendingLength).buffer;
-        pendingLength = 0;
-        try {
-          sourceBuffer.appendBuffer(data);
-        } catch {
-          failAttempt(token, "media");
-        }
-      }
-
-      function handleUpdateEnd() {
-        flush();
-        if (!sourceBuffer || sourceBuffer.updating || sourceBuffer.buffered.length === 0) return;
-        const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-        const start = sourceBuffer.buffered.start(0);
-        if (end - start > 10) {
-          try {
-            sourceBuffer.remove(start, end - 5);
-          } catch {
-            // browser can reject trimming while busy
-          }
-        }
-        if (end - video.currentTime > 5) video.currentTime = end - 0.5;
-      }
-
-      objectURL = URL.createObjectURL(source);
-      video.src = objectURL;
-      source.addEventListener("error", () => failAttempt(token, "media"), { once: true });
-      source.addEventListener("sourceopen", () => {
-        if (destroyed || token !== generation) return;
-        emitAttemptDiagnosticOnce("media_source_open");
-        ws = openPlayerSocket(streamName);
-        ws.binaryType = "arraybuffer";
-        ws.onopen = () => {
-          emitAttemptDiagnosticOnce("socket_open");
-          ws?.send(JSON.stringify({ type: "mse", value: supportedCodecs(MediaSourceClass) }));
-        };
-        ws.onmessage = (event) => {
-          if (token !== generation) return;
-          if (typeof event.data === "string") {
-            const message = parseMseControlMessage(event.data);
-            if (message.type !== "mse") {
-              failAttempt(token, "signaling");
-              return;
-            }
-            try {
-              sourceBuffer = source.addSourceBuffer(message.value);
-              sourceBuffer.mode = "segments";
-              sourceBuffer.addEventListener("error", () => failAttempt(token, "media"));
-              sourceBuffer.addEventListener("updateend", handleUpdateEnd);
-              emitAttemptDiagnosticOnce("mse_ready");
-            } catch {
-              failAttempt(token, "media");
-            }
-            return;
-          }
-
-          const now = Date.now();
-          emitAttemptDiagnosticOnce("first_media");
-          if (now - lastBinaryStateAt >= 1_000) {
-            lastBinaryStateAt = now;
-            setPlayback((current) => ({ ...current, lastBinaryAt: now, readyState: video.readyState }));
-          }
-          const chunk = new Uint8Array(event.data as ArrayBuffer);
-          if (sourceBuffer && !sourceBuffer.updating && pendingLength === 0) {
-            try {
-              sourceBuffer.appendBuffer(event.data as ArrayBuffer);
-            } catch {
-              failAttempt(token, "media");
-            }
-          } else if (pendingLength + chunk.byteLength <= pending.byteLength) {
-            pending.set(chunk, pendingLength);
-            pendingLength += chunk.byteLength;
-          } else {
-            failAttempt(token, "media");
-          }
-          void video.play().catch(() => undefined);
-        };
-        ws.onclose = () => failAttempt(token, "socket");
-        ws.onerror = () => failAttempt(token, "socket");
-      }, { once: true });
-      void video.play().catch(() => undefined);
+      closeConnection = openPlaybackConnection({
+        video,
+        streamName: options.streamName,
+        transport: options.transport,
+        onEvent: (event) => {
+          if (!destroyed && token === generation) emitAttemptDiagnosticOnce(event);
+        },
+        onBinary: () => {
+          if (destroyed || token !== generation) return;
+          const binaryAt = Date.now();
+          if (binaryAt - lastBinaryStateAt < 1_000) return;
+          lastBinaryStateAt = binaryAt;
+          setPlayback((current) => ({ ...current, lastBinaryAt: binaryAt, readyState: video.readyState }));
+        },
+        onFailure: (errorCategory) => failAttempt(token, errorCategory),
+      });
     }
 
     video.addEventListener("timeupdate", handleTimeUpdate);
@@ -584,25 +420,6 @@ function initialPlayback(streamName: string, transport: PlaybackTransport): Play
     resubscribeCount: 0,
     errorCategory: "none",
   };
-}
-
-function mediaSourceClass(): typeof MediaSource | null {
-  if ("MediaSource" in window) return MediaSource;
-  if ("ManagedMediaSource" in window) {
-    return (window as unknown as { ManagedMediaSource: typeof MediaSource }).ManagedMediaSource;
-  }
-  return null;
-}
-
-function supportedCodecs(MediaSourceClass: typeof MediaSource) {
-  return CODECS.filter((codec) => MediaSourceClass.isTypeSupported(`video/mp4; codecs="${codec}"`)).join(",");
-}
-
-function openPlayerSocket(streamName: string) {
-  const protocol = location.protocol === "https:" ? "wss" : "ws";
-  return new WebSocket(
-    `${protocol}://${location.host}${withAppBase(`/player/api/ws?src=${encodeURIComponent(streamName)}`)}`,
-  );
 }
 
 function newPlaybackSessionId() {

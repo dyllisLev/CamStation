@@ -14,19 +14,31 @@ import (
 )
 
 func Inspect(ctx context.Context, source string, expectations Expectations) (Manifest, error) {
-	prepared, err := buildPlan(ctx, source, expectations)
+	return InspectWithOptions(ctx, source, expectations, ImportOptions{Scope: ScopeFull})
+}
+
+func InspectWithOptions(ctx context.Context, source string, expectations Expectations, options ImportOptions) (Manifest, error) {
+	prepared, err := buildPlanWithOptions(ctx, source, expectations, options)
 	prepared.manifest.Operation = "inspect"
 	return prepared.manifest, err
 }
 
 func DryRun(ctx context.Context, source string, expectations Expectations) (Manifest, error) {
-	prepared, err := buildPlan(ctx, source, expectations)
+	return DryRunWithOptions(ctx, source, expectations, ImportOptions{Scope: ScopeFull})
+}
+
+func DryRunWithOptions(ctx context.Context, source string, expectations Expectations, options ImportOptions) (Manifest, error) {
+	prepared, err := buildPlanWithOptions(ctx, source, expectations, options)
 	prepared.manifest.Operation = "dry-run"
 	return prepared.manifest, err
 }
 
 func Import(ctx context.Context, source, target string, expectations Expectations) (Manifest, error) {
-	prepared, err := buildPlan(ctx, source, expectations)
+	return ImportWithOptions(ctx, source, target, expectations, ImportOptions{Scope: ScopeFull})
+}
+
+func ImportWithOptions(ctx context.Context, source, target string, expectations Expectations, options ImportOptions) (Manifest, error) {
+	prepared, err := buildPlanWithOptions(ctx, source, expectations, options)
 	prepared.manifest.Operation = "import"
 	if err != nil || !prepared.manifest.Ready {
 		return prepared.manifest, err
@@ -125,7 +137,11 @@ func promotePlan(ctx context.Context, source, target string, prepared plan) (Man
 }
 
 func Verify(ctx context.Context, source, target string, expectations Expectations) (Manifest, error) {
-	prepared, err := buildPlan(ctx, source, expectations)
+	return VerifyWithOptions(ctx, source, target, expectations, ImportOptions{Scope: ScopeFull})
+}
+
+func VerifyWithOptions(ctx context.Context, source, target string, expectations Expectations, options ImportOptions) (Manifest, error) {
+	prepared, err := buildPlanWithOptions(ctx, source, expectations, options)
 	prepared.manifest.Operation = "verify"
 	if err != nil || !prepared.manifest.Ready {
 		return prepared.manifest, err

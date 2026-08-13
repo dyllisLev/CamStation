@@ -78,6 +78,9 @@ test("console launch helper configures the direct service without logging its co
 
   const source = await readFile(helperPath, "utf8");
   assert.match(source, /NamedPipeClientStream\]::new\("\.", "CamStationViewerService"/u);
+  assert.match(source, /ParameterSetName\s*=\s*"ConfigFile"/u);
+  assert.match(source, /\[string\]\$ConfigPath/u);
+  assert.match(source, /Viewer configuration file contains unsupported fields/u);
   assert.match(source, /type\s*=\s*"configure"/u);
   assert.match(source, /\[bool\]\$AutoStart\s*=\s*\$true/u);
   assert.match(source, /autoStart\s*=\s*\$AutoStart/u);

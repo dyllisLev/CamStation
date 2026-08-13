@@ -110,9 +110,10 @@ func parsePlaybackLogLevel(value string) (playbackLogLevel, error) {
 
 func playbackEventLevel(event string) (playbackLogLevel, string, bool) {
 	switch event {
-	case "socket_open", "signaling_answer", "first_track", "media_source_open", "mse_ready", "first_media", "session_closed":
+	case "socket_open", "signaling_answer", "first_track", "media_source_open", "mse_ready", "first_media",
+		"primary_probe_started", "primary_probe_failed", "session_closed":
 		return playbackDebug, "debug", true
-	case "attempt_started", "playback_started":
+	case "attempt_started", "playback_started", "primary_probe_succeeded":
 		return playbackInfo, "info", true
 	case "attempt_failed":
 		return playbackWarn, "warn", true

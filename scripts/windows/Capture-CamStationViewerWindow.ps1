@@ -96,7 +96,10 @@ public static class CamStationGuiNative {
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
     [DllImport("user32.dll")]
-    public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsZoomed(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -129,7 +132,10 @@ public static class CamStationGuiNative {
   }
 
   $handle = [IntPtr]$windowProcess.MainWindowHandle
-  [void][CamStationGuiNative]::ShowWindowAsync($handle, 9)
+  if ([CamStationGuiNative]::IsIconic($handle)) {
+    throw "Viewer window is minimized; exact capture refuses to change its placement"
+  }
+  $wasMaximized = [CamStationGuiNative]::IsZoomed($handle)
   [void][CamStationGuiNative]::SetForegroundWindow($handle)
   Start-Sleep -Milliseconds 900
 
@@ -237,7 +243,13 @@ public static class CamStationGuiNative {
     WindowProcessId = $windowProcess.Id
     ViewerProcessIds = $viewerProcesses
     WindowTitle = Get-SafeAutomationText -Value $windowProcess.MainWindowTitle
-    Window = [ordered]@{ Left = $rectangle.Left; Top = $rectangle.Top; Width = $width; Height = $height }
+    Window = [ordered]@{
+      Left = $rectangle.Left
+      Top = $rectangle.Top
+      Width = $width
+      Height = $height
+      WasMaximized = $wasMaximized
+    }
     CaptureMode = $captureMode
     Screenshot = [ordered]@{
       Filename = "viewer-window.png"

@@ -52,6 +52,79 @@ func TestDefaultRuntimeServerAcceptsInteractiveConfiguration(t *testing.T) {
 	}
 }
 
+func TestServiceConfigurationCommitReloadsControlLoop(t *testing.T) {
+	oldConfig := MachineConfig{
+		SchemaVersion: ConfigSchemaVersion,
+		ServerURL:     "http://old.example",
+		DisplayName:   "Wall",
+		ClientID:      "stable-client",
+		AutoStart:     true,
+	}
+	store := &memoryConfigStore{config: oldConfig}
+	control := &blockingConfigControlLoop{
+		started: make(chan MachineConfig, 2),
+		stopped: make(chan MachineConfig, 2),
+	}
+	runtime := Service{Store: store, Control: control}
+	server := runtime.server()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.runControl(ctx, server)
+	}()
+
+	if started := receiveControlConfig(t, control.started); started.ServerURL != oldConfig.ServerURL {
+		t.Fatalf("initial control config=%+v", started)
+	}
+	payload, err := json.Marshal(ConfigDraft{ServerURL: "http://new.example", DisplayName: "Wall", AutoStart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.Handle(t.Context(), "interactive-viewer", Peer{PID: 40, SessionID: 1, Interactive: true}, Request{
+		Version: PipeProtocolVersion, RequestID: "configure-new-server", Type: "configure", Payload: payload,
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("configure response=%+v err=%v", response, err)
+	}
+	if stopped := receiveControlConfig(t, control.stopped); stopped.ServerURL != oldConfig.ServerURL {
+		t.Fatalf("stopped control config=%+v", stopped)
+	}
+	if started := receiveControlConfig(t, control.started); started.ServerURL != "http://new.example" {
+		t.Fatalf("reloaded control config=%+v", started)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control loop did not stop")
+	}
+}
+
+type blockingConfigControlLoop struct {
+	started chan MachineConfig
+	stopped chan MachineConfig
+}
+
+func (loop *blockingConfigControlLoop) Run(ctx context.Context, config MachineConfig, _ StatusSource, _ CommandSink) error {
+	loop.started <- config
+	<-ctx.Done()
+	loop.stopped <- config
+	return ctx.Err()
+}
+
+func receiveControlConfig(t *testing.T, configs <-chan MachineConfig) MachineConfig {
+	t.Helper()
+	select {
+	case config := <-configs:
+		return config
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control configuration")
+		return MachineConfig{}
+	}
+}
+
 func TestServiceCancellationClosesClientsAndWaitsForHandlers(t *testing.T) {
 	listener := newFakePipeListener()
 	connection := newBlockingPipeConnection(Peer{PID: 10, SessionID: 2, Interactive: true, UserSID: "S-1-5-21-1000"})
