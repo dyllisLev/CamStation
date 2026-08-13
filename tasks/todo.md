@@ -3,16 +3,26 @@
 ## 계획
 
 - [x] 현재 워크트리의 완료 변경과 로컬·원격 `main`/`camstation2-initial` 포인터를 감사한다.
-- [ ] 이전 작업의 미커밋 변경을 목적별로 검토하고 테스트한 뒤 2.0 브랜치에 커밋·푸시한다.
-- [ ] Web lint/build, Viewer 테스트/build, Go 전체 테스트/build로 승격 후보를 검증한다.
-- [ ] 기존 1.x `main` 커밋을 원격 `archive/camstation-1.x-final` 브랜치와 annotated tag로 보존한다.
-- [ ] 준비된 release 브랜치에 최신 2.0을 병합하고 결과 tree가 승인된 2.0 tree와 같은지 확인한다.
-- [ ] 원격 `main`을 force push 없이 2.0 release로 fast-forward하고 원격 포인터·포함 관계를 검증한다.
+- [x] 이전 작업의 미커밋 변경을 목적별로 검토하고 테스트한 뒤 2.0 브랜치에 커밋·푸시한다.
+- [x] Web lint/build, Viewer 테스트/build, Go 전체 테스트/build로 승격 후보를 검증한다.
+- [x] 기존 1.x `main` 커밋을 원격 `archive/camstation-1.x-final` 브랜치와 annotated tag로 보존한다.
+- [x] 준비된 release 브랜치에 최신 2.0을 병합하고 결과 tree가 승인된 2.0 tree와 같은지 확인한다.
+- [x] 원격 `main`을 force push 없이 2.0 release로 fast-forward하고 원격 포인터·포함 관계를 검증한다.
 - [ ] obsolete 작업 브랜치의 삭제 여부를 안전하게 판정하고 최종 보존/정리 상태를 기록한다.
 
 ## 검토
 
-- 진행 중.
+- 이전 작업은 `da5f804` camera-layout migration, `f68b537` 검증된 Windows artifact 전달,
+  `720423b` 운영 전환 기록의 세 커밋으로 분리해 `origin/camstation2-initial`에 반영했다.
+- Go 전체 테스트, Web 71개 테스트·lint·production build, Viewer 48개 테스트·build와 embedded Web
+  자산을 포함한 `camstationd` build가 모두 통과했다.
+- 전환 전 원격 `main` `21e1e24`는 `archive/camstation-1.x-final` 브랜치와
+  `camstation-1.x-final` annotated tag에 같은 커밋으로 원자 게시했다.
+- release `3336c0b`는 기존 1.x release parent와 최신 2.0 `720423b`를 모두 보존하며, release와
+  승인된 2.0의 tree는 `d6fcdab094c364aaba1055158a7fc3b5ad75bb12`로 동일하다.
+- 원격 `main`은 force 없이 `21e1e24 -> 3336c0b`로 fast-forward됐다. 재조회에서 기존 1.x와 최신
+  2.0이 모두 `main`의 ancestor이고 원격 `main` tree가 승인된 2.0 tree와 같음을 확인했다.
+- obsolete 브랜치 정리는 각 worktree의 dirty 상태와 새 `main` 포함 여부를 확인한 뒤 수행한다.
 
 ---
 
