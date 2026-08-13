@@ -290,6 +290,75 @@ func TestLoggerConcurrentWritesRemainOneJSONRecordPerLine(t *testing.T) {
 	}
 }
 
+func TestLoggerRateLimitsRepeatedMessagesAndEmitsNumericSummary(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := New(Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := time.Date(2026, 8, 14, 3, 10, 0, 0, time.UTC)
+	started := current
+	logger.now = func() time.Time { return current }
+	t.Cleanup(func() { _ = logger.Close() })
+
+	for index := 0; index < 1000; index++ {
+		if err := logger.LogRateLimited(time.Minute, Error, "recorder.ffmpeg", "ffmpeg_error", Fields{
+			CameraID:   7,
+			StreamName: "gate-recording",
+			ErrorCode:  "ffmpeg_error",
+			Message:    fmt.Sprintf("DTS %d, next:%d st:0 invalid dropping", index+100, index+200),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		current = current.Add(50 * time.Millisecond)
+	}
+	if records := decodeTestRecords(t, output.Bytes()); len(records) != 1 || records[0].MessageFingerprint == "" || records[0].SuppressedCount != 0 {
+		t.Fatalf("initial rate-limited records=%+v", records)
+	}
+
+	current = started.Add(time.Minute)
+	if err := logger.LogRateLimited(time.Minute, Error, "recorder.ffmpeg", "ffmpeg_error", Fields{
+		CameraID:   7,
+		StreamName: "gate-recording",
+		ErrorCode:  "ffmpeg_error",
+		Message:    "DTS 9000, next:200 st:0 invalid dropping",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	records := decodeTestRecords(t, output.Bytes())
+	if len(records) != 2 || records[1].Message != "" || records[1].SuppressedCount != 1000 ||
+		records[1].WindowMS != time.Minute.Milliseconds() ||
+		records[1].MessageFingerprint != records[0].MessageFingerprint {
+		t.Fatalf("rate-limited summary=%+v", records)
+	}
+
+	if err := logger.LogRateLimited(time.Minute, Error, "recorder.ffmpeg", "ffmpeg_error", Fields{
+		CameraID:   8,
+		StreamName: "other-recording",
+		ErrorCode:  "ffmpeg_error",
+		Message:    "DTS 9000, next:200 st:0 invalid dropping",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if records = decodeTestRecords(t, output.Bytes()); len(records) != 3 || records[2].MessageFingerprint != records[0].MessageFingerprint {
+		t.Fatalf("separate worker was suppressed: %+v", records)
+	}
+
+	current = current.Add(2 * time.Minute)
+	if err := logger.LogRateLimited(time.Minute, Error, "recorder.ffmpeg", "ffmpeg_error", Fields{
+		CameraID:   7,
+		StreamName: "gate-recording",
+		ErrorCode:  "ffmpeg_error",
+		Message:    "DTS 9100, next:210 st:0 invalid dropping",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	records = decodeTestRecords(t, output.Bytes())
+	if len(records) != 4 || records[3].Message == "" || records[3].SuppressedCount != 1 {
+		t.Fatalf("signal after quiet interval did not restore context: %+v", records)
+	}
+}
+
 func TestLoggerReportsPersistentFileFailureToStdoutOncePerInterval(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := New(Config{

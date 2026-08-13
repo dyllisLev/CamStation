@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,14 +30,14 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	}
 }
 
-func TestBuildFFmpegArgsGeneratesPtsForMp4Playback(t *testing.T) {
+func TestBuildFFmpegArgsUsesWallclockPtsForStableSegmentation(t *testing.T) {
 	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 30)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-fflags +genpts") {
 		t.Fatalf("expected generated PTS for stable MP4 playback, got %s", joined)
 	}
-	if strings.Contains(joined, "-use_wallclock_as_timestamps") {
-		t.Fatalf("expected not to force wallclock timestamps, got %s", joined)
+	if !strings.Contains(joined, "-use_wallclock_as_timestamps 1 -rtsp_transport tcp -i") {
+		t.Fatalf("expected wallclock input timestamps before RTSP input, got %s", joined)
 	}
 }
 
@@ -79,6 +80,23 @@ func TestRecorderFFmpegWarningIsRedactedAndClassified(t *testing.T) {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("recorder log leaked %q: %s", forbidden, output.String())
 		}
+	}
+}
+
+func TestRecorderFFmpegRepeatedOutputIsRateLimited(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	worker := &worker{camera: store.Camera{ID: 7, StreamName: "gate-recording"}, manager: &Manager{logger: logger}}
+	for index := 0; index < 1000; index++ {
+		worker.logFFmpegLine("DTS "+strconv.Itoa(index+10)+", next:"+strconv.Itoa(index+20)+" st:0 invalid dropping", 3)
+	}
+	records := decodeRecorderOperationalLines(t, output.String())
+	if len(records) != 1 || records[0].Event != "ffmpeg_error" || records[0].MessageFingerprint == "" {
+		t.Fatalf("records=%+v", records)
 	}
 }
 

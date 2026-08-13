@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	statusRunning = "running"
-	statusStopped = "stopped"
+	statusRunning           = "running"
+	statusStopped           = "stopped"
+	ffmpegRepeatLogInterval = time.Minute
 )
 
 type Manager struct {
@@ -309,6 +310,12 @@ func (m *Manager) logFFmpeg(level opslog.Level, event string, fields opslog.Fiel
 	}
 }
 
+func (m *Manager) logFFmpegRateLimited(level opslog.Level, event string, fields opslog.Fields) {
+	if m != nil && m.logger != nil {
+		_ = m.logger.LogRateLimited(ffmpegRepeatLogInterval, level, "recorder.ffmpeg", event, fields)
+	}
+}
+
 func (w *worker) run() {
 	defer close(w.done)
 	delay := 5 * time.Second
@@ -517,7 +524,7 @@ func (w *worker) logFFmpegLine(line string, attempt int) {
 		strings.Contains(lower, "refused"), strings.Contains(lower, "non-monotonous"), strings.Contains(lower, "corrupt"):
 		level, event = opslog.Warn, "ffmpeg_warning"
 	}
-	w.manager.logFFmpeg(level, event, opslog.Fields{
+	w.manager.logFFmpegRateLimited(level, event, opslog.Fields{
 		CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
 		ErrorCode: event, Message: message,
 	})
@@ -658,6 +665,7 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		"-nostats",
 		"-stats_period", "60", "-progress", "pipe:1",
 		"-fflags", "+genpts",
+		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
 		"-i", input,
 		"-c:v", "copy",

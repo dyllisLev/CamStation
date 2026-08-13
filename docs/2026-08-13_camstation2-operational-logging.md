@@ -37,7 +37,10 @@ CAMSTATION_LOG_FILES=32
 ```
 
 Docker에서는 `CAMSTATION_LOG_DIR`이 state bind mount 안에 있으므로 container recreate 후에도
-`camstationd.jsonl`과 회전본이 남는다. active 파일을 포함해 최대 32개, 약 2 GiB가 상한이다.
+`camstationd.jsonl`과 회전본이 남는다. active 파일을 포함해 최대 32개, 약 2 GiB가 상한이다. 동일한
+FFmpeg warning/error는 worker별 첫 message만 redact해 기록하고, 이후 숫자·hex가 다른 같은 signature는
+1분 단위 `messageFingerprint`·`suppressedCount` summary로 축약한다. worker exit와 segment 실패는
+rate limit하지 않는다.
 
 Windows Viewer는 상시 상세 trace를 남기지 않는다. 코드 기본값은 `warn`, component override 없음,
 파일당 5 MiB·active 포함 3개다. 배포 절차에서 값을 명시하려면 elevated PowerShell에서 기존
@@ -89,10 +92,12 @@ sudo systemctl enable --now camstation-log-watch.timer
 sudo systemctl start camstation-log-watch.service
 ```
 
-환경 파일의 API bind, container, daemon/output log, state/media 경로는 실제 Compose mount와 맞아야 한다.
-운영 기본은 1분 간격, API·Docker probe당 5초, logger freshness 180초, Viewer progress 90초,
+환경 파일의 API bind, container, SQLite DB, daemon/output log, state/media 경로는 실제 Compose mount와
+맞아야 한다. 운영 기본은 1분 간격, API·Docker probe당 5초, logger freshness 180초, Viewer progress 90초,
 `operational-watch.jsonl` active 포함 10 MiB×4다. state는 2 GiB, media는 20 GiB 미만이거나 사용률
-90% 이상이면 경고하고 95% 이상이면 오류로 올린다.
+90% 이상이면 경고하고 95% 이상이면 오류로 올린다. watcher는 DB를 read-only로 열어 활성 segment의
+시작 age와 최신 ready 종료 age를 집계하며, 설정된 segment 길이보다 300초 이상 늦으면
+`recorder_segment_stale` 오류를 낸다. 결과에는 stream identity가 아니라 count와 최대 age만 남는다.
 
 설치 직후 timer와 두 연속 표본을 확인한다.
 
@@ -191,7 +196,7 @@ import json
 import os
 from collections import Counter, deque
 
-keys = ("timestamp", "status", "alerts", "cameras", "streams", "recorders", "viewers", "logs", "disk")
+keys = ("timestamp", "status", "alerts", "cameras", "streams", "recorders", "recordingSegments", "viewers", "logs", "disk")
 with open(os.environ["WATCH_LOG"], encoding="utf-8") as source:
     rows = [json.loads(line) for line in source]
 for row in deque(rows, maxlen=20):
@@ -234,7 +239,7 @@ PY
 | --- | --- | --- |
 | go2rtc | `ready`, INFO child output | `startup_timeout`, error/warn child output, process exit |
 | live warm | `media_started`, debug `media_progress` | `ffmpeg_warning`, `ffmpeg_error`, `worker_exited`, `retry_scheduled` |
-| recorder | `media_started`, `segment_opened`, `segment_closed` | process/segment failure, disk pause, 반복 retry |
+| recorder | `media_started`, `segment_opened`, `segment_closed`; watcher freshness 정상 | process/segment failure, `recorder_segment_stale`, disk pause, 반복 retry |
 | server playback | `attempt_started` → `playback_started`; debug `first_media` | `attempt_failed`, `episode_exhausted`, fallback/reconnect 증가 |
 | Viewer 상태(서버) | heartbeat의 control/renderer/stream 정상 상태 | 상태 변화 event의 `degraded`, `stalled`, 진행 시각 정지 |
 | Viewer 로컬 블랙박스 | 평시 warn/error 없음; 빈 파일도 정상 | 시작 실패, pipe reject, renderer/process/GPU 오류, 서버 미전송 장애 |
@@ -280,6 +285,10 @@ CAMSTATION_VIEWER_LOG_FILES=3
 기존 `CAMSTATION_PLAYBACK_LOG_LEVEL`은 서버 playback 호환 입력으로만 남는다. 새 구성은 component
 override를 사용하며, `playback`이 양쪽에 있으면 `CAMSTATION_LOG_LEVELS`가 우선한다.
 
+rate limit summary는 원래 event와 level을 유지하므로 level filter와 alert 의미는 바뀌지 않는다.
+`message`가 있는 첫 record에서 원인을 확인하고, 같은 `messageFingerprint`의 이후 record는
+`suppressedCount`와 `windowMs`로 빈도를 판단한다.
+
 ## 문제가 생겼을 때
 
 - daemon이 시작하지 않으면 level 문자열, 중복 component, `LOG_MAX_MB`의 1–1024 범위와
@@ -292,6 +301,9 @@ override를 사용하며, `playback`이 양쪽에 있으면 `CAMSTATION_LOG_LEVE
   한쪽에만 있으면 management pipe나 HTTP playback diagnostic 전달을 조사한다.
 - 로깅 실패는 영상을 중단시키지 않도록 설계됐지만 `logging_unavailable` 또는 Service error record는
   운영 장애로 다룬다. daemon stdout의 `opslog/persistent_write_failed`도 같은 우선순위로 조사한다.
+- `recorders running/current`가 정상인데 `recorder_segment_stale`가 있으면 process 수로 정상 판정하지
+  않는다. watcher의 `oldestCurrentAgeSeconds`와 `oldestReadyAgeSeconds`, 같은 시각의 `segment_closed`를
+  대조하고 열린 임시 파일을 수동 삭제하지 않는다.
 
 ## 검증 근거와 경로
 

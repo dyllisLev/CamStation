@@ -18,6 +18,7 @@ NUC/session 1, Viewer Service와 실제 ProgramData 로그를 확인한다. 현�
 - 선택적 `correlationId`, `sessionId`, `viewerId`, `cameraId`, `streamName`
 - 선택적 `transport`, `phase`, `state`, `attempt`, `durationMs`, `retryMs`
 - 선택적 `frame`, `mediaTimeMs`, `sizeBytes`, `errorCode`, `message`
+- 반복 message의 선택적 `messageFingerprint`, `suppressedCount`, `windowMs`
 
 level은 `debug`, `info`, `warn`, `error`, `off` 다섯 개다. 전역 기준은
 `CAMSTATION_LOG_LEVEL`이고 기본은 `info`다. `CAMSTATION_LOG_LEVELS`는
@@ -53,6 +54,13 @@ live-warm과 recorder ffmpeg에는 bounded progress 출력을 사용한다. 최�
 표현하지 않는다. 종료 시 실행 시간, attempt, 다음 retry를 남긴다. ffmpeg stderr는 bounded scanner로
 읽고 URL·credential을 redact한 뒤 warning/error만 평시에 보존하며 전체 command와 raw input/output
 path는 기록하지 않는다.
+
+RTSP packet의 DTS/PTS가 큰 폭으로 역행해도 장시간 worker의 timestamp 축이 고정되지 않도록 recorder와
+live-warm 입력은 wall clock timestamp를 사용한다. 녹화 codec 표본에 B-frame이 없는 것을 배포 전에
+확인하고, recorder의 30분 `segment_atclocktime` 분할은 실제 격리 stream으로 검증한다. 동일한 ffmpeg
+message는 worker별 첫 record만 원문을 redact해 남기고, 숫자·hex를 정규화한 fingerprint 기준으로 1분 동안
+억제한 뒤 `suppressedCount` summary 한 건으로 축약한다. process/segment lifecycle failure는 이 억제 대상이
+아니다.
 
 recorder는 segment open/close, 안전한 filename, 종료 크기와 실패 code를 남긴다. file growth 확인은
 ffmpeg progress와 segment close를 함께 사용하고, active path는 로그에 넣지 않는다.
@@ -92,13 +100,15 @@ Service는 control connection, lease, renderer lifecycle, command 결과와 stre
 - online Viewer 수와 대상 Viewer의 agent/control/viewer/renderer 건강 여부
 - 활성 camera별 `live` 또는 `focus` 후보 중 `playing`이고 최근 90초 안에 `lastProgressAt`이 전진한 수
 - daemon JSONL의 최근 timestamp, 직전 5분 warn/error 수와 `persistent_write_failed` 수
+- SQLite source of truth의 활성 recording/finalizing segment 시작 age와 최신 ready 종료 age
 - state/media filesystem 사용률과 남은 bytes
 
 감시기는 API 응답과 상세 log를 메모리에서 즉시 aggregate하고 원문을 복사하지 않는다. camera 이름·host,
 stream 이름, Viewer ID, process argument, 파일 경로와 오류 message는 출력 record에 넣지 않는다. 결과에는
 `timestamp`, `status`, 각 count/age/percent와 정해진 alert code만 존재한다. alert code는 API/JSON parsing,
-container down/unhealthy/restart, logger stale/write failure, camera/stream/recorder/Viewer 부족, state/media disk
-임계치로 한정한다.
+container down/unhealthy/restart, logger stale/write failure, camera/stream/recorder/Viewer 부족,
+`segmentMinutes+300초`를 넘긴 녹화 순환, state/media disk 임계치로 한정한다. watcher는 SQLite를 read-only로
+열며 stream identity는 출력하지 않고 stale/current/ready 수와 최대 age만 남긴다.
 
 결과는 daemon JSONL과 분리된 host 파일 `operational-watch.jsonl`에 active 포함 10 MiB×4로 원자 append하고
 동일 record를 stdout/journald에도 쓴다. `flock`으로 중복 실행을 막고 네트워크·subprocess timeout을 각 5초
@@ -114,7 +124,7 @@ container와 host path는 root-only 환경 파일에서 명시하며 script 자�
 - level parser, longest-prefix override, invalid startup, JSON schema, redaction, concurrent write와 회전이
   테스트된다.
 - synthetic ffmpeg progress/error/exit에서 stream별 first media, progress, retry와 recorder segment
-  close record가 생성되고 raw URL/path가 없다.
+  close record가 생성되고 raw URL/path가 없다. 반복 1,000건은 첫 record와 주기 summary로 제한된다.
 - Viewer 경고·오류 또는 임시 debug가 발생한 playback session은 server와 Viewer 로컬 record에 같은
   session ID가 남으며 threshold가 독립적으로 동작한다.
 - 반복 정상 Viewer heartbeat가 DB event 수를 증가시키지 않고 상태 변화는 한 건씩 남는다.
@@ -124,4 +134,5 @@ container와 host path는 root-only 환경 파일에서 명시하며 script 자�
   bootstrap cross-build가 통과한다.
 - 배포 전 `monitoring-pc`의 기존 로그 기준선, 배포 후 새 record/rotation과 장애 표본의 session join을
   실제 파일로 확인한다. 운영 감시기는 fixture test와 실제 1분 표본에서 정상 count와 의도한 alert만
-  기록하고 상세 API/log 원문이나 금지 필드를 포함하지 않아야 한다.
+  기록하고 상세 API/log 원문이나 금지 필드를 포함하지 않아야 한다. 30분 경계를 넘긴 fixture는
+  `recorder_segment_stale` 오류가 되고 stream identity는 노출되지 않아야 한다.

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	liveWarmRetryMin    = time.Second
-	liveWarmRetryMax    = 15 * time.Second
-	liveWarmStableAfter = 30 * time.Second
-	liveWarmStopTimeout = 5 * time.Second
+	liveWarmRetryMin          = time.Second
+	liveWarmRetryMax          = 15 * time.Second
+	liveWarmStableAfter       = 30 * time.Second
+	liveWarmStopTimeout       = 5 * time.Second
+	liveWarmRepeatLogInterval = time.Minute
 )
 
 type liveWarmSpec struct {
@@ -213,6 +214,7 @@ func BuildLiveWarmFFmpegArgs(input string) []string {
 	return []string{
 		"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-nostats",
 		"-stats_period", "60", "-progress", "pipe:1",
+		"-fflags", "+genpts", "-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp", "-user_agent", "CamStationWarm/2.0", "-i", input,
 		"-map", "0:v:0", "-c:v", "copy", "-an", "-f", "null", "-",
 	}
@@ -428,7 +430,7 @@ func scanLiveWarmStderr(reader io.Reader, logger *opslog.Logger, spec liveWarmSp
 			level = opslog.Error
 			event = "ffmpeg_error"
 		}
-		_ = logger.Log(level, "stream.live_warm", event, opslog.Fields{
+		_ = logger.LogRateLimited(liveWarmRepeatLogInterval, level, "stream.live_warm", event, opslog.Fields{
 			CameraID: spec.CameraID, StreamName: spec.StreamName, Attempt: attempt,
 			ErrorCode: event, Message: message,
 		})

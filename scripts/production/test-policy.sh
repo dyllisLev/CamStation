@@ -67,6 +67,8 @@ grep -Fq 'OnUnitActiveSec=1min' "$ROOT_DIR/packaging/systemd/camstation-log-watc
 grep -Fq 'Persistent=true' "$ROOT_DIR/packaging/systemd/camstation-log-watch.timer"
 grep -Fq 'CAMSTATION_WATCH_OUTPUT_MAX_MB=10' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
 grep -Fq 'CAMSTATION_WATCH_OUTPUT_FILES=4' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
+grep -Fq 'CAMSTATION_WATCH_DB_PATH=/var/lib/camstation2-production/data/camstation.db' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
+grep -Fq 'CAMSTATION_WATCH_RECORDER_SEGMENT_GRACE_SECONDS=300' "$ROOT_DIR/packaging/systemd/camstation-log-watch.env.example"
 test "$(grep -Fc 'target: 8555' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 test "$(grep -Fc 'published: "${CANARY_WEBRTC_PORT:-18555}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 grep -A5 -F 'name: webrtc-tcp' "$ROOT_DIR/packaging/docker/compose.canary.yaml" | grep -Fq 'protocol: tcp'

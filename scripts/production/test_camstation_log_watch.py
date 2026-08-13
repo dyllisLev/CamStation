@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ NOW = dt.datetime(2026, 8, 13, 8, 0, 0, tzinfo=dt.timezone.utc)
 class WatchTests(unittest.TestCase):
     def config(self, root: Path) -> object:
         daemon = root / "camstationd.jsonl"
+        database = root / "camstation.db"
         output = root / "operational-watch.jsonl"
         state = root / "state"
         media = root / "media"
@@ -44,10 +46,34 @@ class WatchTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        connection = sqlite3.connect(database)
+        connection.execute(
+            """
+            CREATE TABLE recording_segments (
+                stream_name TEXT NOT NULL,
+                ts_start REAL NOT NULL,
+                ts_end REAL,
+                status TEXT NOT NULL
+            )
+            """
+        )
+        for index in range(8):
+            name = f"private-recording-{index}"
+            connection.execute(
+                "INSERT INTO recording_segments(stream_name,ts_start,ts_end,status) VALUES (?,?,?,'ready')",
+                (name, NOW.timestamp() - 2400, NOW.timestamp() - 600),
+            )
+            connection.execute(
+                "INSERT INTO recording_segments(stream_name,ts_start,ts_end,status) VALUES (?,?,NULL,'recording')",
+                (name, NOW.timestamp() - 600),
+            )
+        connection.commit()
+        connection.close()
         return watch.Config(
             api_base="http://127.0.0.1:18080",
             container="camstation2",
             docker_bin=Path("/usr/bin/docker"),
+            db_path=database,
             daemon_log=daemon,
             output_log=output,
             state_path=state,
@@ -86,7 +112,7 @@ class WatchTests(unittest.TestCase):
         return {
             "/api/health": {"ok": True},
             "/api/cameras": cameras,
-            "/api/recorders/status": {"enabled": True, "workers": workers},
+            "/api/recorders/status": {"enabled": True, "segmentMinutes": 30, "workers": workers},
             "/api/streams/status": {
                 "running": True,
                 "mediaReady": True,
@@ -138,6 +164,8 @@ class WatchTests(unittest.TestCase):
             self.assertEqual(record["alerts"], [])
             self.assertEqual(record["cameras"], {"total": 8, "enabled": 8, "streaming": 8})
             self.assertEqual(record["viewers"]["receivingCameras"], 8)
+            self.assertEqual(record["recordingSegments"]["staleCurrent"], 0)
+            self.assertEqual(record["recordingSegments"]["staleReady"], 0)
             encoded = watch.encode_record(record).decode("utf-8")
             for forbidden in ("private-name", "10.20.30", "operator", "password", "camera-0-live", "private-viewer-id"):
                 self.assertNotIn(forbidden, encoded)
@@ -201,12 +229,52 @@ class WatchTests(unittest.TestCase):
                 for line in item.read_text(encoding="utf-8").splitlines():
                     json.loads(line)
 
+    def test_stale_recording_segment_is_error_without_stream_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(Path(directory))
+            connection = sqlite3.connect(config.db_path)
+            stale = NOW.timestamp() - 4 * 60 * 60
+            connection.execute(
+                "UPDATE recording_segments SET ts_start=? WHERE stream_name=? AND status='recording'",
+                (stale, "private-recording-0"),
+            )
+            connection.execute(
+                "UPDATE recording_segments SET ts_end=? WHERE stream_name=? AND status='ready'",
+                (stale, "private-recording-0"),
+            )
+            connection.commit()
+            connection.close()
+            payloads = self.healthy_payloads()
+
+            def fetcher(_base: str, endpoint: str, _timeout: int) -> object:
+                return payloads[endpoint]
+
+            def runner(args: list[str], _timeout: int) -> str:
+                if "inspect" in args:
+                    return '{"running":true,"status":"running","health":"healthy","restartCount":0,"image":"camstation:test"}'
+                return ""
+
+            record = watch.collect_snapshot(
+                config,
+                now=NOW,
+                fetcher=fetcher,
+                runner=runner,
+                disk_probe=lambda _path: {"usedPercent": 25.0, "freeBytes": 100 * 1024**3},
+            )
+            self.assertEqual(record["status"], "error")
+            self.assertIn("recorder_segment_stale", record["alerts"])
+            self.assertEqual(record["recordingSegments"]["staleCurrent"], 1)
+            self.assertEqual(record["recordingSegments"]["staleReady"], 1)
+            encoded = watch.encode_record(record).decode("utf-8")
+            self.assertNotIn("private-recording", encoded)
+
     def test_config_rejects_credentials_and_same_log_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             environ = {
                 "CAMSTATION_WATCH_API_BASE": "http://user:secret@127.0.0.1:18080",
                 "CAMSTATION_WATCH_CONTAINER": "camstation2",
+                "CAMSTATION_WATCH_DB_PATH": str(root / "camstation.db"),
                 "CAMSTATION_WATCH_DAEMON_LOG": str(root / "same.jsonl"),
                 "CAMSTATION_WATCH_OUTPUT_LOG": str(root / "same.jsonl"),
                 "CAMSTATION_WATCH_STATE_PATH": str(root),

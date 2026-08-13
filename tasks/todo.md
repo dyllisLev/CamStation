@@ -1,3 +1,84 @@
+# 2026-08-14 녹화 순환·FFmpeg 로그 폭증 운영 개선
+
+## 사양과 안전 경계
+
+- 카메라가 역행하거나 잘못된 PTS/DTS를 보내도 recorder 출력 timestamp는 wall clock 기준으로 안정화하고,
+  30분 `segment_atclocktime` 경계에서 파일이 닫혀 DB `ready` row·백업·정리 경로로 넘어가야 한다.
+- 동일 FFmpeg stderr가 반복될 때 첫 신호는 원인·worker 문맥을 유지해 남기고, 이후 동일 signature는 메모리에서
+  억제한 뒤 제한된 주기로 누적 건수 summary를 남긴다. 실제 process exit, segment open/close 실패와 persistent
+  logger 실패는 억제하지 않는다.
+- 운영 watcher는 recorder process 8/8 외에 DB의 latest-ready age와 current-segment age를 집계하고,
+  설정 segment 길이+안전 여유를 넘긴 stream이 있으면 identity 비노출 alert code로 `degraded`를 만든다.
+- 기존 장시간 열린 임시 파일은 삭제하지 않는다. 새 image 전환 때 recorder 정상 종료가 해당 파일을 finalizing한
+  뒤 새 wall-clock segment를 만드는지 확인하며, 실패하면 보존 상태로 롤백하고 원본 파일을 훼손하지 않는다.
+- 운영 변경은 immutable image와 exact Compose 백업으로 수행하고 container health, camera·stream·recorder·Viewer
+  8/8, 로그 증가율, 30분 경계의 실제 segment close를 확인한다. monitoring-pc는 읽기 전용 상태·로그 확인만 한다.
+
+## 계획
+
+- [x] 배포 후 FFmpeg signature·timestamp 축·영향 stream 정책과 열린 파일 상태를 값 비노출 방식으로 확정한다.
+- [x] recorder wall-clock timestamp 입력과 동일 stderr rate-limit/summary를 회귀 테스트와 함께 구현한다.
+- [x] watcher에 DB segment freshness 축·경보를 추가하고 정상/지연 fixture를 검증한다.
+- [ ] Go 전체·race·vet, watcher/policy, image smoke를 통과하고 immutable 운영 후보를 만든다.
+- [ ] 운영 Compose를 백업해 새 image로 전환하고 장시간 열린 파일의 안전한 finalization과 8/8 수렴을 확인한다.
+- [ ] 다음 30분 경계를 지나 실제 8개 segment 순환, 오류율·보존기간, Viewer 수신 및 잔여물을 검증한다.
+- [ ] 결과·교훈·구현 상태를 문서화하고 commit/push 및 운영 revision을 일치시킨다.
+
+## 검토
+
+- 진행 중.
+
+---
+
+# 2026-08-14 Viewer 2.0.27 배포 후 로그 추이 감사
+
+## 범위와 합격 기준
+
+- Viewer 2.0.27 최종 실행·최대화 검증 시각 `2026-08-13T12:17:55Z` 이후 현재까지 서버의 1분 watcher,
+  daemon 구조화 JSONL, container·systemd 상태를 읽기 전용으로 집계한다.
+- 정상 합격은 현재 container healthy/restart 0, camera·stream·recorder·Viewer 8/8, watcher 연속 `ok`,
+  persistent logger failure 0이며, warn/error가 있으면 배포·검증 중 기대된 연결 단절과 이후 재발을
+  시간축으로 구분한다.
+- `monitoring-pc`는 Viewer 2.0.27/Service 상태, warn 로컬 JSONL의 배포 이후 record, Windows Application
+  crash/hang record만 안전한 count·level·event·timestamp로 확인한다. 원문 message, URL, identity와 설정
+  값은 출력하지 않고 서비스·창·설정은 변경하거나 재시작하지 않는다.
+
+## 계획
+
+- [x] 운영 서버 watcher의 배포 이후 status/alert 연속 구간과 현재 8/8 상태를 집계한다.
+- [x] daemon JSONL의 level/component/event/error code, 쓰기 실패·파싱 오류·회전·용량을 집계한다.
+- [x] `monitoring-pc` status와 Viewer 로컬 warn/error 및 Windows crash/hang 표본을 읽기 전용으로 감사한다.
+- [x] 서버·PC 시간축을 대조해 실제 지속·반복 문제와 배포 중 기대된 일시 신호를 분리한다.
+- [x] 검토 결과와 남은 관찰 항목을 기록하고 dirty diff·대상 잔여물을 확인한다.
+
+## 검토
+
+- 감사 구간은 Viewer 2.0.27 검증 시각인 2026-08-13 21:17:55 KST부터 2026-08-14 07:10 KST까지다.
+  서버 watcher 575개 표본은 JSON 오류 0건·최대 간격 65초였고, 최신 표본에서 container healthy/restart 0,
+  camera·stream·recorder·Viewer 8/8, Viewer progress age 5초다. 다만 03:11 KST부터 최근 daemon error 때문에
+  현재까지 연속 `degraded`이며, “문제 없음”으로 판정할 수 없다.
+- daemon JSONL은 5개·270,622,235 bytes, 유효 849,016건으로 schema 누락·파싱 오류·persistent write failure가
+  모두 0이다. 그러나 error가 838,399건이고 최근 한 시간만 210,679건이다. 03:10 KST부터 두 recorder와
+  한 live-warm worker에서 timestamp 역행·invalid 계열 FFmpeg 신호가 초당 약 59건으로 계속 발생한다.
+  현재 증가율이면 64 MiB×32 보존 범위는 약 30~32시간에 불과해 몇 주 추이 보존 요구를 충족하지 못한다.
+- 30분 녹화 정책과 DB·파일을 교차 확인한 결과 8개 중 1개 recorder가 03:00 KST 이후 ready segment를
+  만들지 못했다. 현재 segment는 약 4시간 10분 열린 채 223,871,024 bytes이고 5초 표본에서 262,144 bytes
+  증가했다. 영상 바이트는 들어오지만 DB 조회·백업·정리 대상인 finalized segment로 순환하지 않는 실제
+  장애다. 다른 7개는 latest ready age 45분 이내이며, watcher의 `running/current 8/8`, `errors 0`만으로는
+  이 문제를 잡지 못한다.
+- watcher상 Viewer media missing은 03:13~03:17, 04:38~04:42, 06:10 KST의 세 구간이었다. 앞의 두 구간은
+  Viewer의 `episode_exhausted` 뒤 약 5분 cooldown 재시도로 복구됐고 현재 8/8이다. `monitoring-pc` 로컬에는
+  warn 176·error 2건, invalid line 0건이며 Windows Application crash/hang은 0건이다. Viewer 2.0.27,
+  Service Running/Auto, warn·5 MiB×3 정책과 session 1 Active가 유지된다.
+- 서버의 일시 `api_cameras_failed`는 04:57 KST 한 표본뿐이고 다음 표본부터 회복했다. 서버/Viewer 로그와
+  Windows 상태는 모두 읽기 전용으로 확인했으며 container, recorder, Service, Viewer를 재시작하거나 설정을
+  변경하지 않았다. 종료 status에서 control/setup/capture/configure task, driver TCP/firewall 잔여는 모두 0이다.
+- 후속 수정은 (1) 영향 recorder의 timestamp/segment rollover 원인과 열린 파일의 안전한 복구,
+  (2) 반복 FFmpeg message의 rate limit·summary화, (3) watcher에 latest-ready/current-segment age 경보 추가를
+  함께 다뤄야 한다. 이번 요청은 감사이므로 운영 상태 변경은 수행하지 않았다.
+
+---
+
 # 2026-08-13 Viewer 재시작 시 최대화 시작
 
 ## 사양과 경계

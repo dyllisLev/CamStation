@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -20,6 +20,24 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-14 recorder timestamp and log-soak hardening
+
+- The first post-deployment soak found two recorder workers and one live-warm worker repeatedly receiving
+  discontinuous DTS/PTS. One recorder kept writing a single temporary MP4 for more than four hours instead
+  of closing 30-minute segments, while the daemon copied roughly 59 FFmpeg errors per second and reduced
+  the effective 2 GiB log history to about 30 hours.
+- Recorder and live-warm FFmpeg inputs now use wall-clock timestamps. All eight production recording
+  samples report zero B-frames, and an isolated affected-stream probe produced valid files at each 10-second
+  boundary with the new arguments. The existing generated-PTS, clock-aligned split and audio policy remain.
+- `opslog.LogRateLimited` preserves the first redacted FFmpeg message per worker/signature and emits at most
+  one one-minute summary with a normalized `messageFingerprint`, `suppressedCount` and `windowMs`. Numeric
+  timestamp changes therefore remain countable without storing every packet-level repetition; process exit
+  and segment lifecycle errors remain unsuppressed.
+- The one-minute host watcher opens SQLite read-only and publishes only aggregate current/latest-ready ages.
+  A current or latest-ready segment older than `segmentMinutes+300s` raises `recorder_segment_stale`; no
+  stream identity or path enters the watcher record. Unit fixtures, full Go tests, relevant race tests,
+  `go vet`, production policy checks and the daemon build pass.
 
 ### 2026-08-13 Viewer maximized first show
 

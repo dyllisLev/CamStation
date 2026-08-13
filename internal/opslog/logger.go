@@ -1,6 +1,7 @@
 package opslog
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ const (
 	DefaultRetainedFiles   = 8
 	DefaultFilename        = "camstationd.jsonl"
 	fileFailureReportEvery = time.Minute
+	maxRateLimitEntries    = 1024
 )
 
 type Level uint8
@@ -63,59 +65,65 @@ type Config struct {
 }
 
 type Fields struct {
-	CorrelationID    string
-	SessionID        string
-	ViewerID         string
-	ClientIP         string
-	CameraID         int64
-	StreamName       string
-	Filename         string
-	Transport        string
-	Phase            string
-	State            string
-	Attempt          int
-	DurationMS       int64
-	AttemptElapsedMS int64
-	RetryMS          int64
-	Frame            int64
-	MediaTimeMS      int64
-	SizeBytes        int64
-	ReadyState       int
-	ReconnectCount   int
-	FallbackCount    int
-	UsingFallback    bool
-	ErrorCode        string
-	Message          string
+	CorrelationID      string
+	SessionID          string
+	ViewerID           string
+	ClientIP           string
+	CameraID           int64
+	StreamName         string
+	Filename           string
+	Transport          string
+	Phase              string
+	State              string
+	Attempt            int
+	DurationMS         int64
+	AttemptElapsedMS   int64
+	RetryMS            int64
+	Frame              int64
+	MediaTimeMS        int64
+	SizeBytes          int64
+	ReadyState         int
+	ReconnectCount     int
+	FallbackCount      int
+	UsingFallback      bool
+	MessageFingerprint string
+	SuppressedCount    int64
+	WindowMS           int64
+	ErrorCode          string
+	Message            string
 }
 
 type Record struct {
-	Timestamp        string `json:"timestamp"`
-	Level            string `json:"level"`
-	Component        string `json:"component"`
-	Event            string `json:"event"`
-	CorrelationID    string `json:"correlationId,omitempty"`
-	SessionID        string `json:"sessionId,omitempty"`
-	ViewerID         string `json:"viewerId,omitempty"`
-	ClientIP         string `json:"clientIp,omitempty"`
-	CameraID         int64  `json:"cameraId,omitempty"`
-	StreamName       string `json:"streamName,omitempty"`
-	Filename         string `json:"filename,omitempty"`
-	Transport        string `json:"transport,omitempty"`
-	Phase            string `json:"phase,omitempty"`
-	State            string `json:"state,omitempty"`
-	Attempt          int    `json:"attempt,omitempty"`
-	DurationMS       int64  `json:"durationMs,omitempty"`
-	AttemptElapsedMS int64  `json:"attemptElapsedMs,omitempty"`
-	RetryMS          int64  `json:"retryMs,omitempty"`
-	Frame            int64  `json:"frame,omitempty"`
-	MediaTimeMS      int64  `json:"mediaTimeMs,omitempty"`
-	SizeBytes        int64  `json:"sizeBytes,omitempty"`
-	ReadyState       int    `json:"readyState,omitempty"`
-	ReconnectCount   int    `json:"reconnectCount,omitempty"`
-	FallbackCount    int    `json:"fallbackCount,omitempty"`
-	UsingFallback    bool   `json:"usingFallback,omitempty"`
-	ErrorCode        string `json:"errorCode,omitempty"`
-	Message          string `json:"message,omitempty"`
+	Timestamp          string `json:"timestamp"`
+	Level              string `json:"level"`
+	Component          string `json:"component"`
+	Event              string `json:"event"`
+	CorrelationID      string `json:"correlationId,omitempty"`
+	SessionID          string `json:"sessionId,omitempty"`
+	ViewerID           string `json:"viewerId,omitempty"`
+	ClientIP           string `json:"clientIp,omitempty"`
+	CameraID           int64  `json:"cameraId,omitempty"`
+	StreamName         string `json:"streamName,omitempty"`
+	Filename           string `json:"filename,omitempty"`
+	Transport          string `json:"transport,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	State              string `json:"state,omitempty"`
+	Attempt            int    `json:"attempt,omitempty"`
+	DurationMS         int64  `json:"durationMs,omitempty"`
+	AttemptElapsedMS   int64  `json:"attemptElapsedMs,omitempty"`
+	RetryMS            int64  `json:"retryMs,omitempty"`
+	Frame              int64  `json:"frame,omitempty"`
+	MediaTimeMS        int64  `json:"mediaTimeMs,omitempty"`
+	SizeBytes          int64  `json:"sizeBytes,omitempty"`
+	ReadyState         int    `json:"readyState,omitempty"`
+	ReconnectCount     int    `json:"reconnectCount,omitempty"`
+	FallbackCount      int    `json:"fallbackCount,omitempty"`
+	UsingFallback      bool   `json:"usingFallback,omitempty"`
+	MessageFingerprint string `json:"messageFingerprint,omitempty"`
+	SuppressedCount    int64  `json:"suppressedCount,omitempty"`
+	WindowMS           int64  `json:"windowMs,omitempty"`
+	ErrorCode          string `json:"errorCode,omitempty"`
+	Message            string `json:"message,omitempty"`
 }
 
 type Logger struct {
@@ -128,6 +136,15 @@ type Logger struct {
 
 	fileUnavailable       bool
 	lastFileFailureReport time.Time
+
+	rateMu      sync.Mutex
+	rateEntries map[string]*rateLimitEntry
+}
+
+type rateLimitEntry struct {
+	lastEmitted time.Time
+	lastSeen    time.Time
+	suppressed  int64
 }
 
 type Policy struct {
@@ -146,6 +163,9 @@ var (
 	quotedPathPat    = regexp.MustCompile(`(?i)(?:"(?:[a-z]:\\|/)[^"\r\n]*"|'(?:[a-z]:\\|/)[^'\r\n]*')`)
 	windowsPathPat   = regexp.MustCompile(`(?i)\b[a-z]:\\[^\s"'<>]+`)
 	posixPathPat     = regexp.MustCompile(`(^|[\s=:,(])/[^\s"'<>),;]+`)
+	repeatHexPattern = regexp.MustCompile(`(?i)0x[0-9a-f]+`)
+	repeatNumPattern = regexp.MustCompile(`[-+]?\d+(?:\.\d+)?`)
+	repeatSpacePat   = regexp.MustCompile(`\s+`)
 )
 
 func New(config Config) (*Logger, error) {
@@ -251,33 +271,36 @@ func (logger *Logger) Log(level Level, component, event string, fields Fields) e
 	}
 	now := logger.now().UTC()
 	record := Record{
-		Timestamp:        now.Format(time.RFC3339Nano),
-		Level:            level.String(),
-		Component:        boundedText(component, 96),
-		Event:            boundedText(event, 96),
-		CorrelationID:    boundedSafeText(fields.CorrelationID, 128),
-		SessionID:        boundedSafeText(fields.SessionID, 128),
-		ViewerID:         boundedSafeText(fields.ViewerID, 128),
-		ClientIP:         boundedSafeText(fields.ClientIP, 64),
-		CameraID:         fields.CameraID,
-		StreamName:       boundedSafeText(fields.StreamName, 128),
-		Filename:         boundedSafeText(fields.Filename, 255),
-		Transport:        boundedSafeText(fields.Transport, 32),
-		Phase:            boundedSafeText(fields.Phase, 64),
-		State:            boundedSafeText(fields.State, 64),
-		Attempt:          fields.Attempt,
-		DurationMS:       fields.DurationMS,
-		AttemptElapsedMS: fields.AttemptElapsedMS,
-		RetryMS:          fields.RetryMS,
-		Frame:            fields.Frame,
-		MediaTimeMS:      fields.MediaTimeMS,
-		SizeBytes:        fields.SizeBytes,
-		ReadyState:       fields.ReadyState,
-		ReconnectCount:   fields.ReconnectCount,
-		FallbackCount:    fields.FallbackCount,
-		UsingFallback:    fields.UsingFallback,
-		ErrorCode:        boundedSafeText(fields.ErrorCode, 96),
-		Message:          boundedText(SanitizeMessage(fields.Message), 2048),
+		Timestamp:          now.Format(time.RFC3339Nano),
+		Level:              level.String(),
+		Component:          boundedText(component, 96),
+		Event:              boundedText(event, 96),
+		CorrelationID:      boundedSafeText(fields.CorrelationID, 128),
+		SessionID:          boundedSafeText(fields.SessionID, 128),
+		ViewerID:           boundedSafeText(fields.ViewerID, 128),
+		ClientIP:           boundedSafeText(fields.ClientIP, 64),
+		CameraID:           fields.CameraID,
+		StreamName:         boundedSafeText(fields.StreamName, 128),
+		Filename:           boundedSafeText(fields.Filename, 255),
+		Transport:          boundedSafeText(fields.Transport, 32),
+		Phase:              boundedSafeText(fields.Phase, 64),
+		State:              boundedSafeText(fields.State, 64),
+		Attempt:            fields.Attempt,
+		DurationMS:         fields.DurationMS,
+		AttemptElapsedMS:   fields.AttemptElapsedMS,
+		RetryMS:            fields.RetryMS,
+		Frame:              fields.Frame,
+		MediaTimeMS:        fields.MediaTimeMS,
+		SizeBytes:          fields.SizeBytes,
+		ReadyState:         fields.ReadyState,
+		ReconnectCount:     fields.ReconnectCount,
+		FallbackCount:      fields.FallbackCount,
+		UsingFallback:      fields.UsingFallback,
+		MessageFingerprint: boundedSafeText(fields.MessageFingerprint, 32),
+		SuppressedCount:    fields.SuppressedCount,
+		WindowMS:           fields.WindowMS,
+		ErrorCode:          boundedSafeText(fields.ErrorCode, 96),
+		Message:            boundedText(SanitizeMessage(fields.Message), 2048),
 	}
 	if record.Component == "" || record.Event == "" {
 		return errors.New("log component and event are required")
@@ -333,6 +356,86 @@ func (logger *Logger) Log(level Level, component, event string, fields Fields) e
 		writerErr = errors.Join(writerErr, recoveryErr)
 	}
 	return errors.Join(fileErr, writerErr)
+}
+
+// LogRateLimited preserves the first copy of a repeated signal, suppresses
+// matching copies for interval, then emits a bounded summary carrying the same
+// event and a stable message fingerprint. Worker and error identity are part of
+// the key, so one noisy stream cannot hide another stream's signal.
+func (logger *Logger) LogRateLimited(interval time.Duration, level Level, component, event string, fields Fields) error {
+	if logger == nil || !logger.Enabled(component, level) {
+		return nil
+	}
+	if interval <= 0 {
+		return logger.Log(level, component, event, fields)
+	}
+
+	fingerprint, key := repeatedMessageIdentity(level, component, event, fields)
+	now := logger.now().UTC()
+	logger.rateMu.Lock()
+	if logger.rateEntries == nil {
+		logger.rateEntries = make(map[string]*rateLimitEntry)
+	}
+	entry, exists := logger.rateEntries[key]
+	if !exists {
+		if len(logger.rateEntries) >= maxRateLimitEntries {
+			logger.evictOldestRateLimitEntry()
+		}
+		logger.rateEntries[key] = &rateLimitEntry{lastEmitted: now, lastSeen: now}
+		logger.rateMu.Unlock()
+		fields.MessageFingerprint = fingerprint
+		return logger.Log(level, component, event, fields)
+	}
+
+	previousSeen := entry.lastSeen
+	entry.lastSeen = now
+	entry.suppressed++
+	if now.Before(entry.lastEmitted) || now.Sub(entry.lastEmitted) < interval {
+		logger.rateMu.Unlock()
+		return nil
+	}
+	suppressed := entry.suppressed
+	entry.suppressed = 0
+	entry.lastEmitted = now
+	logger.rateMu.Unlock()
+
+	if now.Sub(previousSeen) < interval {
+		fields.Message = ""
+	}
+	fields.MessageFingerprint = fingerprint
+	fields.SuppressedCount = suppressed
+	fields.WindowMS = interval.Milliseconds()
+	return logger.Log(level, component, event, fields)
+}
+
+func (logger *Logger) evictOldestRateLimitEntry() {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, entry := range logger.rateEntries {
+		if oldestKey == "" || entry.lastSeen.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = entry.lastSeen
+		}
+	}
+	if oldestKey != "" {
+		delete(logger.rateEntries, oldestKey)
+	}
+}
+
+func repeatedMessageIdentity(level Level, component, event string, fields Fields) (string, string) {
+	message := strings.ToLower(SanitizeMessage(fields.Message))
+	message = repeatHexPattern.ReplaceAllString(message, "<hex>")
+	message = repeatNumPattern.ReplaceAllString(message, "<n>")
+	message = repeatSpacePat.ReplaceAllString(message, " ")
+	message = strings.TrimSpace(message)
+	messageDigest := sha256.Sum256([]byte(message))
+	fingerprint := fmt.Sprintf("%x", messageDigest[:6])
+	material := strings.Join([]string{
+		level.String(), component, event, strconv.FormatInt(fields.CameraID, 10),
+		fields.StreamName, fields.ErrorCode, fingerprint,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(material))
+	return fingerprint, fmt.Sprintf("%x", digest[:])
 }
 
 func (logger *Logger) Close() error {

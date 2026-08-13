@@ -65,3 +65,15 @@
 - [x] 공식 wrapper로 `monitoring-pc`를 2.0.26으로 업그레이드하고 warn·5 MiB×3 정책, identity/config,
       Service/interactive Viewer와 8/8 media progress를 검증한다.
 - [x] 즉시·5분·15분 이상 watcher/server/Viewer 표본을 비교하고 배포·잔여 위험·복구 경로를 문서화한다.
+
+## 7. 배포 후 timestamp·보존량 개선
+
+- [x] FFmpeg 폭증 signature와 장시간 열린 DB segment를 identity 비노출 집계로 재현하고 실제 파일 증가를
+      교차 검증한다.
+- [x] 전체 녹화 표본의 B-frame 0을 확인하고 recorder/live-warm RTSP 입력에 wall-clock timestamp를 적용한다.
+- [x] 숫자·hex를 정규화한 message fingerprint와 worker별 1분 rate limit을 공통 logger에 추가하고,
+      1,000개 반복이 첫 record+summary로 축약되는 회귀를 고정한다.
+- [x] watcher가 SQLite를 read-only로 집계해 current/latest-ready age와 stale count를 기록하고,
+      30분+300초 초과를 `recorder_segment_stale`로 판정하는 fixture를 추가한다.
+- [ ] immutable server image와 watcher script/env를 운영에 전환하고 열린 파일의 finalize 및 8/8 수렴을 확인한다.
+- [ ] 다음 30분 경계에서 8개 모두 segment를 닫는지, error 증가율·예상 보존기간과 Viewer 수신을 확인한다.

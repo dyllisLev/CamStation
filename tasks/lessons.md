@@ -1,5 +1,20 @@
 # Lessons
 
+## 2026-08-14 — 배포 후 8/8 표면 상태와 녹화 세그먼트 순환을 별도로 검증한다
+
+- watcher의 camera·stream·recorder·Viewer가 모두 8/8이고 recorder error가 0이어도 녹화가 정상적으로
+  닫히는 것은 아니다. `latest ready ts_end`, 현재 segment 시작 age, 임시 파일 mtime/size delta를 함께
+  확인해야 장시간 열린 segment를 찾을 수 있다.
+- 운영 로그의 JSON 무결성·write failure 0은 로그 품질이 정상이라는 뜻이 아니다. 반복 신호의 초당 건수,
+  worker 집중도, 시간당 byte 증가량과 회전 상한으로 실제 보존 시간을 계산해야 “몇 주 관찰”이 가능한지
+  판단할 수 있다.
+- FFmpeg stderr의 `error`/`invalid` 문자열을 줄마다 ERROR로 복사하면 실제 timestamp 장애가 관제 신호와
+  보존 기간을 동시에 압도한다. 최초·상태 변화·주기 summary는 남기되 동일 signature는 rate limit하고,
+  watcher에는 로그량뿐 아니라 segment rollover age를 독립 경보로 둔다.
+- 열린 녹화 파일이 계속 증가하는 상태는 “영상이 들어오므로 정상”이 아니다. finalized DB row가 생기지
+  않으면 조회·백업·정리 경로에서 빠지고 프로세스 장애 시 긴 구간 전체가 손상될 수 있으므로, 수정 전에
+  현재 파일을 보존하는 안전한 회수 절차와 원인 제거를 함께 설계한다.
+
 ## 2026-08-13 — 현재 최대화 화면과 최대화 시작 동작을 구분한다
 
 - 운영 캡처에서 `WasMaximized=true`여도 사용자가 실행 뒤 수동으로 최대화했을 수 있으므로 시작 동작의

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,7 @@ func TestBuildLiveWarmFFmpegArgsConsumesVideoWithoutEncoding(t *testing.T) {
 	want := []string{
 		"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-nostats",
 		"-stats_period", "60", "-progress", "pipe:1",
+		"-fflags", "+genpts", "-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp", "-user_agent", "CamStationWarm/2.0", "-i", input,
 		"-map", "0:v:0", "-c:v", "copy", "-an", "-f", "null", "-",
 	}
@@ -209,6 +211,30 @@ func TestLiveWarmStderrIsBoundedRedactedWarning(t *testing.T) {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("stderr log leaked %q: %s", forbidden, output.String())
 		}
+	}
+}
+
+func TestLiveWarmRepeatedStderrIsRateLimited(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := opslog.New(opslog.Config{Level: "debug", Writer: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	var input strings.Builder
+	for index := 0; index < 1000; index++ {
+		input.WriteString("PTS ")
+		input.WriteString(strconv.Itoa(index + 10))
+		input.WriteString(", next:")
+		input.WriteString(strconv.Itoa(index + 20))
+		input.WriteString(" invalid dropping st:0\n")
+	}
+	if err := scanLiveWarmStderr(strings.NewReader(input.String()), logger, liveWarmSpec{CameraID: 7, StreamName: "gate-live"}, 2); err != nil {
+		t.Fatal(err)
+	}
+	logs := decodeOperationalLines(t, output.String())
+	if len(logs) != 1 || logs[0].Event != "ffmpeg_error" || logs[0].MessageFingerprint == "" {
+		t.Fatalf("stderr logs=%+v", logs)
 	}
 }
 

@@ -7,8 +7,10 @@ import argparse
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 import re
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -83,6 +85,7 @@ class Config:
     api_base: str
     container: str
     docker_bin: Path
+    db_path: Path
     daemon_log: Path
     output_log: Path
     state_path: Path
@@ -92,6 +95,7 @@ class Config:
     log_window_seconds: int = 300
     logger_stale_seconds: int = 180
     viewer_progress_stale_seconds: int = 90
+    recorder_segment_grace_seconds: int = 300
     warn_burst_threshold: int = 10
     disk_warn_percent: int = 90
     disk_error_percent: int = 95
@@ -109,6 +113,7 @@ class Config:
             api_base=validate_api_base(required_env(environ, "CAMSTATION_WATCH_API_BASE")),
             container=container,
             docker_bin=absolute_path(environ.get("CAMSTATION_WATCH_DOCKER_BIN", "/usr/bin/docker"), "docker_bin"),
+            db_path=absolute_path(required_env(environ, "CAMSTATION_WATCH_DB_PATH"), "db_path"),
             daemon_log=absolute_path(required_env(environ, "CAMSTATION_WATCH_DAEMON_LOG"), "daemon_log"),
             output_log=absolute_path(required_env(environ, "CAMSTATION_WATCH_OUTPUT_LOG"), "output_log"),
             state_path=absolute_path(required_env(environ, "CAMSTATION_WATCH_STATE_PATH"), "state_path"),
@@ -118,6 +123,7 @@ class Config:
             log_window_seconds=int_env(environ, "CAMSTATION_WATCH_LOG_WINDOW_SECONDS", 300, 60, 3600),
             logger_stale_seconds=int_env(environ, "CAMSTATION_WATCH_LOGGER_STALE_SECONDS", 180, 30, 3600),
             viewer_progress_stale_seconds=int_env(environ, "CAMSTATION_WATCH_VIEWER_PROGRESS_STALE_SECONDS", 90, 15, 600),
+            recorder_segment_grace_seconds=int_env(environ, "CAMSTATION_WATCH_RECORDER_SEGMENT_GRACE_SECONDS", 300, 60, 3600),
             warn_burst_threshold=int_env(environ, "CAMSTATION_WATCH_WARN_BURST", 10, 1, 10000),
             disk_warn_percent=int_env(environ, "CAMSTATION_WATCH_DISK_WARN_PERCENT", 90, 1, 99),
             disk_error_percent=int_env(environ, "CAMSTATION_WATCH_DISK_ERROR_PERCENT", 95, 2, 100),
@@ -132,6 +138,8 @@ class Config:
             raise WatchConfigError("disk_threshold_order_invalid")
         if self.daemon_log == self.output_log:
             raise WatchConfigError("log_paths_must_differ")
+        if self.db_path in {self.daemon_log, self.output_log}:
+            raise WatchConfigError("database_log_paths_must_differ")
         return self
 
 
@@ -349,13 +357,94 @@ def aggregate_streams(value: Any) -> dict[str, Any]:
 def aggregate_recorders(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not isinstance(value.get("workers"), list):
         raise ProbeError("recorders_shape")
+    segment_minutes = value.get("segmentMinutes")
+    if not isinstance(segment_minutes, int) or segment_minutes <= 0:
+        raise ProbeError("recorders_segment_minutes")
     workers = [worker for worker in value["workers"] if isinstance(worker, dict)]
     return {
         "enabled": value.get("enabled") is True,
+        "segmentMinutes": segment_minutes,
         "workers": len(workers),
         "running": sum(1 for worker in workers if worker.get("state") == "running"),
         "current": sum(1 for worker in workers if isinstance(worker.get("current"), str) and bool(worker.get("current"))),
         "errors": sum(1 for worker in workers if isinstance(worker.get("lastError"), str) and bool(worker.get("lastError"))),
+    }
+
+
+def unix_age_seconds(now: dt.datetime, value: Any) -> int | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return max(0, int(now.timestamp() - numeric))
+
+
+def recording_freshness(
+    path: Path,
+    now: dt.datetime,
+    segment_minutes: int,
+    grace_seconds: int,
+) -> dict[str, Any]:
+    if segment_minutes <= 0 or grace_seconds < 0:
+        raise ProbeError("recording_freshness_config")
+    try:
+        mode = path.stat().st_mode
+    except OSError as exc:
+        raise ProbeError("recording_database_missing") from exc
+    if not stat.S_ISREG(mode):
+        raise ProbeError("recording_database_not_regular")
+
+    uri = "file:" + urllib.parse.quote(str(path), safe="/") + "?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=2)
+        connection.execute("PRAGMA query_only=ON")
+        rows = connection.execute(
+            """
+            WITH active AS (
+                SELECT stream_name, COUNT(*) AS current_rows, MIN(ts_start) AS current_start
+                  FROM recording_segments
+                 WHERE status IN ('recording','finalizing')
+                 GROUP BY stream_name
+            )
+            SELECT active.current_rows, active.current_start,
+                   (SELECT MAX(segment.ts_end)
+                      FROM recording_segments AS segment
+                     WHERE segment.stream_name=active.stream_name
+                       AND segment.status='ready' AND segment.ts_end IS NOT NULL) AS latest_ready
+              FROM active
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise ProbeError("recording_database_query") from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+    stale_after = segment_minutes * 60 + grace_seconds
+    current_ages = [unix_age_seconds(now, row[1]) for row in rows]
+    ready_ages = [unix_age_seconds(now, row[2]) for row in rows if row[2] is not None]
+    if any(value is None for value in current_ages) or any(value is None for value in ready_ages):
+        raise ProbeError("recording_database_timestamp")
+    current_values = [value for value in current_ages if value is not None]
+    ready_values = [value for value in ready_ages if value is not None]
+    missing_ready = sum(
+        1
+        for row, current_age in zip(rows, current_values)
+        if row[2] is None and current_age > stale_after
+    )
+    return {
+        "present": True,
+        "segmentMinutes": segment_minutes,
+        "staleAfterSeconds": stale_after,
+        "streamsWithCurrent": len(rows),
+        "currentRows": sum(int(row[0]) for row in rows),
+        "staleCurrent": sum(1 for value in current_values if value > stale_after),
+        "oldestCurrentAgeSeconds": max(current_values, default=None),
+        "streamsWithReady": len(ready_values),
+        "staleReady": sum(1 for value in ready_values if value > stale_after),
+        "missingReadyPastThreshold": missing_ready,
+        "oldestReadyAgeSeconds": max(ready_values, default=None),
     }
 
 
@@ -409,6 +498,7 @@ def collect_snapshot(
     fetcher: Callable[[str, str, int], Any] = http_get_json,
     runner: Callable[[list[str], int], str] = run_command,
     disk_probe: Callable[[Path], dict[str, int | float]] = disk_summary,
+    recording_probe: Callable[[Path, dt.datetime, int, int], dict[str, Any]] = recording_freshness,
 ) -> dict[str, Any]:
     started = time.monotonic()
     now = (now or utc_now()).astimezone(UTC)
@@ -496,6 +586,30 @@ def collect_snapshot(
             add_alert(alerts, "api_recorders_invalid", "error")
     else:
         snapshot["recorders"] = None
+
+    if isinstance(snapshot.get("recorders"), dict):
+        try:
+            recording_segments = recording_probe(
+                config.db_path,
+                now,
+                snapshot["recorders"]["segmentMinutes"],
+                config.recorder_segment_grace_seconds,
+            )
+            snapshot["recordingSegments"] = recording_segments
+            expected = snapshot["cameras"]["enabled"] if isinstance(snapshot.get("cameras"), dict) else snapshot["recorders"]["workers"]
+            if recording_segments["streamsWithCurrent"] < expected:
+                add_alert(alerts, "recorder_segment_shortfall", "degraded")
+            if (
+                recording_segments["staleCurrent"] > 0
+                or recording_segments["staleReady"] > 0
+                or recording_segments["missingReadyPastThreshold"] > 0
+            ):
+                add_alert(alerts, "recorder_segment_stale", "error")
+        except (ProbeError, OSError, KeyError, TypeError, ValueError):
+            snapshot["recordingSegments"] = None
+            add_alert(alerts, "recorder_segment_probe_failed", "error")
+    else:
+        snapshot["recordingSegments"] = None
 
     if payloads["viewers"] is not None:
         try:
