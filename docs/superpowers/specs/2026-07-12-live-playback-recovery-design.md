@@ -71,7 +71,7 @@ Focused tiles reverse the first two choices. This preserves the focus output as 
 
 The hook remains compatible with single-stream callers such as dashboard previews; they retry the same stream after the full-cycle delay.
 
-Once a fallback produces media, it remains active for that mounted tile. A page remount starts from the preferred output again. This avoids interrupting a recovered tile merely to test whether the cheaper primary output has returned.
+Once a fallback produces media, it is only a temporary visible route. The tile keeps that working connection untouched while a hidden bounded probe checks the preferred output once per minute, and switches back only after the primary video clock genuinely advances. If no candidate is playing, every five-minute cooldown expiry starts a fresh bounded recovery episode that revisits both primary transports, the fallback, and isolated resubscription.
 
 ## Tile Feedback
 

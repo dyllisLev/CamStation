@@ -124,6 +124,39 @@ test("a verified primary promotion receives a fresh bounded recovery episode", (
   });
 });
 
+test("each cooldown probe starts a fresh bounded episode that revisits fallback", () => {
+  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+
+  episode.recordFailure(1_000);
+  episode.nextFailure(1_000);
+  episode.nextFailure(5_000);
+  episode.nextFailure(10_000);
+  episode.nextFailure(20_000);
+  assert.deepEqual(episode.nextFailure(31_001), { action: "cooldown", until: 331_001 });
+
+  episode.restartEpisode(331_001);
+
+  assert.equal(episode.remainingMs(331_001), 30_000);
+  assert.equal(episode.stalledForMs(331_001), 330_001);
+  assert.deepEqual(episode.nextFailure(331_001), {
+    transport: "webrtc",
+    streamName: "yard-live",
+    attempt: 2,
+  });
+  assert.deepEqual(episode.nextFailure(336_000), {
+    transport: "mse",
+    streamName: "yard-live",
+    attempt: 3,
+  });
+  assert.deepEqual(episode.nextFailure(341_000), {
+    transport: "mse",
+    streamName: "yard-focus",
+    attempt: 4,
+  });
+  assert.deepEqual(episode.nextFailure(351_000), { action: "resubscribe", attempt: 5 });
+  assert.deepEqual(episode.nextFailure(361_002), { action: "cooldown", until: 661_002 });
+});
+
 test("the low-frequency probe scheduler can re-arm after every failed probe", () => {
   let now = 1_000;
   let nextTimer = 0;

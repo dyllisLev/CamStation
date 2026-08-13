@@ -408,9 +408,10 @@ Each WebRTC or MSE connection attempt has a five-second setup/progress deadline.
 The complete active recovery episode, including transport changes and the one
 isolated resubscribe, is capped at 30 seconds from stall detection. When that
 deadline expires, the stream reports a terminal episode result and enters its
-cooldown. It does not continuously cycle candidates in the background, but it
-keeps one low-frequency primary probe scheduled every five minutes until media
-progress returns or the tile is unmounted.
+cooldown. It does not continuously cycle candidates in the background. Every
+five minutes it starts one fresh, 30-second per-stream recovery episode that
+revisits the primary transports, the approved fallback, and the isolated
+resubscribe step until media progress returns or the tile is unmounted.
 
 An approved fallback output is temporary, not a terminal healthy route. While
 the fallback has genuine media progress, the visible fallback connection stays
@@ -445,8 +446,10 @@ Escalation rules:
 - stale stream: attempt the initial WebRTC connection and one WebRTC reconnect,
   then try MSE primary and one approved MSE fallback candidate once each;
 - exhausted stream attempts: perform one isolated resubscribe, then enter a
-  five-minute per-stream cooldown with one low-frequency probe per cooldown;
-  if that probe fails, schedule the next five-minute probe instead of stopping;
+  five-minute per-stream cooldown; each cooldown expiry starts one fresh bounded
+  recovery episode across the primary transports, approved fallback, and
+  isolated resubscribe, and another failure schedules the next cooldown instead
+  of stopping;
 - stable playback for five minutes resets that stream recovery episode;
 - fallback playback: keep the fallback visible while probing the primary once
   per minute; promote only after real video-clock progress and repeat after a

@@ -5,7 +5,6 @@ import {
 } from "../../app/playbackDiagnosticsApi";
 import { openPlaybackConnection, probePlaybackProgress } from "./playbackConnection";
 import {
-  PLAYBACK_COOLDOWN_MS,
   PLAYBACK_SETUP_MS,
   PLAYBACK_STALL_MS,
   PlaybackPrimaryPromoter,
@@ -87,7 +86,6 @@ export function useWebRtcMseStream(
     let closeConnection: (() => void) | null = null;
     let setupTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
-    let terminalAttempt = false;
     let lastVideoTime = -1;
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
@@ -194,12 +192,13 @@ export function useWebRtcMseStream(
         errorCategory: "episode_exhausted",
       }));
       recoveryProbeScheduler.arm(until, () => {
+        recovery.restartEpisode(Date.now());
         beginAttempt({
           transport: preferredTransport,
           streamName: candidates[0],
-          attempt: activeAttempt.attempt + 1,
+          attempt: 1,
           phase: "retrying",
-        }, "episode_exhausted", true);
+        }, "episode_exhausted");
       });
     }
 
@@ -242,10 +241,6 @@ export function useWebRtcMseStream(
       recovery.recordFailure(now);
       generation++;
       teardownAttempt();
-      if (terminalAttempt) {
-        enterCooldown(now + PLAYBACK_COOLDOWN_MS);
-        return;
-      }
       advance(recovery.nextFailure(now), errorCategory);
     }
 
@@ -316,7 +311,6 @@ export function useWebRtcMseStream(
         counts.reconnect = 0;
         counts.fallback = 0;
         counts.resubscribe = 0;
-        terminalAttempt = false;
       }
       ensurePrimaryPromotion();
       if (now - lastProgressStateAt < 1_000) return;
@@ -344,13 +338,12 @@ export function useWebRtcMseStream(
     function beginAttempt(
       options: AttemptOptions,
       previousError: PlaybackErrorCategory = "none",
-      terminal = false,
     ) {
       if (destroyed) return;
       teardownAttempt();
       const now = Date.now();
       const remainingMs = recovery.remainingMs(now);
-      if (!terminal && remainingMs === 0) {
+      if (remainingMs === 0) {
         recovery.recordFailure(now);
         advance(recovery.nextFailure(now), "episode_exhausted");
         return;
@@ -360,7 +353,6 @@ export function useWebRtcMseStream(
       attemptStartedAt = now;
       diagnosticPhase = options.phase;
       attemptEvents.clear();
-      terminalAttempt = terminal;
       publishAttempt(options, previousError);
       emitDiagnostic("attempt_started", {
         phase: options.phase,
@@ -368,7 +360,7 @@ export function useWebRtcMseStream(
       });
       setupTimer = setTimeout(
         () => failAttempt(token, "setup_timeout"),
-        terminal ? PLAYBACK_SETUP_MS : recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
+        recovery.boundedDelayMs(Date.now(), PLAYBACK_SETUP_MS),
       );
       closeConnection = openPlaybackConnection({
         video,
