@@ -7,6 +7,12 @@
   끝내지 말고 Service가 새로 실행한 PID의 첫 창 상태를 검증한다.
 - “최대화로 시작”은 native fullscreen이나 영구적인 크기 잠금이 아니다. hidden window의 첫 표시 전에
   Windows maximize를 적용하되 제목 표시줄, 작업 표시줄과 사용자의 이후 restore/resize는 유지한다.
+- Viewer Service가 Running/Auto로 돌아온 사실과 interactive Viewer 창이 새로 실행된 사실도 구분한다.
+  Service restart만으로 창을 만든다고 가정하지 말고, 제품의 승인된 launch/restart 경로로 새 PID를 만든 뒤
+  그 첫 창을 캡처한다.
+- Electron multi-process 종료 표본을 순회할 때 부모 종료로 자식이 먼저 사라질 수 있다. exact PID 목록을
+  사용하더라도 각 `Stop-Process` 직전에 PID가 아직 존재하는지 재확인해 정상 종료 경쟁을 배포 실패로
+  만들지 않는다.
 
 ## 2026-08-13 — ignored 운영 프로필은 현재 worktree 밖의 승인 원본까지 먼저 찾는다
 

@@ -2,8 +2,8 @@
 
 ## 사양과 경계
 
-- `monitoring-pc`의 Viewer가 설치 직후, Viewer Service 재시작 뒤 자동 실행, 일반 재실행에서 처음 보이는
-  순간부터 Windows 최대화 상태여야 한다. 현재 2.0.26 소스는 hidden `BrowserWindow`를 만든 뒤
+- `monitoring-pc`의 Viewer가 설치 후 실행, `restart_viewer`, 일반 재실행에서 처음 보이는 순간부터 Windows
+  최대화 상태여야 한다. 현재 2.0.26 소스는 hidden `BrowserWindow`를 만든 뒤
   `ready-to-show`에서 `show()`만 호출해 Electron 기본 창 크기로 시작할 수 있다.
 - 요구 상태는 Windows `maximize`이며 Viewer native fullscreen이 아니다. 제목 표시줄·작업 표시줄과
   사용자의 이후 복원/크기 조절은 유지하고, 매 순간 최대화를 강제하거나 저장된 설정을 추가하지 않는다.
@@ -17,11 +17,11 @@
 - [x] 공식 wrapper status와 read-only audit/capture로 `monitoring-pc`, Viewer 2.0.26, Service Running/Auto,
       session 1, 현재 수동 최대화 창과 기존 설정 hash를 고정한다.
 - [x] first-show 최대화 순서를 회귀 테스트로 고정한 뒤 최소한의 Viewer main-process 변경을 구현한다.
-- [ ] Viewer 전체 테스트·빌드와 관련 정적 검사를 통과하고 깨끗한 exact commit에서 2.0.27 MSI를 생성한다.
-- [ ] MSI hash/ProductCode/UpgradeCode를 검증하고 `monitoring-pc`에 공식 artifact 전송·업그레이드를 수행한다.
-- [ ] Service가 자동 실행한 새 Viewer를 exact-window capture로 확인해 `WasMaximized=true`, 실제 8타일 진행,
+- [x] Viewer 전체 테스트·빌드와 관련 정적 검사를 통과하고 깨끗한 exact commit에서 2.0.27 MSI를 생성한다.
+- [x] MSI hash/ProductCode/UpgradeCode를 검증하고 `monitoring-pc`에 공식 artifact 전송·업그레이드를 수행한다.
+- [x] 설치 직후 공식 launcher가 실행한 새 Viewer를 exact-window capture로 확인해 `WasMaximized=true`, 실제 8타일 진행,
       config/client/log policy 보존, task/run/listener/firewall 잔여 0을 증명한다.
-- [ ] 검토·교훈·구현 상태를 갱신하고 완료 커밋을 feature branch와 `main`에 force 없이 게시한다.
+- [x] 검토·교훈·구현 상태를 갱신하고 완료 커밋을 feature branch와 `main`에 force 없이 게시한다.
 
 ## 검토
 
@@ -32,6 +32,23 @@
   config SHA-256 `da085b9b...e8710`, client identity SHA-256 `0f5101ea...f323`, warn·5 MiB×3이다.
 - `ready-to-show` handler가 `maximize()` 후 `show()`를 한 번만 호출하도록 변경했다. 변경 전 회귀 테스트는
   48/49로 정확히 실패했고 구현 후 Viewer 49 tests와 TypeScript/package build가 통과했다.
+- clean commit `56de740090f37454a6b2013de8833c0b3eb970f9`에서 Viewer 2.0.27 MSI를 만들었다. ProductCode는
+  `{9A18B580-AA6E-4F2D-AE45-986523915BBE}`, UpgradeCode는 기존 값 그대로이며, 125,898,752 bytes,
+  SHA-256 `52c85f2b...416f`, 76 files, `NotSigned`다.
+- 첫 설치 transaction은 MSI 실행 전 `stop_viewer`에서 이미 종료된 Electron 자식 PID를 다시 종료하는
+  경쟁 조건을 만나 2.0.26으로 검증 원복됐다. 각 exact PID를 즉시 재확인하도록 배포 script를 고친 뒤
+  두 번째 transaction은 exit 0, reboot 불필요로 2.0.27을 설치했다. 2.0.26 rollback MSI
+  `4c5358a7...6502`는 보존했다.
+- 설치 후 Service 재시작만으로는 새 interactive 창을 만드는 제품 경로가 아니므로 공식
+  `LaunchAndCapture`로 새 Viewer를 실행했다. 첫 capture의 원격 폴더 잠금은 exact run cleanup으로
+  `Remaining=false`를 확인했고, 이어진 capture
+  `20260813T121754992Z-6c822fc3a58c42459c28764cebed2787`에서 새 window PID 9388이 수동 조작 없이
+  `WasMaximized=true`, bounds -8/-8/2576×1408이었다. PNG SHA-256은 `62ee1173...a89bb`이며 화면에서
+  8개 타일의 최신 영상이 확인됐다.
+- 배포 후 Product/version/core hashes, Service Running/Auto, config/client identity hash, warn·5 MiB×3가
+  모두 일치했다. 서버 watcher 최신 표본도 container healthy/restart 0, camera·stream·recorder·Viewer
+  8/8, progress age 7초, alert와 logger warn/error 0이었다. 최종 target status는 session 1 Active,
+  control/setup/capture/configure task 0, driver TCP/firewall 0이다.
 
 ---
 

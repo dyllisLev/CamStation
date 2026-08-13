@@ -13,12 +13,27 @@ This document records the current implementation state so the next session can c
 - Current deployed 2.0 source revision: `de4938c532694615f30530952d8daf50e511f208`
 - Current deployed image: `camstation:2.0.0-rc.20260813.18-operational-logging`, image ID
   `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`
-- Current monitoring PC Viewer: 2.0.26; Service Running/Auto; local logging `warn`, 5 MiB × 3
+- Current monitoring PC Viewer: 2.0.27; Service Running/Auto; local logging `warn`, 5 MiB × 3;
+  first visible window starts maximized
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-13 Viewer maximized first show
+
+- Viewer `ready-to-show` now applies native Windows maximize before the first `show()`. This is not
+  Viewer fullscreen: title bar, taskbar, restore and resize remain available, and later renderer loads
+  do not force the window back to maximized state.
+- The regression test failed against the old show-only behavior, then all 49 Viewer tests and the
+  TypeScript/package build passed. Viewer 2.0.27 was clean-built from `56de740` and deployed to
+  `monitoring-pc`; the MSI is 125,898,752 bytes with SHA-256
+  `52c85f2bee95a3189a0b8b2712265e2597b141363927a8c81643847f67da416f` and remains unsigned.
+- The freshly launched installed Viewer window was observed at -8/-8 with 2576×1408 bounds and
+  `WasMaximized=true`, without a maximize input. The inspected image showed all eight live tiles, and
+  server telemetry independently reported camera/stream/recorder/Viewer 8/8. Configuration, client
+  identity, `warn`/5 MiB×3 logging, Service Running/Auto and the 2.0.26 rollback MSI were preserved.
 
 ### 2026-08-13 level-based operational logging
 
@@ -45,7 +60,7 @@ This document records the current implementation state so the next session can c
   heartbeats do not.
 - Initial-soak and steady-state settings, live queries and cross-machine session joins are documented in
   [the operational logging guide](2026-08-13_camstation2-operational-logging.md). The daemon logger and
-  one-minute host watcher are deployed in production, and `monitoring-pc` is upgraded to Viewer 2.0.26.
+  one-minute host watcher are deployed in production, and `monitoring-pc` is upgraded to Viewer 2.0.27.
   The 2026-08-13 20:56 KST sample showed container healthy/restart 0, camera/stream/recorder/Viewer 8/8,
   six consecutive watcher `ok` samples, no active alerts or logger failures, and Viewer media progress
   age 3 seconds. Existing

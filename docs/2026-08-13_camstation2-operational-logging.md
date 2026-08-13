@@ -15,7 +15,8 @@ Windows Viewer 로컬 로그는 서버에 보고할 수 없는 마지막 구간�
 - daemon 로그: `/var/lib/camstation2-production/data/logs/camstationd.jsonl`, 64 MiB×32
 - 자동 추이: `/var/lib/camstation2-production/data/logs/operational-watch.jsonl`, 1분, 10 MiB×4;
   `camstation-log-watch.timer` enabled/active
-- `monitoring-pc`: Viewer 2.0.26, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3
+- `monitoring-pc`: Viewer 2.0.27, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3;
+  새 Viewer 창은 Windows 최대화 상태로 시작
 - 2026-08-13 20:56 KST 최종 표본: container healthy/restart 0, camera·stream·recorder·Viewer 8/8,
   Viewer progress age 3초, watcher 6개 연속 `ok`, alert/warn/error/persistent-write-failure 0
 
