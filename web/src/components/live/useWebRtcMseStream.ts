@@ -9,6 +9,7 @@ import {
   PLAYBACK_COOLDOWN_MS,
   PLAYBACK_SETUP_MS,
   PLAYBACK_STALL_MS,
+  PlaybackProbeScheduler,
   PlaybackRecovery,
   recoveryAttemptPresentation,
   type PlaybackRecoveryStep,
@@ -78,6 +79,7 @@ export function useWebRtcMseStream(
     const video: HTMLVideoElement = videoElement;
 
     const recovery = new PlaybackRecovery(candidates);
+    const probeScheduler = new PlaybackProbeScheduler();
     const sessionId = newPlaybackSessionId();
     const sessionStartedAt = Date.now();
     let destroyed = false;
@@ -88,10 +90,8 @@ export function useWebRtcMseStream(
     let objectURL = "";
     let setupTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
-    let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
     let statsTimer: ReturnType<typeof setInterval> | null = null;
     let terminalAttempt = false;
-    let lowFrequencyProbeUsed = false;
     let lastVideoTime = -1;
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
@@ -147,11 +147,10 @@ export function useWebRtcMseStream(
     function clearTimers() {
       if (setupTimer) clearTimeout(setupTimer);
       if (stallTimer) clearTimeout(stallTimer);
-      if (cooldownTimer) clearTimeout(cooldownTimer);
       if (statsTimer) clearInterval(statsTimer);
+      probeScheduler.clear();
       setupTimer = null;
       stallTimer = null;
-      cooldownTimer = null;
       statsTimer = null;
     }
 
@@ -211,7 +210,7 @@ export function useWebRtcMseStream(
       }));
     }
 
-    function enterCooldown(until: number, scheduleProbe = true) {
+    function enterCooldown(until: number) {
       diagnosticPhase = "cooldown";
       emitDiagnostic("episode_exhausted", {
         phase: "cooldown",
@@ -226,18 +225,14 @@ export function useWebRtcMseStream(
         stalledForMs: recovery.stalledForMs(Date.now()),
         errorCategory: "episode_exhausted",
       }));
-      if (scheduleProbe && !lowFrequencyProbeUsed) {
-        lowFrequencyProbeUsed = true;
-        cooldownTimer = setTimeout(() => {
-          cooldownTimer = null;
-          beginAttempt({
-            transport: preferredTransport,
-            streamName: candidates[0],
-            attempt: activeAttempt.attempt + 1,
-            phase: "retrying",
-          }, "episode_exhausted", true);
-        }, Math.max(0, until - Date.now()));
-      }
+      probeScheduler.arm(until, () => {
+        beginAttempt({
+          transport: preferredTransport,
+          streamName: candidates[0],
+          attempt: activeAttempt.attempt + 1,
+          phase: "retrying",
+        }, "episode_exhausted", true);
+      });
     }
 
     function advance(step: PlaybackRecoveryStep, errorCategory: PlaybackErrorCategory) {
@@ -280,7 +275,7 @@ export function useWebRtcMseStream(
       generation++;
       teardownAttempt();
       if (terminalAttempt) {
-        enterCooldown(now + PLAYBACK_COOLDOWN_MS, false);
+        enterCooldown(now + PLAYBACK_COOLDOWN_MS);
         return;
       }
       advance(recovery.nextFailure(now), errorCategory);
@@ -308,7 +303,6 @@ export function useWebRtcMseStream(
         counts.fallback = 0;
         counts.resubscribe = 0;
         terminalAttempt = false;
-        lowFrequencyProbeUsed = false;
       }
       if (now - lastProgressStateAt < 1_000) return;
       lastProgressStateAt = now;

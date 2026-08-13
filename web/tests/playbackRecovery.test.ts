@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackRecovery } from "../src/components/live/playbackRecovery.ts";
+import { PlaybackProbeScheduler, PlaybackRecovery } from "../src/components/live/playbackRecovery.ts";
+
+test("the low-frequency probe scheduler can re-arm after every failed probe", () => {
+  let now = 1_000;
+  let nextTimer = 0;
+  let pending: { readonly id: number; readonly callback: () => void; readonly delayMs: number } | null = null;
+  const delays: number[] = [];
+  const scheduler = new PlaybackProbeScheduler({
+    now: () => now,
+    set: (callback, delayMs) => {
+      const timer = { id: ++nextTimer, callback, delayMs };
+      pending = timer;
+      delays.push(delayMs);
+      return timer.id;
+    },
+    clear: (timerId) => {
+      if (pending?.id === timerId) pending = null;
+    },
+  });
+  let probes = 0;
+
+  scheduler.arm(now + 300_000, () => probes++);
+  assert.equal(pending?.delayMs, 300_000);
+  pending?.callback();
+  assert.equal(probes, 1);
+
+  now += 305_000;
+  scheduler.arm(now + 300_000, () => probes++);
+  assert.equal(pending?.delayMs, 300_000);
+  pending?.callback();
+
+  assert.equal(probes, 2);
+  assert.deepEqual(delays, [300_000, 300_000]);
+});
 
 test("one episode stops after WebRTC, reconnect, MSE primary, fallback, and resubscribe", () => {
   const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);

@@ -4,6 +4,35 @@ export const PLAYBACK_EPISODE_MS = 30_000;
 export const PLAYBACK_STABLE_RESET_MS = 5 * 60_000;
 export const PLAYBACK_COOLDOWN_MS = 5 * 60_000;
 
+export type PlaybackProbeClock = {
+  readonly now: () => number;
+  readonly set: (callback: () => void, delayMs: number) => number;
+  readonly clear: (timerId: number) => void;
+};
+
+export class PlaybackProbeScheduler {
+  private timerId: number | null = null;
+  private readonly clock: PlaybackProbeClock;
+
+  constructor(clock: PlaybackProbeClock = browserPlaybackProbeClock()) {
+    this.clock = clock;
+  }
+
+  arm(until: number, probe: () => void): void {
+    this.clear();
+    this.timerId = this.clock.set(() => {
+      this.timerId = null;
+      probe();
+    }, Math.max(0, until - this.clock.now()));
+  }
+
+  clear(): void {
+    if (this.timerId === null) return;
+    this.clock.clear(this.timerId);
+    this.timerId = null;
+  }
+}
+
 export type PlaybackTransport = "webrtc" | "mse";
 
 export type PlaybackRecoveryStep =
@@ -93,4 +122,12 @@ export class PlaybackRecovery {
   private cooldown(now: number): PlaybackRecoveryStep {
     return { action: "cooldown", until: now + PLAYBACK_COOLDOWN_MS };
   }
+}
+
+function browserPlaybackProbeClock(): PlaybackProbeClock {
+  return {
+    now: () => Date.now(),
+    set: (callback, delayMs) => window.setTimeout(callback, delayMs),
+    clear: (timerId) => window.clearTimeout(timerId),
+  };
 }
