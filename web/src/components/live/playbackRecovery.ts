@@ -214,6 +214,12 @@ export class PlaybackRecovery {
     return Math.max(0, Math.min(maximumMs, this.remainingMs(now)));
   }
 
+  restartEpisode(now: number): void {
+    this.episodeStartedAt = now;
+    this.step = 0;
+    this.stableSince = null;
+  }
+
   resetForPrimaryPromotion(): void {
     this.episodeStartedAt = null;
     this.step = 0;
