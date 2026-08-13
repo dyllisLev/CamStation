@@ -10,19 +10,20 @@ Windows Viewer 로컬 로그는 서버에 보고할 수 없는 마지막 구간�
 
 ## 현재 운영 반영 상태
 
-- 서버: `camstation:2.0.0-rc.20260813.18-operational-logging`, source revision `de4938c`,
-  image ID `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`
+- 서버: `camstation:2.0.0-rc.20260814.19-recorder-timestamp`, source revision `61b4672`,
+  image ID `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`
 - daemon 로그: `/var/lib/camstation2-production/data/logs/camstationd.jsonl`, 64 MiB×32
 - 자동 추이: `/var/lib/camstation2-production/data/logs/operational-watch.jsonl`, 1분, 10 MiB×4;
   `camstation-log-watch.timer` enabled/active
 - `monitoring-pc`: Viewer 2.0.27, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3;
   새 Viewer 창은 Windows 최대화 상태로 시작
-- 2026-08-13 20:56 KST 최종 표본: container healthy/restart 0, camera·stream·recorder·Viewer 8/8,
-  Viewer progress age 3초, watcher 6개 연속 `ok`, alert/warn/error/persistent-write-failure 0
+- 2026-08-14 08:02 KST 최종 표본: container healthy/restart 0, camera·stream·recorder·Viewer 8/8,
+  recording current/ready 8/8, stale 0, watcher `ok`, alert/error/persistent-write-failure 0
 
-재시작 직후 public live producer 두 개가 약 6분 동안 늦게 붙은 이력은 전환 구간의 watcher 표본과
-daemon `not_found` retry로 보존돼 있다. 이전 image에서도 같은 지연이 재현됐으므로 이번 logger의
-회귀로 판정하지 않았으며, 운영 중에는 재시작하지 않고 1분 표본의 재발 빈도와 수렴 시간을 관찰한다.
+`.19` 재시작 직후 일부 live-warm이 준비되지 않은 로컬 stream에 먼저 접근해 404 signature 4종을 한 번씩
+남겼고 Viewer도 cooldown 재연결을 수행했다. recorder 오류는 없었고 5분 안에 Viewer 8/8·watcher `ok`로
+수렴했으며 이후 오류는 증가하지 않았다. 08:00 KST 첫 clock 경계에서는 recorder 8개가 모두 segment를
+닫고 다시 열었고 닫힌 8개 파일은 모두 `ffprobe`에 성공했다.
 
 ## 초기 관제를 시작하기
 
@@ -380,15 +381,45 @@ rate limit summary는 원래 event와 level을 유지하므로 level filter와 a
 - finding: Viewer 2.0.26과 Service가 실행 중이고 warn·5 MiB×3 정책이 명시됐다. config/client identity는
   배포 전 hash와 같으며 실제 창과 서버 telemetry 모두 8개 WebRTC stream의 진행을 확인했다.
 
+### E-008
+
+- observed_at: 2026-08-14 07:57~08:04 KST
+- source_type: production runtime
+- source_ref: `cctv` aggregate Docker/DB/log/watcher and `ffprobe` checks
+- content_hash: source `61b467250c1c97c3de4b98a8fd1ef1c4d0207299`; image
+  `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`; Compose
+  `f6cd0f4ff7f7f64aa99d0505e10fd1770391f021d3cff56e4c3f010148525ae9`; watcher
+  `a0b8ead344c1e8b22394dc89bd454a656df895574cd06c737a065945fe969912`
+- finding: 배포 전 watcher가 기존 장기 segment를 `recorder_segment_stale`로 탐지했다. 전환 때 약 4시간
+  56분 열린 row가 233,570,352-byte `ready` 파일로 정상 종결됐고, 08:00 KST 경계에서 8개 recorder가
+  모두 닫고 다시 열었다. 닫힌 8개·221,191,153 bytes는 모두 `ffprobe`에 성공했으며 video H.264 7/HEVC 1,
+  audio 8/8이다. steady window에는 error 0, 43,794 bytes/214 seconds, repeated suppression 195였고 watcher는
+  camera·stream·recorder·Viewer 8/8, stale 0, alert 0의 `ok`다. container는 healthy/restart 0이며 watcher
+  timer는 enabled/active다.
+
+### E-009
+
+- observed_at: 2026-08-14 08:02~08:04 KST
+- source_type: production Windows runtime
+- source_ref: official `monitoring-pc` target status, read-only log audit and exact Viewer capture
+- content_hash: audit script
+  `2d7747aec3f329f0ff65e513cb43dcb7e14135c20b6e2b5c9eecd984ee8fabbc`; screenshot
+  `f832948d82a06605386ffb25e01319b35be46bb21c9a2b4284bfb8023b91f5c7`
+- finding: Viewer 2.0.27과 Service Running/Auto, warn·5 MiB×3가 유지되고 Windows crash/hang은 0이다.
+  재시작 구간의 setup timeout/cooldown 기록은 08:02:05 KST 이후 증가하지 않았다. capture는
+  `WasMaximized=true`, 2576×1408이고 실제 화면과 서버 telemetry 모두 8/8이다. 원격 run/task/listener
+  잔여는 0이다.
+
 ### F-001
 
 - status: deployed and observed
-- evidence_ids: E-001, E-002, E-003, E-004, E-005, E-006, E-007
+- evidence_ids: E-001, E-002, E-003, E-004, E-005, E-006, E-007, E-008, E-009
 - finding: 카메라 media 진행에서 Viewer playback까지는 공통 JSONL 필드와 session으로 추적할 수 있고,
   고빈도 정상 pulse는 서버의 상태 전이·주기 요약으로 제한된다. 서버 logger와 watcher, Viewer 최소
-  블랙박스가 운영 배포됐고 정상 8/8 표본이 확인됐다.
-- remaining acceptance: 실제 장애가 재발할 때 같은 `sessionId`의 server/Viewer record를 결합해 원인을
-  특정한다. 평시 warn 정책에서는 Viewer record가 새로 생기지 않는 것이 정상이다.
+  블랙박스와 recorder timestamp 개선이 운영 배포됐고 실제 30분 경계의 정상 8/8 순환이 확인됐다.
+- remaining acceptance: 1분 watcher를 유지해 몇 주간 stale segment와 오류 증가율을 계속 본다. 실제
+  playback 장애가 재발할 때 같은 `sessionId`의 server/Viewer record를 결합하며, 평시 warn 정책에서는
+  Viewer record가 새로 생기지 않는 것이 정상이다.
 
 ### P-001
 
@@ -399,5 +430,6 @@ rate limit summary는 원래 event와 level을 유지하므로 level filter와 a
   2. `recorder`의 progress와 segment close로 서버 수신·저장을 확인한다 — E-001.
   3. 서버 `playback`과 Viewer `viewer.playback`을 같은 `sessionId`로 결합한다 — E-002.
   4. Viewer control/renderer/stream 상태 전이와 DB 운영 event를 대조한다 — E-001, E-002.
-- residual_risks: 내부 배포 Viewer MSI는 code signing되지 않았다. 재시작 직후 public live producer가
-  약 6분 늦게 수렴한 이력이 있어 watcher로 재발 빈도와 지속시간을 계속 관찰해야 한다.
+- residual_risks: 내부 배포 Viewer MSI는 code signing되지 않았다. 재시작 직후 live-warm/Viewer가
+  준비 순서와 cooldown 때문에 일시 오류를 남긴 이력이 있어 watcher로 재발 빈도와 지속시간을 계속
+  관찰해야 한다.

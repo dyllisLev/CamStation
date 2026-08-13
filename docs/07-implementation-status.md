@@ -7,12 +7,12 @@ This document records the current implementation state so the next session can c
 ## Current Branch And Remote
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
-- Active branch used for this work: `camstation2-initial`
+- Active branch used for this work: `inspect-camera-server-viewer-log-coverage`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 source revision: `de4938c532694615f30530952d8daf50e511f208`
-- Current deployed image: `camstation:2.0.0-rc.20260813.18-operational-logging`, image ID
-  `sha256:ad1bc15d0bbd3b6e3aac55660dccbb0b6109a9f075238c649e746ad7c9a09326`
+- Current deployed 2.0 source revision: `61b467250c1c97c3de4b98a8fd1ef1c4d0207299`
+- Current deployed image: `camstation:2.0.0-rc.20260814.19-recorder-timestamp`, image ID
+  `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`
 - Current monitoring PC Viewer: 2.0.27; Service Running/Auto; local logging `warn`, 5 MiB × 3;
   first visible window starts maximized
 - Management runtime URL: `http://10.0.0.26:18081/`
@@ -38,6 +38,14 @@ This document records the current implementation state so the next session can c
   A current or latest-ready segment older than `segmentMinutes+300s` raises `recorder_segment_stale`; no
   stream identity or path enters the watcher record. Unit fixtures, full Go tests, relevant race tests,
   `go vet`, production policy checks and the daemon build pass.
+- The immutable `.19-recorder-timestamp` image was deployed at 2026-08-14 07:57 KST. The previously stuck
+  segment finalized as a valid 233,570,352-byte ready file. At the 08:00 KST boundary all eight recorders
+  closed and reopened together; all eight closed files passed `ffprobe` with audio and a valid H.264/HEVC
+  video stream. The watcher recovered to `ok` with camera/stream/recorder/Viewer 8/8 and no stale segments.
+- In the steady window after that boundary, daemon errors were zero and 195 repeated records were summarized.
+  The measured 43,794 bytes over 214 seconds projects to roughly 0.74 MB/hour and about 121 days within the
+  configured 64 MiB × 32 cap. The deployment kept container health/restart 0 and its non-root, read-only,
+  no-new-privileges boundary; the one-minute watcher remains enabled and active.
 
 ### 2026-08-13 Viewer maximized first show
 

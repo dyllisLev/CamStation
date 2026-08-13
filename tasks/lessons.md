@@ -1,5 +1,16 @@
 # Lessons
 
+## 2026-08-14 — 수정 효과는 재시작 직후가 아니라 첫 실제 segment 경계에서 판정한다
+
+- recorder 인자와 process 8/8만 확인해서는 timestamp 수정의 목적을 증명할 수 없다. 다음
+  `segment_atclocktime` 경계를 실제로 지나 DB `ready/current`, `segment_closed/opened`, 파일 존재·크기와
+  `ffprobe` 성공을 함께 확인해야 한다.
+- 배포 직후 live-warm의 로컬 404와 Viewer cooldown 오류는 recorder timestamp 오류와 component가 다르다.
+  첫 오류를 숨기지 않되 정상 수렴 뒤 별도 관찰 창에서 같은 signature가 재발하는지, watcher의 5분 창이
+  alert 0으로 비워지는지를 확인한 후 지속 장애와 시작 transient를 구분한다.
+- container DB의 final path는 host에서 그대로 stat할 수 있다고 가정하지 않는다. Docker mount의 가장 긴
+  destination prefix로 host source를 해석하되 경로 자체는 관제 출력에 남기지 않고 존재·크기만 집계한다.
+
 ## 2026-08-14 — 배포 후 8/8 표면 상태와 녹화 세그먼트 순환을 별도로 검증한다
 
 - watcher의 camera·stream·recorder·Viewer가 모두 8/8이고 recorder error가 0이어도 녹화가 정상적으로

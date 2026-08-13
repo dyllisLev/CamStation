@@ -75,5 +75,5 @@
       1,000개 반복이 첫 record+summary로 축약되는 회귀를 고정한다.
 - [x] watcher가 SQLite를 read-only로 집계해 current/latest-ready age와 stale count를 기록하고,
       30분+300초 초과를 `recorder_segment_stale`로 판정하는 fixture를 추가한다.
-- [ ] immutable server image와 watcher script/env를 운영에 전환하고 열린 파일의 finalize 및 8/8 수렴을 확인한다.
-- [ ] 다음 30분 경계에서 8개 모두 segment를 닫는지, error 증가율·예상 보존기간과 Viewer 수신을 확인한다.
+- [x] immutable server image와 watcher script/env를 운영에 전환하고 열린 파일의 finalize 및 8/8 수렴을 확인한다.
+- [x] 다음 30분 경계에서 8개 모두 segment를 닫는지, error 증가율·예상 보존기간과 Viewer 수신을 확인한다.

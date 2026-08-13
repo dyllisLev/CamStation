@@ -19,14 +19,34 @@
 - [x] 배포 후 FFmpeg signature·timestamp 축·영향 stream 정책과 열린 파일 상태를 값 비노출 방식으로 확정한다.
 - [x] recorder wall-clock timestamp 입력과 동일 stderr rate-limit/summary를 회귀 테스트와 함께 구현한다.
 - [x] watcher에 DB segment freshness 축·경보를 추가하고 정상/지연 fixture를 검증한다.
-- [ ] Go 전체·race·vet, watcher/policy, image smoke를 통과하고 immutable 운영 후보를 만든다.
-- [ ] 운영 Compose를 백업해 새 image로 전환하고 장시간 열린 파일의 안전한 finalization과 8/8 수렴을 확인한다.
-- [ ] 다음 30분 경계를 지나 실제 8개 segment 순환, 오류율·보존기간, Viewer 수신 및 잔여물을 검증한다.
-- [ ] 결과·교훈·구현 상태를 문서화하고 commit/push 및 운영 revision을 일치시킨다.
+- [x] Go 전체·race·vet, watcher/policy, image smoke를 통과하고 immutable 운영 후보를 만든다.
+- [x] 운영 Compose를 백업해 새 image로 전환하고 장시간 열린 파일의 안전한 finalization과 8/8 수렴을 확인한다.
+- [x] 다음 30분 경계를 지나 실제 8개 segment 순환, 오류율·보존기간, Viewer 수신 및 잔여물을 검증한다.
+- [x] 결과·교훈·구현 상태를 문서화하고 commit/push 및 운영 revision을 일치시킨다.
 
 ## 검토
 
-- 진행 중.
+- source revision `61b467250c1c97c3de4b98a8fd1ef1c4d0207299`의 immutable image
+  `camstation:2.0.0-rc.20260814.19-recorder-timestamp`를 2026-08-14 07:57 KST에 전환했다. image ID는
+  `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`이고 container는
+  healthy/restart 0, non-root/read-only/no-new-privileges를 유지한다. exact rollback snapshot
+  `rollback-recorder-hardening-20260813T225607Z`를 보존했고 실제 rollback은 사용하지 않았다.
+- watcher를 image보다 먼저 전환해 기존 장기 segment를 `recorder_segment_stale`로 탐지한 뒤 daemon을
+  정상 종료했다. 약 4시간 56분 열려 있던 row는 삭제·격리 없이 `ready`로 닫혔고 최종 파일
+  233,570,352 bytes가 존재하며 DB 오류가 없다. 새 runtime에는 recorder 8개와 live-warm 8개 모두
+  wall-clock 입력 인자가 적용됐고 camera·stream·recorder는 8/8로 수렴했다.
+- 2026-08-14 08:00 KST 첫 실제 30분 경계에서 `segment_closed` 8건과 새 `segment_opened` 8건이 확인됐다.
+  닫힌 파일 8개·221,191,153 bytes는 모두 `ffprobe`에 성공했고 video는 H.264 7개/HEVC 1개, audio는
+  8개이며 길이는 182.03~187.92초다. DB의 ready/current stream도 각각 8/8이고 stale count는 0이다.
+- 재시작 직후 live-warm 준비 경쟁으로 404 signature 4종·8건과 Viewer 재연결 error 1건이 한 번
+  기록됐지만 recorder error는 0건이었다. 08:02:26 KST부터 watcher는 alert 0·`ok`, Viewer 수신 8/8이 됐다.
+  08:00 이후 정상 구간에는 error 0건, 214초 동안 43,794 bytes가 기록됐고 195건이 summary로 축약됐다.
+  단기 증가율 환산은 약 0.74 MB/hour로 64 MiB×32에서 약 121일분이다.
+- `monitoring-pc`는 읽기 전용으로 확인했다. Viewer 2.0.27과 Service Running/Auto, warn·5 MiB×3,
+  Windows crash/hang 0을 유지한다. 재연결 로그는 08:02:05 KST 이후 증가하지 않았고 최종 capture는
+  `WasMaximized=true`, 2576×1408, 실제 화면 8/8이다. 공식 wrapper의 원격 run/task/listener 잔여는 0이다.
+- 최종 운영 Compose/watcher/env SHA-256은 각각 `f6cd0f4f...25ae9`, `a0b8ead3...9912`,
+  `d1103d11...1f3a`이고 watcher timer는 enabled/active, 최근 service result는 success다.
 
 ---
 
