@@ -8,6 +8,8 @@ import {
 test("playback diagnostic events have stable operator log levels", () => {
   assert.equal(playbackDiagnosticLevel("socket_open"), "debug");
   assert.equal(playbackDiagnosticLevel("attempt_started"), "info");
+  assert.equal(playbackDiagnosticLevel("primary_probe_started"), "debug");
+  assert.equal(playbackDiagnosticLevel("primary_probe_succeeded"), "info");
   assert.equal(playbackDiagnosticLevel("attempt_failed"), "warn");
   assert.equal(playbackDiagnosticLevel("episode_exhausted"), "error");
 });

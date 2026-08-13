@@ -1,6 +1,128 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackProbeScheduler, PlaybackRecovery } from "../src/components/live/playbackRecovery.ts";
+import {
+  PLAYBACK_PRIMARY_PROBE_INTERVAL_MS,
+  PlaybackPrimaryPromoter,
+  PlaybackProbeScheduler,
+  PlaybackRecovery,
+} from "../src/components/live/playbackRecovery.ts";
+
+test("a healthy fallback keeps probing both primary transports until one recovers", async () => {
+  let now = 1_000;
+  let timerCallback: (() => void) | null = null;
+  const attempts: string[] = [];
+  const events: string[] = [];
+  const results = [false, false, true];
+  const fireTimer = () => {
+    const callback = timerCallback;
+    timerCallback = null;
+    callback?.();
+  };
+  const promoter = new PlaybackPrimaryPromoter(
+    async (transport) => {
+      attempts.push(transport);
+      return results.shift() ?? false;
+    },
+    {
+      now: () => now,
+      set: (callback, delayMs) => {
+        assert.equal(delayMs, PLAYBACK_PRIMARY_PROBE_INTERVAL_MS);
+        timerCallback = callback;
+        return 1;
+      },
+      clear: () => {
+        timerCallback = null;
+      },
+    },
+  );
+
+  promoter.start("webrtc", {
+    onProbeStarted: (transport) => events.push(`started:${transport}`),
+    onProbeFailed: (transport) => events.push(`failed:${transport}`),
+    onRecovered: (transport) => events.push(`recovered:${transport}`),
+  });
+  assert.equal(promoter.active, true);
+  assert.ok(timerCallback);
+
+  fireTimer();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(attempts, ["webrtc", "mse"]);
+  assert.deepEqual(events, [
+    "started:webrtc",
+    "failed:webrtc",
+    "started:mse",
+    "failed:mse",
+  ]);
+  assert.equal(promoter.active, true);
+  assert.ok(timerCallback, "both failures must schedule another cycle without disturbing fallback");
+
+  now += PLAYBACK_PRIMARY_PROBE_INTERVAL_MS;
+  fireTimer();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(attempts, ["webrtc", "mse", "webrtc"]);
+  assert.equal(events.at(-1), "recovered:webrtc");
+  assert.equal(promoter.active, false);
+  assert.equal(timerCallback, null);
+});
+
+test("stopping primary promotion aborts an in-flight probe and prevents rescheduling", async () => {
+  let timerCallback: (() => void) | null = null;
+  let aborted = false;
+  const fireTimer = () => {
+    const callback = timerCallback;
+    timerCallback = null;
+    callback?.();
+  };
+  const promoter = new PlaybackPrimaryPromoter(
+    (_transport, signal) => new Promise<boolean>((resolve) => {
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        resolve(false);
+      }, { once: true });
+    }),
+    {
+      now: () => 1_000,
+      set: (callback) => {
+        timerCallback = callback;
+        return 1;
+      },
+      clear: () => {
+        timerCallback = null;
+      },
+    },
+  );
+
+  promoter.start("mse", {
+    onProbeStarted: () => undefined,
+    onProbeFailed: () => undefined,
+    onRecovered: () => assert.fail("a stopped probe cannot promote"),
+  });
+  fireTimer();
+  await Promise.resolve();
+  promoter.stop();
+  await Promise.resolve();
+
+  assert.equal(aborted, true);
+  assert.equal(promoter.active, false);
+  assert.equal(timerCallback, null);
+});
+
+test("a verified primary promotion receives a fresh bounded recovery episode", () => {
+  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+  episode.recordFailure(1_000);
+  assert.equal(episode.remainingMs(31_001), 0);
+
+  episode.resetForPrimaryPromotion();
+
+  assert.equal(episode.remainingMs(31_001), 30_000);
+  assert.deepEqual(episode.nextFailure(31_001), {
+    transport: "webrtc",
+    streamName: "yard-live",
+    attempt: 2,
+  });
+});
 
 test("the low-frequency probe scheduler can re-arm after every failed probe", () => {
   let now = 1_000;

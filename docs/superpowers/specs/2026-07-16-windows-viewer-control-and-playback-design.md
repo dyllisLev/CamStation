@@ -412,6 +412,16 @@ cooldown. It does not continuously cycle candidates in the background, but it
 keeps one low-frequency primary probe scheduled every five minutes until media
 progress returns or the tile is unmounted.
 
+An approved fallback output is temporary, not a terminal healthy route. While
+the fallback has genuine media progress, the visible fallback connection stays
+untouched and a separate background connection probes the primary output once
+per minute. The probe checks the preferred transport and then the other
+WebRTC/MSE transport with finite deadlines. Socket setup or binary receipt alone
+is insufficient: the probe video clock must advance continuously before the
+primary is considered restored. Only then may that one tile reconnect to the
+verified primary. Failed probes leave the fallback visible and schedule the next
+one-minute probe; they never mark the tile offline or restart another tile.
+
 Server stream health is authoritative only when sampled within the last 15
 seconds. `healthy` requires an active producer and increasing media-byte or
 packet counters across two samples; an on-demand stream with no client is
@@ -438,6 +448,9 @@ Escalation rules:
   five-minute per-stream cooldown with one low-frequency probe per cooldown;
   if that probe fails, schedule the next five-minute probe instead of stopping;
 - stable playback for five minutes resets that stream recovery episode;
+- fallback playback: keep the fallback visible while probing the primary once
+  per minute; promote only after real video-clock progress and repeat after a
+  failed WebRTC/MSE probe sequence;
 - unhealthy server stream: request at most one server-side stream restart per
   ten minutes;
 - stale Viewer IPC or renderer-wide failure: allow five seconds for graceful

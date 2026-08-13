@@ -42,18 +42,24 @@ func TestPlaybackDiagnosticsRespectLogLevelAndWriteCorrelatedSafeEvents(t *testi
 		"sessionId":"playback-12345678","event":"attempt_started","streamName":"gate-live",
 		"transport":"webrtc","phase":"connecting","attempt":1,"elapsedMs":18,"readyState":0
 	}`)
+	primaryRestoredStatus := postPlaybackEvent(t, mux, `{
+		"sessionId":"playback-12345678","event":"primary_probe_succeeded","streamName":"gate-live",
+		"transport":"mse","phase":"recovering","attempt":2,"elapsedMs":1020,"readyState":4,
+		"usingFallback":true
+	}`)
 	warnStatus := postPlaybackEvent(t, mux, `{
 		"sessionId":"playback-12345678","event":"attempt_failed","streamName":"gate-live",
 		"transport":"webrtc","phase":"connecting","attempt":1,"elapsedMs":5019,
 		"attemptElapsedMs":5001,"errorCategory":"setup_timeout","readyState":0
 	}`)
-	if infoStatus != http.StatusNoContent || warnStatus != http.StatusNoContent {
-		t.Fatalf("info/warn statuses = %d/%d", infoStatus, warnStatus)
+	if infoStatus != http.StatusNoContent || primaryRestoredStatus != http.StatusNoContent || warnStatus != http.StatusNoContent {
+		t.Fatalf("info/primary-restored/warn statuses = %d/%d/%d", infoStatus, primaryRestoredStatus, warnStatus)
 	}
 	logText := output.String()
 	for _, want := range []string{
 		`"level":"info"`, `"event":"attempt_started"`, `"sessionId":"playback-12345678"`,
 		`"streamName":"gate-live"`, `"transport":"webrtc"`, `"level":"warn"`,
+		`"event":"primary_probe_succeeded"`, `"transport":"mse"`, `"usingFallback":true`,
 		`"event":"attempt_failed"`, `"errorCategory":"setup_timeout"`, `"attemptElapsedMs":5001`,
 	} {
 		if !strings.Contains(logText, want) {

@@ -3,6 +3,7 @@ export const PLAYBACK_STALL_MS = 10_000;
 export const PLAYBACK_EPISODE_MS = 30_000;
 export const PLAYBACK_STABLE_RESET_MS = 5 * 60_000;
 export const PLAYBACK_COOLDOWN_MS = 5 * 60_000;
+export const PLAYBACK_PRIMARY_PROBE_INTERVAL_MS = 60_000;
 
 export type PlaybackProbeClock = {
   readonly now: () => number;
@@ -34,6 +35,100 @@ export class PlaybackProbeScheduler {
 }
 
 export type PlaybackTransport = "webrtc" | "mse";
+
+export type PlaybackPrimaryProbe = (
+  transport: PlaybackTransport,
+  signal: AbortSignal,
+) => Promise<boolean>;
+
+export type PlaybackPrimaryPromotionCallbacks = {
+  readonly onProbeStarted: (transport: PlaybackTransport) => void;
+  readonly onProbeFailed: (transport: PlaybackTransport) => void;
+  readonly onRecovered: (transport: PlaybackTransport) => void;
+};
+
+export class PlaybackPrimaryPromoter {
+  private readonly probe: PlaybackPrimaryProbe;
+  private readonly clock: PlaybackProbeClock;
+  private readonly scheduler: PlaybackProbeScheduler;
+  private running = false;
+  private generation = 0;
+  private controller: AbortController | null = null;
+  private preferredTransport: PlaybackTransport = "webrtc";
+  private callbacks: PlaybackPrimaryPromotionCallbacks | null = null;
+
+  constructor(
+    probe: PlaybackPrimaryProbe,
+    clock: PlaybackProbeClock = browserPlaybackProbeClock(),
+  ) {
+    this.probe = probe;
+    this.clock = clock;
+    this.scheduler = new PlaybackProbeScheduler(clock);
+  }
+
+  get active(): boolean {
+    return this.running;
+  }
+
+  start(
+    preferredTransport: PlaybackTransport,
+    callbacks: PlaybackPrimaryPromotionCallbacks,
+  ): void {
+    if (this.running) return;
+    this.running = true;
+    this.preferredTransport = preferredTransport;
+    this.callbacks = callbacks;
+    const token = ++this.generation;
+    this.schedule(token);
+  }
+
+  stop(): void {
+    this.running = false;
+    this.generation++;
+    this.scheduler.clear();
+    this.controller?.abort();
+    this.controller = null;
+    this.callbacks = null;
+  }
+
+  private schedule(token: number): void {
+    if (!this.running || token !== this.generation) return;
+    this.scheduler.arm(this.clock.now() + PLAYBACK_PRIMARY_PROBE_INTERVAL_MS, () => {
+      void this.runCycle(token);
+    });
+  }
+
+  private async runCycle(token: number): Promise<void> {
+    const transports = primaryProbeTransports(this.preferredTransport);
+    for (const transport of transports) {
+      if (!this.running || token !== this.generation || !this.callbacks) return;
+      this.callbacks.onProbeStarted(transport);
+      const controller = new AbortController();
+      this.controller = controller;
+      let recovered = false;
+      try {
+        recovered = await this.probe(transport, controller.signal);
+      } catch {
+        recovered = false;
+      }
+      if (!this.running || token !== this.generation || controller.signal.aborted || !this.callbacks) return;
+      this.controller = null;
+      if (recovered) {
+        const callbacks = this.callbacks;
+        this.running = false;
+        this.callbacks = null;
+        callbacks.onRecovered(transport);
+        return;
+      }
+      this.callbacks.onProbeFailed(transport);
+    }
+    this.schedule(token);
+  }
+}
+
+export function primaryProbeTransports(preferred: PlaybackTransport): readonly PlaybackTransport[] {
+  return preferred === "webrtc" ? ["webrtc", "mse"] : ["mse", "webrtc"];
+}
 
 export type PlaybackRecoveryStep =
   | { readonly transport: PlaybackTransport; readonly streamName: string; readonly attempt: number }
@@ -117,6 +212,14 @@ export class PlaybackRecovery {
 
   boundedDelayMs(now: number, maximumMs: number): number {
     return Math.max(0, Math.min(maximumMs, this.remainingMs(now)));
+  }
+
+  resetForPrimaryPromotion(): void {
+    this.episodeStartedAt = null;
+    this.step = 0;
+    this.stableSince = null;
+    this.lastProgressAt = null;
+    this.stallStartedAt = null;
   }
 
   private cooldown(now: number): PlaybackRecoveryStep {
