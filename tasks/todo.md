@@ -1,3 +1,59 @@
+# 2026-08-14 매일 06시 운영 로그 24시간 감사 스케줄
+
+## 실행 계약
+
+- Paseo가 매일 06:00 `Asia/Seoul`에 새 agent를 시작한다. 감사 구간은 실행 지연과 무관하게 막 지난
+  KST 06:00을 끝 경계로 고정한 반개구간 `[전날 06:00, 당일 06:00)` 정확히 24시간이다.
+- 운영 서버 `cctv`의 회전본을 포함한 daemon JSONL, 1분 watcher JSONL, SQLite 녹화 source of truth와
+  현재 Docker/systemd 상태를 읽기 전용으로 대조한다. 서비스 재시작·설정 변경·파일 삭제·DB 쓰기·Git
+  변경은 하지 않는다.
+- 카메라→서버, recorder/30분 segment, 서버→Viewer, container/logger/watcher, disk와 backup/cleanup을
+  각각 판정한다. 로그 누락·watcher cadence 공백·판정 자료 부족도 문제로 보고한다.
+- 보고서는 한국어·KST로 작성한다. 문제가 있으면 실제 카메라명·stream명, 최초/최종 시각, 지속시간,
+  발생 횟수, 관련 event/error code/fingerprint와 필요한 짧은 오류 원문, 현재 복구 여부, 근거와 조치를
+  명시한다. 정상이라면 8/8, segment 수·stale 0, Viewer 수신, error/logger failure 0 등 통과 근거를 쓴다.
+- 비밀번호·token·cookie·Authorization·RTSP/HTTP credential URL·SDP/ICE와 secret 설정값만 보고서에서
+  제외한다. 카메라/stream 식별자는 운영 조치에 필요하므로 숨기지 않는다.
+- 서버 증거가 정상일 때 monitoring PC를 중복 감사하지 않는다. 서버에 지속 Viewer 장애가 있고 원인이
+  서버 로그만으로 확정되지 않을 때만 공식 `monitoring-pc` wrapper로 로컬 warn/error와 crash/hang을
+  읽기 전용으로 대조하며, PC 서비스·창·설정을 변경하지 않는다.
+- 결과는 Paseo schedule run의 최종 보고서와 이력에 남기고 저장소 파일 생성, commit 또는 push는 하지 않는다.
+- 대용량 로그는 종류별 streaming pass와 최대 20개 top-N으로 제한한다. 수집은 15분에 닫고 전체 실행은
+  25분 안에 마치며, SSH·ffprobe timeout과 최대 40개 probe 상한을 넘긴 항목은 판정 한계로 보고한다.
+
+## 계획
+
+- [x] 기존 Paseo schedule과 안정적인 daemon cwd, cron/timezone 지원을 확인한다.
+- [x] 사용자 수정에 따라 aggregate-only가 아닌 실제 운영 대상을 특정하는 보고 계약을 고정한다.
+- [x] 무기한 매일 06:00 KST schedule을 생성한다.
+- [x] schedule ID, cron/timezone, next run, cwd/isolation/provider/model/mode, prompt와 run 제한을 재조회한다.
+- [x] 프로젝트 교훈과 검토 결과를 기록하고 저장소·Paseo 상태를 최종 검증한다.
+
+## 검토
+
+- Paseo schedule `ab13f419` (`camstation-daily-24h-operations-audit-0600-kst`)을 생성하고 즉시
+  `inspect_schedule`로 재조회했다. cadence는 `0 6 * * *`, timezone은 `Asia/Seoul`, 상태는 `active`다.
+- 첫 자동 실행은 2026-08-15 06:00 KST(`2026-08-14T21:00:00Z`)다. `expiresAt=null`, `maxRuns=null`이므로
+  일회성이나 기간 제한 없이 매일 반복한다.
+- 새 agent target은 안정적인 `/workspace/CamStation`, local isolation, Codex `gpt-5.6-sol`,
+  `full-access`, thinking `max`, plan mode off다. full-access는 운영 SSH read에 필요하지만 prompt가 server/PC/
+  DB/Git mutation을 명시적으로 금지한다.
+- 보고 prompt는 실제 카메라명·stream명과 관련 오류 원문을 포함해 장애를 특정한다. watcher의 숫자만
+  재진술하지 않고 daemon 회전 로그, DB segment, ffprobe와 현재 runtime을 교차 검증하며, 비밀번호·token·
+  credential URL 같은 운영 비밀만 제외한다.
+- 최초 run `7a92cdc3-f466-4562-8d50-70bd6000f044`는 집계가 오래 걸려 실행 중 후속 prompt를 보냈기 때문에
+  최종 보고서는 생성됐어도 원 schedule turn이 `canceled`로 기록됐다. 이를 성공 검증으로 인정하지 않고,
+  schedule prompt 자체에 streaming·timeout·수집/실행 마감을 추가했다.
+- 개입 없이 다시 실행한 run `e6d88c79-7408-44bd-b64b-d437ea069aca`는 2026-08-14 10:00:15~10:22:02
+  KST(21분 47초)에 `succeeded`했고 비어 있지 않은 한국어 `output`이 run 이력에 저장됐다. daemon
+  608,315줄과 watcher 547표본, read-only SQLite와 최대 40개 ffprobe를 교차했고 운영 상태를 변경하지 않았다.
+- 재검증 보고서는 실제 `소방서1/소방서1-recording`, `소방서5`, `염소장` 등 영향 대상을 특정했다. 06시
+  연결은 camera·stream·recorder·Viewer 8/8이었지만 최신 녹화 파일 합격은 5/8, daemon/watcher 시작부는
+  약 14시간 결손이어서 종합 판정을 `장애`로 냈다. 따라서 표면 8/8만 보고 정상으로 오판하지 않는 계약도
+  실제 동작으로 확인했다.
+
+---
+
 # 2026-08-14 녹화 순환·FFmpeg 로그 폭증 운영 개선
 
 ## 사양과 안전 경계

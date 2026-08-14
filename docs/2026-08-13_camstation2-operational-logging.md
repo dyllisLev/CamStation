@@ -25,6 +25,27 @@ Windows Viewer 로컬 로그는 서버에 보고할 수 없는 마지막 구간�
 수렴했으며 이후 오류는 증가하지 않았다. 08:00 KST 첫 clock 경계에서는 recorder 8개가 모두 segment를
 닫고 다시 열었고 닫힌 8개 파일은 모두 `ffprobe`에 성공했다.
 
+### Paseo 매일 06시 24시간 감사
+
+- schedule ID: `ab13f419`; 상태 `active`; 만료와 최대 실행 횟수 없음
+- cadence: 매일 `06:00 Asia/Seoul`; 감사 구간은 `[전날 06:00, 당일 06:00)`의 고정 24시간
+- 결과: 각 Paseo run 이력에 한국어 보고서로 남는다. 실제 영향 카메라명·stream명, 오류 구간·횟수·
+  복구 여부와 짧은 관련 원문을 포함하고 credential/token/Authorization 같은 비밀값만 제외한다.
+- 범위: 회전 daemon/watcher JSONL, read-only SQLite segment, container/timer/current API와 최신 파일
+  `ffprobe`를 교차한다. 서버에서 설명되지 않는 지속 Viewer 장애가 있을 때만 monitoring PC 로그를
+  공식 wrapper로 읽기 전용 대조한다.
+- 실행 상한: 로그 종류별 streaming pass, top-N 20개, 수집 15분, 전체 25분, ffprobe 최대 40개와 파일당
+  15초 timeout을 적용한다. 상한 밖의 자료는 누락을 숨기지 않고 판정 한계로 보고한다.
+- 안전 경계: schedule은 운영 서비스·container·DB·파일·PC·Git을 변경하거나 자동 복구하지 않는다.
+
+2026-08-14 clean run `e6d88c79-7408-44bd-b64b-d437ea069aca`는 21분 47초에 `succeeded`하고 보고서를
+schedule output에 저장했다. 이 실행은 daemon 608,315줄, watcher 547표본, SQLite와 40개 파일을 대조해
+06시 camera·stream·recorder·Viewer가 8/8이어도 최신 녹화 무결성은 5/8이고, `소방서1-recording`의
+rollover 정지와 소방서5·염소장 duration 이상, 약 14시간의 초기 로그 결손이 있어 `장애`로 판정했다.
+현재 `.19` 배포 후 첫 경계의 8/8 정상 증거는 위와 별개이며, 다음 24시간 감사에서 지속 여부를 재판정한다.
+
+조회 명령은 `paseo schedule inspect ab13f419`, 실행 이력은 `paseo schedule logs ab13f419`다.
+
 ## 초기 관제를 시작하기
 
 서버의 전역 level은 `info`로 유지하고, 2.0 초기 관제 기간에 필요한 component만 `debug`로 올린다.

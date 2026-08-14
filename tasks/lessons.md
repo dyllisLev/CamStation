@@ -1,5 +1,24 @@
 # Lessons
 
+## 2026-08-14 — Paseo schedule의 실전 검증 중에는 후속 prompt를 주입하지 않는다
+
+- 실행 중인 scheduled agent에 후속 prompt를 보내면 기존 schedule turn이 취소되고, 후속 turn에서 완성한
+  보고서가 schedule run의 `output`으로 귀속되지 않을 수 있다. 보고서를 화면에서 받았더라도 run status와
+  output을 재조회하기 전에는 성공 검증으로 인정하지 않는다.
+- 오래 걸리는 감사를 제어할 조건은 실행 중 개입이 아니라 schedule prompt 자체에 둔다. 전체 실행/수집
+  마감, streaming pass 수, top-N 메모리, 외부 명령 timeout, ffprobe 최대 개수를 미리 고정한다.
+- 검증은 같은 schedule을 중간 개입 없이 다시 실행해 `status=succeeded`, `endedAt`, 비어 있지 않은
+  `output`, 다음 cron 시각 유지까지 확인한다.
+
+## 2026-08-14 — 운영 비밀 마스킹과 장애 대상 식별을 혼동하지 않는다
+
+- 자동 watcher가 identity-free count만 저장하는 것과 사람이 읽는 일일 장애 보고서는 목적이 다르다.
+  보고서에서 카메라명·stream명까지 숨기면 어떤 장비를 조치해야 하는지 알 수 없으므로 운영 감사가 아니다.
+- 일일 보고에는 실제 영향 카메라/stream, 오류 시각·지속시간·횟수, event/error code와 필요한 짧은 원문,
+  복구 여부를 명시한다. 비밀번호·token·Authorization·credential URL·SDP/ICE 같은 비밀만 제거한다.
+- 사용자가 “문제점이 없는지 파악”을 요청하면 비식별 집계 자체를 목표로 바꾸지 않는다. 집계는 탐지
+  시작점이고, 이상이 있으면 DB와 구조화 로그를 안전하게 결합해 실제 대상을 특정하는 데까지 진행한다.
+
 ## 2026-08-14 — 수정 효과는 재시작 직후가 아니라 첫 실제 segment 경계에서 판정한다
 
 - recorder 인자와 process 8/8만 확인해서는 timestamp 수정의 목적을 증명할 수 없다. 다음
