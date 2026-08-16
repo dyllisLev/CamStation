@@ -47,6 +47,41 @@ grep -Fq 'ReadWritePaths=/var/lib/camstation2 /mnt/hdd/camstation2' "$ROOT_DIR/p
 grep -Fq 'CAMSTATION_ADDR=127.0.0.1:18080' "$ROOT_DIR/packaging/systemd/camstationd-2x.env.example"
 grep -Fq 'CAMSTATION_RECORDINGS_DIR=/mnt/hdd/camstation2/recordings' "$ROOT_DIR/packaging/systemd/camstationd-2x.env.example"
 grep -Fq 'include /etc/nginx/camstation/active-backend.inc;' "$ROOT_DIR/packaging/nginx/camstation-server.conf"
+python3 -B - "$ROOT_DIR/packaging/nginx/camstation2-location.inc" <<'PY'
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+
+websocket = re.search(r"location\s*=\s*/player/api/ws\s*\{(?P<body>.*?)\n\}", source, re.DOTALL)
+if websocket is None:
+    raise SystemExit("camstation2 nginx config is missing the exact Viewer WebSocket location")
+websocket_body = websocket.group("body")
+general = re.search(r"location\s+/\s*\{(?P<body>.*?)\n\}", source, re.DOTALL)
+if general is None:
+    raise SystemExit("camstation2 nginx config is missing the general proxy location")
+general_body = general.group("body")
+for required in (
+    "proxy_pass http://127.0.0.1:18080;",
+    "proxy_http_version 1.1;",
+    "proxy_set_header Upgrade $http_upgrade;",
+    'proxy_set_header Connection "upgrade";',
+    "proxy_read_timeout 365d;",
+    "proxy_send_timeout 365d;",
+    "proxy_buffering off;",
+):
+    if required not in websocket_body:
+        raise SystemExit(f"Viewer WebSocket location is missing: {required}")
+
+proxy_pass = re.compile(r"proxy_pass\s+([^;]+);")
+websocket_upstream = proxy_pass.search(websocket_body)
+general_upstream = proxy_pass.search(general_body)
+if websocket_upstream is None or general_upstream is None or websocket_upstream.group(1) != general_upstream.group(1):
+    raise SystemExit("Viewer WebSocket and general proxy locations use different upstreams")
+if "proxy_read_timeout 3600s;" not in general_body:
+    raise SystemExit("general CamStation proxy timeout changed unexpectedly")
+PY
 grep -Fq 'CAMSTATION_ADDR: 0.0.0.0:18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml"
 test "$(grep -Fc 'target: 18080' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2
 test "$(grep -Fc 'published: "${CANARY_HTTP_PORT:-18081}"' "$ROOT_DIR/packaging/docker/compose.canary.yaml")" -eq 2

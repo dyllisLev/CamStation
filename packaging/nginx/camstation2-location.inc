@@ -1,4 +1,21 @@
 # Include this file at server scope through the root-owned active-backend symlink.
+location = /player/api/ws {
+    proxy_pass http://127.0.0.1:18080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    # go2rtc WebRTC signaling is idle after setup. Keep the tunnel alive instead
+    # of forcing every healthy Viewer stream through an hourly reconnect.
+    proxy_read_timeout 365d;
+    proxy_send_timeout 365d;
+    proxy_buffering off;
+}
+
 location / {
     proxy_pass http://127.0.0.1:18080;
     proxy_http_version 1.1;
