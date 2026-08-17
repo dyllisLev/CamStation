@@ -1,3 +1,150 @@
+# 2026-08-17 Viewer WebSocket 1시간 종료 수정
+
+## 변경 계약
+
+- 정상 재생 중인 WebRTC signaling WebSocket이 nginx의 3600초 idle timeout으로 종료되지 않게 한다.
+- 범위는 Viewer의 정확한 `/player/api/ws` endpoint로 한정하고 일반 HTTP/API proxy timeout은 유지한다.
+- 운영 반영은 새 root-owned include를 설치한 뒤 `nginx -t`를 통과해야만 active symlink를 원자 교체하고
+  graceful reload한다. container, camstationd, go2rtc와 monitoring PC는 재시작하지 않는다.
+- 실패하면 이전 include로 symlink를 되돌리고 nginx 구문·health·Viewer 8/8을 다시 확인한다.
+- 새 연결의 `socket_open` 이후 3600초 경계를 실제로 지나 `socket` 실패가 없고 media progress가 계속될
+  때 완료로 판정한다.
+
+## 계획
+
+- [x] Viewer WebSocket 전용 nginx location과 정책 회귀 검사를 구현한다.
+- [x] shell policy, nginx 구문과 관련 애플리케이션 회귀 테스트를 통과한다.
+- [x] 운영 include를 원자 전환하고 graceful reload 뒤 health와 Viewer 8/8을 확인한다.
+- [x] 새 WebSocket 연결이 3600초를 초과해 유지되는지 운영 로그로 검증한다.
+
+## 검토
+
+- 저장소 정책 검사와 전체 Go 테스트가 통과했고 운영 nginx 바이너리로 후보 include 구문도 검증했다.
+- 저장소 기본 include를 그대로 사용한 첫 후보는 운영 Docker publish upstream과 달라 신규 handshake가
+  502가 됐다. 기존 연결은 graceful reload로 유지됐으며 즉시 이전 include로 rollback했다.
+- 운영 active include의 upstream·headers를 그대로 보존하고 exact WebSocket location의 timeout만 365일로
+  바꾼 후보를 재생성했다. `nginx -t`, graceful reload, 신규 WebSocket 101과 daemon health가 통과했다.
+- 첫 후보 시간대에 cooldown으로 들어간 `집-창고1-live`, `집-창고2-live`는 강제 재시작 없이 자동 복구됐고
+  2026-08-17 07:15:33 KST watcher에서 Viewer 8/8, alert 0, container healthy/restart 0을 확인했다.
+- 이전 nginx worker에 남아 있던 `집-마당-live`, `소방서3-live`는 07:20:58 KST에 마지막 3600초 종료가
+  발생했지만 새 설정으로 socket은 0.15초 안에 다시 열렸고 재생은 1.22초 안에 복구됐다. 07:22:00 KST
+  watcher도 Viewer 8/8, alert 0이며 이때 열린 새 연결부터 365일 timeout을 적용받는다.
+- 소스와 정책 검사는 commit `08e3ac2`로 `origin/main`에 반영했다. 기존 `tasks/lessons.md`,
+  `tasks/todo.md`의 별도 작업 기록은 해당 commit에 섞지 않았다.
+- 2026-08-17 09:18 KST 재검증에서 실제 운영 nginx는 exact WebSocket location의 read/send timeout
+  `365d`와 일반 location의 `3600s`를 그대로 로드하고 있었다. container는 running/healthy/restart 0,
+  watcher timer는 enabled/active였으며 최신 표본은 alert 0·Viewer 8/8이었다.
+- 새 설정으로 다시 열린 `집-창고1-live`, `집-창고2-live`, `집-마당-live`, `소방서3-live`의 WebRTC
+  세션은 09:18 KST까지 같은 세션의 `socket` 실패·종료·재오픈 없이 각각 최소 1시간 49분~1시간
+  54분 유지됐다. 공식 Viewer API도 8개 live stream 모두 `playing/webrtc`, 최근 영상 진행 age
+  1.3~2.2초를 반환했다.
+- 08:55 KST의 `socket` 3건은 세션별 최초 `socket_open`을 역추적한 결과 수정 전날 23:45 KST에 열린
+  잔존 세션이었다. 새 설정으로 열린 세션의 재발로 세지 않았고, 해당 watcher 표본도 Viewer 8/8을
+  유지했다. 따라서 실제 3600초 경계 검증까지 통과해 완료로 판정한다.
+
+---
+
+# 2026-08-16 일일 감사 사용자 보고 연결
+
+## 전달 계약
+
+- 06:00 KST 감사 schedule `ab13f419`은 새 agent에서 읽기 전용 감사를 수행하고 보관되는 기존 구조를 유지한다.
+- 감사 실행 상한 25분 뒤인 매일 06:30 KST에 현재 대화의 reporter가 해당 날짜 run을 재조회해 사용자에게
+  한국어 브리핑을 전달한다. 감사를 다시 실행하거나 운영 상태를 변경하지 않는다.
+- 성공이면 run ID·감사 구간·종합 판정·현재 상태·실제 문제·녹화 누락 수·권장 조치를 보고한다. 실패,
+  canceled, output 누락 또는 지연 상태도 숨기지 않고 정확한 status와 error를 보고한다.
+- 가장 최근 06:00 KST run만 대상으로 하며 과거 run이나 다른 날짜 결과를 오늘 보고로 오인하지 않는다.
+
+## 계획
+
+- [x] schedule 완료 전달과 heartbeat 지원 범위 및 기존 중복 구성을 확인한다.
+- [x] 매일 06:30 KST reporter heartbeat를 현재 대화에 생성한다.
+- [x] reporter와 원 audit schedule의 cadence·상태·다음 실행을 재검증한다.
+
+## 검토
+
+- schedule에는 사용자 대화로 전달하는 completion notification 옵션이 없고, 현재 agent에 반복 prompt를
+  보내는 heartbeat가 지원됨을 실제 도구 계약으로 확인했다.
+- heartbeat `56d10753` (`camstation-daily-audit-user-report-0630-kst`)을 생성했다. target은 현재 대화 agent
+  `5b39b3dd-0416-4bee-b6c3-de049535e812`, cadence는 `30 6 * * *` / `Asia/Seoul`, 상태는 `active`다.
+  `expiresAt=null`, `maxRuns=null`, 다음 실행은 2026-08-17 06:30 KST다.
+- reporter는 가장 최근 06:00 KST run의 정확한 `scheduledFor`를 검증한다. 성공 시 저장 output을 운영
+  기준에 맞춰 직접 브리핑하고, 실패·취소·누락·06:40까지 지연도 status/error와 함께 보고한다.
+- 원 audit schedule `ab13f419`은 `active`, `0 6 * * *` / `Asia/Seoul`, 다음 실행 2026-08-17 06:00 KST,
+  기존 run 4개로 유지됨을 재조회했다. 감사 재실행이나 운영 서버·DB·서비스 변경은 하지 않았다.
+
+---
+
+# 2026-08-16 일일 운영 감사 스케줄 판정 기준 업데이트
+
+## 변경 계약
+
+- 기존 schedule `ab13f419`의 매일 06:00 KST cadence, 24시간 감사 구간, 실행 환경, 읽기 전용 안전 경계와
+  수집 상한은 유지하고 판정·보고 기준만 수정한다.
+- 카메라별 연속 라이브 미수신이 5분 미만이면 예정 재시작에서 발생 가능한 정상 운영 신호로 취급해
+  `발견 문제`와 종합 장애 판정에서 제외한다. 5분 이상만 재시작 정황과 대조해 문제 또는 확인 필요로 보고한다.
+- 녹화 장애는 기대 구간의 DB/file gap, 파일 부재·0-byte·파싱 실패, 실제 재생 불연속처럼 누락·손상이
+  확인될 때 판정한다. 재시작으로 파일이 나뉘었어도 전체 구간을 덮고 파일이 유효하면 장애로 세지 않는다.
+- DTS 반복은 실제 파일·재생·음성 품질 영향이 확인되지 않으면 품질 관찰 신호로 분리하고 녹화 누락으로
+  표현하지 않는다. 최종 보고서는 `파일 누락`, `분할`, `연속성 미검증`을 각각 구분한다.
+
+## 계획
+
+- [x] 현재 스케줄의 프롬프트·cadence·실행 환경을 재조회한다.
+- [x] 사용자 운영 기준을 프롬프트의 판정 방식과 최종 보고서 형식에 반영한다.
+- [x] 변경 뒤 상태·다음 실행·프롬프트 및 비변경 필드를 재조회한다.
+
+## 검토
+
+- schedule `ab13f419`의 prompt만 업데이트했고 상태는 `active`, cadence는 `0 6 * * *` / `Asia/Seoul`로
+  유지됐다. 다음 실행은 2026-08-17 06:00 KST다. provider/model/cwd/mode/isolation과 기존 run 4개도 변하지 않았다.
+- 새 기준은 카메라별 연속 미수신을 episode 단위로 계산한다. 300초 미만은 `정상 범위 일시 신호`로만
+  집계하고, 서로 떨어진 짧은 episode를 합산하지 않으며, 300초 이상만 `발견 문제`에 포함한다.
+- 녹화는 30분 기대 구간의 row coverage, DB gap, 파일 존재·양수 크기·크기 일치·ffprobe/A/V와 필요 시
+  실제 재생 연속성으로 판정한다. 분할돼도 coverage와 파일이 정상이면 장애가 아니며, 증명되지 않은 duration
+  차이는 `연속성 미검증`, 영향 없는 DTS/PTS 반복은 `품질 관찰 신호`로 분리한다.
+- 저장 후 핵심 규칙 7개를 재조회해 모두 일치함을 확인했다. schedule을 즉시 재실행하지 않았으며 운영
+  서버·DB·서비스·PC와 과거 run 이력은 변경하지 않았다.
+
+---
+
+# 2026-08-16 오늘 운영 로그 감사 브리핑
+
+## 범위와 판정 기준
+
+- 오늘 06:00 KST에 종료된 정기 24시간 감사 구간 `[2026-08-15 06:00, 2026-08-16 06:00)`의
+  저장된 schedule 결과와 성공 여부를 우선 확인한다.
+- 저장된 결론을 현재 운영 상태와 읽기 전용으로 교차 확인해, 과거 장애와 현재 지속 장애를 구분한다.
+- 카메라/stream 식별자는 조치 가능하도록 유지하고 비밀번호·token·credential URL·SDP/ICE 등 비밀은
+  출력하지 않는다. Windows Viewer PC는 서버 증거만으로 원인이 확정되지 않을 때만 명시된 대상에 대해 확인한다.
+
+## 계획
+
+- [x] 오늘 정기 감사 실행의 상태·구간·저장된 결과를 확인한다.
+- [x] 장애 항목과 현재 복구 상태를 운영 로그·DB·런타임 증거로 교차 확인한다.
+- [x] KST 기준 영향, 우선순위와 권고 조치를 브리핑하고 검토 결과를 기록한다.
+
+## 검토
+
+- 정기 run `0746b191-6a9e-44c9-bc24-fa91fb61ea31`은 2026-08-16 06:00:00~06:17:24 KST에
+  `succeeded`했고, 정확한 감사 구간 `[2026-08-15 06:00, 2026-08-16 06:00)`의 한국어 보고서를 저장했다.
+- 24시간 daemon 35,940건과 watcher 1,404표본은 무효 JSON·90초 초과 cadence 공백·logger write failure가
+  모두 0이었다. ready 파일 386개가 모두 존재했고 최신 8개와 의심 4개는 ffprobe 12/12에 성공했다.
+- 종합 판정은 `장애`다. Viewer 전체 경로가 8 episode·총 28분 37초 동안 최저 2/8까지 저하됐고,
+  `소방서3/4-live`는 약 5분 59초 404 재시도, `소방서1/5-recording`은 worker 재시작으로 각각 두 파일로
+  비정상 분할됐다. 모두 06시 전에 복구됐으며 분할 파일은 판독되지만 실제 영상 연속성은 미확정이다.
+- recorder audio DTS 역행은 구간 내 55,424신호로 계속됐고 `집-창고1/2-recording`이 약 94%였다.
+  06:00~07:50 KST 재검증에서도 4,113신호, 그중 두 창고 3,593신호가 이어져 ongoing 품질 위험으로 남았다.
+- 07:49 KST 최신 watcher는 alert 0, camera/stream/recorder/Viewer 8/8, stale segment 0,
+  warn/error window 0/0이었다. container는 healthy/restart 0, watcher timer는 enabled/active였다.
+  06시 이후 물리 로그는 warn 21건·error 0건이며 짧은 playback 실패는 모두 현재 상태에서 복구됐다.
+- 지속 Viewer 장애가 없으므로 `monitoring-pc`는 중복 조회하지 않았다. 운영 서버·DB·서비스·PC는 변경하지 않았다.
+- 사용자 운영 기준을 반영하면 예정 재시작 주변 5분 미만 라이브 단절은 장애가 아니다. 이번 녹화 자료는
+  ready 386개 모두 존재, missing·0-byte·DB gap·ffprobe 실패가 0이므로 `녹화 파일 누락`은 확인되지 않았다.
+  `소방서1/5`은 파일 분할과 실제 duration 차이 때문에 연속성 확인이 필요한 주의 항목이지 확정 누락은 아니다.
+
+---
+
 # 2026-08-14 매일 06시 운영 로그 24시간 감사 스케줄
 
 ## 실행 계약

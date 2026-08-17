@@ -1,25 +1,50 @@
 # Implementation Status
 
-Last updated: 2026-08-14
+Last updated: 2026-08-17
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
 ## Current Branch And Remote
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
-- Active branch used for this work: `inspect-camera-server-viewer-log-coverage`
+- Active branch used for this work: `main`; the Viewer WebSocket timeout source fix is commit `08e3ac2`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
 - Current deployed 2.0 source revision: `61b467250c1c97c3de4b98a8fd1ef1c4d0207299`
 - Current deployed image: `camstation:2.0.0-rc.20260814.19-recorder-timestamp`, image ID
   `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`
-- Current monitoring PC Viewer: 2.0.27; Service Running/Auto; local logging `warn`, 5 MiB × 3;
+- Current active nginx Viewer WebSocket policy: exact `/player/api/ws` read/send timeout `365d`, general
+  proxy timeout unchanged at `3600s`; active runtime include SHA-256
+  `3bf5ba6259569e2eb2f3381ee61ba01de43362ea28792137d29d208422325ae3`
+- Current monitoring PC Viewer: 2.0.27 built from `56de740`; ProductCode
+  `{9A18B580-AA6E-4F2D-AE45-986523915BBE}`; Service Running/Auto; local logging `warn`, 5 MiB × 3;
   first visible window starts maximized
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-17 Viewer WebSocket idle-timeout correction
+
+- Normal WebRTC playback keeps an otherwise idle go2rtc signaling WebSocket open. The general nginx
+  `proxy_read_timeout 3600s` therefore ended healthy Viewer sessions at almost exactly one hour even while
+  media continued over WebRTC. Commit `08e3ac2` adds an exact `/player/api/ws` location with one-year
+  read/send timeouts and keeps the general HTTP/API proxy timeout at one hour. The production policy test
+  requires the exact and general locations to use the same upstream.
+- Production preserves a runtime-specific Docker-published upstream, so the active include was derived from
+  the previous active include instead of copying the repository's loopback template. The tracked template
+  SHA-256 is `0436d48f8b331154c80a659ef1f31e9bfbcf9c58f8733c65121e607a82342d4a`; the active runtime hash is recorded
+  above. No upstream value, credential, container, daemon, go2rtc process, or Viewer setting was changed.
+- At 2026-08-17 09:18 KST, post-change WebRTC connections had crossed the former 3600-second boundary by
+  19–54 minutes without a same-session socket failure, close, or reopen. The official Viewer reported all
+  eight live streams `playing/webrtc` with 1.3–2.2-second progress age; watcher alerts were empty and the
+  container remained healthy with restart count zero. Later errors from sessions opened before the hotfix
+  were separated by `sessionId` and did not reduce the official Viewer below 8/8.
+- The nginx policy is host-side and is not copied by the Dockerfile. The deployed image therefore retains
+  revision `61b4672`, while Viewer 2.0.27 retains build revision `56de740`; neither Docker nor Viewer build
+  inputs changed between those revisions and current `main`. These component revisions and hashes are the
+  reproducible deployment mapping rather than a claim that every artifact was rebuilt from `08e3ac2`.
 
 ### 2026-08-14 recorder timestamp and log-soak hardening
 

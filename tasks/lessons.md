@@ -1,5 +1,49 @@
 # Lessons
 
+## 2026-08-17 — timeout 수정은 오류 시각이 아니라 연결 generation과 같은 session으로 검증한다
+
+- graceful reload 뒤 기록된 `socket` 오류를 모두 새 설정의 재발로 세지 않는다. 각 `sessionId`의 최초
+  `socket_open`이 설정 전환 전인지 후인지 역추적하고, 같은 session의 실패·종료·재오픈 여부를 구분한다.
+- timeout 경계 합격은 새 설정으로 열린 실제 session이 기존 제한을 넘긴 뒤에도 같은 session으로 유지되고,
+  공식 Viewer의 카메라별 media progress가 계속될 때만 인정한다. 별도 브라우저의 MSE 접속이나 수정 전
+  잔존 session 오류는 공식 Viewer 8/8 및 stream telemetry와 분리해 해석한다.
+
+## 2026-08-17 — 운영 nginx hotfix는 저장소 기본 upstream이 아니라 active include에서 파생한다
+
+- 저장소의 production include가 loopback upstream을 사용해도 현재 운영이 Docker publish 주소를 쓰면 파일을
+  그대로 설치해서는 안 된다. active include의 hash·upstream·headers를 기준선으로 고정하고 변경할 timeout
+  같은 최소 directive만 파생한 뒤, 두 location의 upstream 동일성을 기계적으로 검사한다.
+- graceful reload는 기존 WebSocket을 보존하므로 표면 Viewer 8/8만으로 신규 연결 성공을 증명하지 못한다.
+  reload 직후 별도의 raw WebSocket 101 probe를 필수 rollback gate로 두고, 다음 watcher에서 실제 수신 8/8도
+  다시 확인한다.
+- 잘못된 후보가 짧게 활성화됐으면 inactive 파일을 exact hash로 확인해 제거하고, 영향 stream의 cooldown이
+  자동 복구될 때까지 camera/live-warm/recorder와 Viewer 상태를 분리해 추적한다.
+
+## 2026-08-16 — schedule run의 저장·보관은 사용자 보고 완료가 아니다
+
+- 새 agent schedule이 성공해 output을 run 이력에 저장하고 agent가 보관돼도 현재 대화의 사용자가 결과를
+  받았다고 간주하지 않는다. 운영 자동화에는 실행과 별도로 명시적인 사용자 전달 경로를 둔다.
+- 직접 completion notification을 지원하지 않는 schedule은 실행 상한 뒤의 reporter heartbeat와 짝지어
+  가장 최근 예정 run의 ID·status·output을 확인하고, 성공 브리핑뿐 아니라 실패·취소·지연도 보고한다.
+- reporter는 감사를 중복 실행하거나 보관된 agent에 후속 prompt를 보내지 않는다. run 이력을 읽기만 하고
+  날짜·scheduledFor를 검증한 뒤 현재 대화로 결과를 전달한다.
+
+## 2026-08-16 — 예정 재시작의 짧은 라이브 단절과 녹화 누락을 같은 장애로 세지 않는다
+
+- 카메라가 예정 시각에 재시작할 수 있으므로 라이브 미수신이 5분 미만이면 운영 장애로 올리지 않는다.
+  5분 이상 지속한 episode만 실제 영향 구간과 재시작 시각을 대조해 문제로 분류한다.
+- 녹화 파일이 worker 재시작으로 둘 이상으로 나뉜 사실만으로 `녹화 누락`이라 부르지 않는다. 기대 구간에
+  DB/file gap, 파일 부재·0-byte·파싱 실패 또는 실제 재생 불연속이 있을 때 녹화 장애로 판정한다.
+- 일일 브리핑은 `파일 누락 0`과 `분할됐지만 연속성 미검증`을 명시적으로 구분해 운영자가 확정 장애와
+  확인 필요 항목을 혼동하지 않게 한다.
+
+## 2026-08-16 — 일일 운영 감사의 `오늘`은 운영 시간대와 기계 집계로 고정한다
+
+- 서버 셸의 UTC 날짜로 `오늘`을 먼저 명명하지 않는다. 일일 감사 계약의 운영 시간대인 KST 현재 날짜와
+  가장 최근 06:00 경계를 먼저 계산하고, schedule run의 실제 `scheduledFor`·감사 구간과 대조한다.
+- 여러 stream의 `suppressedCount` 복원 합계는 대화 중 수기로 더하지 않는다. 같은 bounded 집계 pass에서
+  총계와 대상별 소계를 함께 산출하고, 총계가 소계 합과 일치하는지 검증한 값만 브리핑한다.
+
 ## 2026-08-14 — Paseo schedule의 실전 검증 중에는 후속 prompt를 주입하지 않는다
 
 - 실행 중인 scheduled agent에 후속 prompt를 보내면 기존 schedule turn이 취소되고, 후속 turn에서 완성한
