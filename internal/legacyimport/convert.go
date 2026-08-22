@@ -519,7 +519,7 @@ func convertSettings(values map[string]string, manifest *Manifest) store.Setting
 		RetentionDays:   30,
 		ScheduleEnabled: false,
 		ScheduleCron:    "0 3 * * *",
-		ProtectUnbacked: true,
+		ProtectUnbacked: false,
 	}
 	manifest.Settings = SettingsManifest{
 		SegmentMinutes:       segment,
@@ -529,7 +529,7 @@ func convertSettings(values map[string]string, manifest *Manifest) store.Setting
 		MotionThreshold:      motionThreshold,
 		BackupEnabled:        false,
 		BackupTargetPresent:  false,
-		ProtectUnbacked:      true,
+		ProtectUnbacked:      false,
 		MotionSettingsMapped: false,
 	}
 	if motionEnabled {
@@ -550,7 +550,7 @@ func convertTargetSettings(policy TargetPolicy, manifest *Manifest) store.Settin
 		RetentionDays:   30,
 		ScheduleEnabled: false,
 		ScheduleCron:    "0 3 * * *",
-		ProtectUnbacked: true,
+		ProtectUnbacked: false,
 	}
 	manifest.Settings = SettingsManifest{
 		SegmentMinutes:       recording.SegmentMinutes,
@@ -558,7 +558,7 @@ func convertTargetSettings(policy TargetPolicy, manifest *Manifest) store.Settin
 		MaxStorageGB:         recording.MaxStorageGB,
 		BackupEnabled:        false,
 		BackupTargetPresent:  false,
-		ProtectUnbacked:      true,
+		ProtectUnbacked:      false,
 		MotionSettingsMapped: false,
 	}
 	return store.SettingsUpdate{Recording: &recording, Backup: &backup}

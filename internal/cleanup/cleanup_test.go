@@ -122,6 +122,72 @@ func TestEnforceMaxBytesProtectsUnbackedSegmentsWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestEnforceMaxBytesIgnoresStaleUnbackedProtectionWhenBackupDisabled(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	recordingsDir := filepath.Join(root, "recordings")
+	segmentPath := filepath.Join(recordingsDir, "cam1", "2026-06-30", "2026-06-30_10-00.mp4")
+	writeFile(t, segmentPath, []byte("aaaa"))
+	size := int64(4)
+	db := &staticCleanupStore{
+		settings: store.Settings{Backup: store.BackupSettings{
+			Enabled:         false,
+			ProtectUnbacked: true,
+		}},
+		segments: []store.RecordingSegment{{
+			ID:          1,
+			StreamName:  "cam1",
+			Filename:    filepath.Base(segmentPath),
+			FinalPath:   segmentPath,
+			FileSize:    &size,
+			Status:      "ready",
+			BackupState: "pending",
+		}},
+	}
+
+	result, err := New(db, recordingsDir).EnforceMaxBytes(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Deleted) != 1 || len(db.deleted) != 1 || db.deleted[0] != 1 {
+		t.Fatalf("deleted = %#v / ids=%v, want stale protection ignored", result.Deleted, db.deleted)
+	}
+	if result.BackupProtectionActive {
+		t.Fatalf("BackupProtectionActive = true with backup disabled")
+	}
+	if _, err := os.Stat(segmentPath); !os.IsNotExist(err) {
+		t.Fatalf("unbacked segment still exists or stat failed: %v", err)
+	}
+}
+
+type staticCleanupStore struct {
+	settings store.Settings
+	segments []store.RecordingSegment
+	deleted  []int64
+}
+
+func (s *staticCleanupStore) GetSettings(context.Context) (store.Settings, error) {
+	return s.settings, nil
+}
+
+func (s *staticCleanupStore) ListDeletableRecordingSegments(_ context.Context, requireBackedUp bool) ([]store.RecordingSegment, error) {
+	if !requireBackedUp {
+		return s.segments, nil
+	}
+	segments := make([]store.RecordingSegment, 0, len(s.segments))
+	for _, segment := range s.segments {
+		if segment.BackupState == "backed_up" {
+			segments = append(segments, segment)
+		}
+	}
+	return segments, nil
+}
+
+func (s *staticCleanupStore) MarkRecordingSegmentDeleted(_ context.Context, id int64, _ string) error {
+	s.deleted = append(s.deleted, id)
+	return nil
+}
+
 func openTestDB(t *testing.T, root string) *store.DB {
 	t.Helper()
 	db, err := store.Open(filepath.Join(root, "test.db"))

@@ -52,8 +52,9 @@ func normalizeSettingsPayload(payload settingsPayload, rawJSON string) settingsP
 		payload.Backup.ScheduleCron = defaults.Backup.ScheduleCron
 	}
 	if !strings.Contains(rawJSON, `"protectUnbacked"`) {
-		payload.Backup.ProtectUnbacked = defaults.Backup.ProtectUnbacked
+		payload.Backup.ProtectUnbacked = payload.Backup.Enabled
 	}
+	payload.Backup = normalizeBackupActivation(payload.Backup)
 	return payload
 }
 

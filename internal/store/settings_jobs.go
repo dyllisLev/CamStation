@@ -86,7 +86,7 @@ func defaultSettingsPayload() settingsPayload {
 			RetentionDays:   30,
 			ScheduleEnabled: false,
 			ScheduleCron:    "0 3 * * *",
-			ProtectUnbacked: true,
+			ProtectUnbacked: false,
 		},
 		Alerts: alertSettingsStored{},
 	}
@@ -124,7 +124,7 @@ func (d *DB) UpdateSettings(ctx context.Context, update SettingsUpdate) (Setting
 		payload.Recording = *update.Recording
 	}
 	if update.Backup != nil {
-		backup := *update.Backup
+		backup := normalizeBackupActivation(*update.Backup)
 		if strings.TrimSpace(backup.ScheduleCron) == "" {
 			backup.ScheduleCron = defaultSettingsPayload().Backup.ScheduleCron
 		}
@@ -203,11 +203,18 @@ func (d *DB) saveSettingsPayload(ctx context.Context, payload settingsPayload, u
 func publicSettings(payload settingsPayload, updatedAt time.Time) Settings {
 	return Settings{
 		Recording: payload.Recording,
-		Backup:    payload.Backup,
+		Backup:    normalizeBackupActivation(payload.Backup),
 		Alerts: AlertSettings{
 			DiscordEnabled: payload.Alerts.DiscordEnabled,
 			DiscordWebhook: secretDisplay(payload.Alerts.DiscordWebhookURL),
 		},
 		UpdatedAt: updatedAt,
 	}
+}
+
+func normalizeBackupActivation(settings BackupSettings) BackupSettings {
+	if !settings.Enabled {
+		settings.ProtectUnbacked = false
+	}
+	return settings
 }

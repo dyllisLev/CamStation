@@ -68,7 +68,8 @@ func (c *Cleaner) EnforceMaxBytes(ctx context.Context, maxBytes int64) (Result, 
 	if err != nil {
 		return result, err
 	}
-	segments, err := c.db.ListDeletableRecordingSegments(ctx, settings.Backup.ProtectUnbacked)
+	protectUnbacked := settings.Backup.Enabled && settings.Backup.ProtectUnbacked
+	segments, err := c.db.ListDeletableRecordingSegments(ctx, protectUnbacked)
 	if err != nil {
 		return result, err
 	}
@@ -109,7 +110,7 @@ func (c *Cleaner) EnforceMaxBytes(ctx context.Context, maxBytes int64) (Result, 
 		})
 		removeEmptyParents(c.recordingsDir, filepath.Dir(segment.FinalPath))
 	}
-	if result.AfterBytes > maxBytes && settings.Backup.ProtectUnbacked {
+	if result.AfterBytes > maxBytes && protectUnbacked {
 		if err := c.addProtectedUnbackedSummary(ctx, &result); err != nil {
 			return result, err
 		}

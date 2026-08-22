@@ -20,11 +20,11 @@ func TestSettings_BackupDefaultsAreProductionSafe(t *testing.T) {
 	if settings.Backup.Target != "" {
 		t.Fatalf("fresh backup target = %q, want empty", settings.Backup.Target)
 	}
-	if !settings.Backup.ProtectUnbacked {
-		t.Fatalf("fresh backup must protect unbacked recordings")
+	if settings.Backup.ProtectUnbacked {
+		t.Fatalf("fresh disabled backup must not enable unbacked protection")
 	}
 
-	_, err = db.UpdateSettings(t.Context(), SettingsUpdate{Backup: &BackupSettings{
+	updated, err := db.UpdateSettings(t.Context(), SettingsUpdate{Backup: &BackupSettings{
 		Enabled:         false,
 		RetentionDays:   30,
 		ScheduleEnabled: false,
@@ -33,6 +33,9 @@ func TestSettings_BackupDefaultsAreProductionSafe(t *testing.T) {
 	}})
 	if err != nil {
 		t.Fatalf("persist disabled backup with no target: %v", err)
+	}
+	if updated.Backup.ProtectUnbacked {
+		t.Fatalf("disabled backup persisted protectUnbacked=true")
 	}
 
 	_, err = db.UpdateSettings(t.Context(), SettingsUpdate{Backup: &BackupSettings{
@@ -44,6 +47,24 @@ func TestSettings_BackupDefaultsAreProductionSafe(t *testing.T) {
 	}})
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("enabled backup without target error = %v, want ErrValidation", err)
+	}
+}
+
+func TestSettings_DisabledBackupNormalizesLegacyUnbackedProtection(t *testing.T) {
+	t.Parallel()
+
+	db := newSettingsJobTestDB(t)
+	legacy := `{"recording":{"segmentMinutes":30,"retentionDays":30,"maxStorageGB":700},"backup":{"enabled":false,"target":"","retentionDays":30,"scheduleEnabled":false,"scheduleCron":"0 3 * * *","protectUnbacked":true},"alerts":{}}`
+	if _, err := db.db.ExecContext(t.Context(), `INSERT INTO settings(key, value_json, updated_at) VALUES ('console', ?, ?)`, legacy, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed inconsistent legacy settings: %v", err)
+	}
+
+	settings, err := db.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("get settings: %v", err)
+	}
+	if settings.Backup.ProtectUnbacked {
+		t.Fatalf("disabled legacy backup exposed protectUnbacked=true")
 	}
 }
 

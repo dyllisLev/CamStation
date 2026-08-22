@@ -69,6 +69,26 @@ func TestBackupAPI_ConfigStatusJobRetryAndDeleteHistory(t *testing.T) {
 	writeAPIEvidence(t, "backup-job-delete.json", map[string]any{"status": deleteStatus, "body": deleted})
 }
 
+func TestBackupAPI_DisabledConfigForcesUnbackedProtectionOff(t *testing.T) {
+	server := newTestRouteServer(t)
+
+	status, updated := requestJSON(t, server.handler, http.MethodPut, "/api/backup/config", `{"enabled":false,"target":"","retentionDays":30,"scheduleEnabled":false,"scheduleCron":"0 3 * * *","protectUnbacked":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("PUT config status = %d, want %d; body=%#v", status, http.StatusOK, updated)
+	}
+	if protectUnbacked, _ := updated["protectUnbacked"].(bool); protectUnbacked {
+		t.Fatalf("disabled backup response exposed protectUnbacked=true: %#v", updated)
+	}
+
+	getStatus, current := requestJSON(t, server.handler, http.MethodGet, "/api/backup/config", "")
+	if getStatus != http.StatusOK {
+		t.Fatalf("GET config status = %d, want %d; body=%#v", getStatus, http.StatusOK, current)
+	}
+	if protectUnbacked, _ := current["protectUnbacked"].(bool); protectUnbacked {
+		t.Fatalf("disabled backup persisted protectUnbacked=true: %#v", current)
+	}
+}
+
 func TestBackupAPI_InvalidTarget_createsFailedJobWithoutLeak(t *testing.T) {
 	// Given
 	useRouteBackupRunner(t, backup.CommandRunnerFunc(func(ctx context.Context, name string, args ...string) error {

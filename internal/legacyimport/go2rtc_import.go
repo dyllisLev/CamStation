@@ -136,7 +136,7 @@ func buildGo2RTCCanaryPlan(source string, options Go2RTCCanaryOptions) (plan, er
 	}
 	result.manifest.Settings = SettingsManifest{
 		SegmentMinutes: options.SegmentMinutes, RetentionDays: options.RetentionDays, MaxStorageGB: options.MaxStorageGB,
-		BackupEnabled: false, BackupTargetPresent: false, ProtectUnbacked: true,
+		BackupEnabled: false, BackupTargetPresent: false, ProtectUnbacked: false,
 	}
 	if len(result.manifest.Blockers) == 0 && len(result.cameras) == options.ExpectedCameras {
 		result.manifest.Ready = true
@@ -292,7 +292,7 @@ func go2RTCCanarySettings(options Go2RTCCanaryOptions) store.SettingsUpdate {
 		SegmentMinutes: options.SegmentMinutes, RetentionDays: options.RetentionDays, MaxStorageGB: options.MaxStorageGB,
 	}
 	backup := store.BackupSettings{
-		Enabled: false, Target: "", RetentionDays: 1, ScheduleEnabled: false, ScheduleCron: "0 3 * * *", ProtectUnbacked: true,
+		Enabled: false, Target: "", RetentionDays: 1, ScheduleEnabled: false, ScheduleCron: "0 3 * * *", ProtectUnbacked: false,
 	}
 	empty := ""
 	alerts := store.AlertSettingsUpdate{DiscordEnabled: false, DiscordWebhookURL: &empty}

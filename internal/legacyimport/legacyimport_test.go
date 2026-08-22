@@ -140,7 +140,7 @@ func TestDryRunPreservesProductionShapeWithoutLeakingSecrets(t *testing.T) {
 	if manifest.Settings.SegmentMinutes != 30 || manifest.Settings.RetentionDays != 30 || manifest.Settings.MaxStorageGB != 700 {
 		t.Fatalf("unexpected settings: %#v", manifest.Settings)
 	}
-	if manifest.Settings.BackupEnabled || manifest.Settings.BackupTargetPresent || !manifest.Settings.ProtectUnbacked {
+	if manifest.Settings.BackupEnabled || manifest.Settings.BackupTargetPresent || manifest.Settings.ProtectUnbacked {
 		t.Fatalf("unsafe backup settings: %#v", manifest.Settings)
 	}
 	encoded, err := json.Marshal(manifest)
@@ -190,7 +190,7 @@ func TestCameraLayoutImportUsesTargetPolicyAndLeavesFreshRuntimeEmpty(t *testing
 		t.Fatalf("camera/layout summary = %#v", created.Summary)
 	}
 	if created.Settings.SegmentMinutes != 7 || created.Settings.RetentionDays != 14 || created.Settings.MaxStorageGB != 42 ||
-		created.Settings.BackupEnabled || created.Settings.BackupTargetPresent || !created.Settings.ProtectUnbacked {
+		created.Settings.BackupEnabled || created.Settings.BackupTargetPresent || created.Settings.ProtectUnbacked {
 		t.Fatalf("target policy settings = %#v", created.Settings)
 	}
 	encoded, err := json.Marshal(created)
@@ -337,7 +337,7 @@ func TestImportVerifyAndRepeatAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get target settings: %v", err)
 	}
-	if settings.Recording.SegmentMinutes != 30 || settings.Recording.MaxStorageGB != 700 || settings.Backup.Target != "" || !settings.Backup.ProtectUnbacked {
+	if settings.Recording.SegmentMinutes != 30 || settings.Recording.MaxStorageGB != 700 || settings.Backup.Target != "" || settings.Backup.ProtectUnbacked {
 		t.Fatalf("target settings = %#v", settings)
 	}
 }
