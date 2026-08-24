@@ -4,13 +4,15 @@ import { fileURLToPath } from "node:url";
 import {
   ManagementConnection,
   ManagementRequestError,
+  managementFailureCode,
   type ConfigDraft,
   type LeaseGrant,
+  type ManagementFailureCode,
   type ViewerCommand,
   type ViewerStatus,
 } from "./managementPipe.js";
 import { browserWindowOptions, isNavigationAllowed, rendererStateForEvent, viewerURL } from "./navigation.js";
-import { disconnectAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "./viewerLifecycle.js";
+import { disconnectAction, liveDocumentLoadAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "./viewerLifecycle.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 let window: BrowserWindow | null = null;
@@ -23,6 +25,7 @@ let reconnectAttempt = 0;
 let heartbeat: NodeJS.Timeout | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let setupVisible = false;
+let managementOutage: { readonly startedAt: number; readonly errorCode: ManagementFailureCode; reconnectCount: number } | null = null;
 const rendererCommandResults = new Map<string, (succeeded: boolean) => void>();
 
 async function run(): Promise<void> {
@@ -67,58 +70,121 @@ function createWindow(): BrowserWindow {
 }
 
 async function connectAndShow(autoStartLaunch = false): Promise<void> {
+  const liveVisibleBeforeConnect = hasCurrentLiveDocument();
+  let attemptedConnection: ManagementConnection | null = null;
   try {
+    stopHeartbeat();
     const previous = connection;
     connection = null;
     lease = null;
     previous?.close();
     const active = await ManagementConnection.connect();
+    attemptedConnection = active;
     connection = active;
     active.onCommand((command) => executeViewerCommand(active, command));
-    active.onDisconnect(() => {
+    active.onDisconnect((error) => {
       if (connection !== active) return;
+      observeManagementOutage(error);
+      connection = null;
       lease = null;
-      if (disconnectAction({ explicitShutdown, retryCount: reconnectAttempt }) === "show_service_error_and_reconnect") {
-        void showSetup({ configured: Boolean(currentStatus?.configured), connection: "service_unavailable", autoStart: false, leaseAvailable: false });
+      stopHeartbeat();
+      const action = disconnectAction({
+        explicitShutdown,
+        retryCount: reconnectAttempt,
+        liveVisible: hasCurrentLiveDocument(),
+      });
+      if (action === "show_service_error_and_reconnect") {
+        void showSetup({
+          configured: Boolean(currentStatus?.configured),
+          connection: "service_unavailable",
+          autoStart: false,
+          leaseAvailable: false,
+        }).finally(scheduleReconnect);
+      } else if (action === "preserve_live_and_reconnect") {
         scheduleReconnect();
       }
     });
-    const status = await connection.status();
+    const status = await active.status();
     currentStatus = status;
-    reconnectAttempt = 0;
     const action = startupAction(status, autoStartLaunch);
     if (action === "show_setup") {
+      if (liveVisibleBeforeConnect) {
+        if (connection === active) connection = null;
+        active.close();
+        scheduleReconnect();
+        return;
+      }
       await showSetup(status);
       if (status.configured) scheduleReconnect();
       return;
     }
-    if (action === "quit") return app.quit();
-    await showLive(status);
-  } catch {
-    await showSetup({ configured: Boolean(currentStatus?.configured), connection: "service_unavailable", autoStart: false, leaseAvailable: false });
+    if (action === "quit") {
+      if (!liveVisibleBeforeConnect) return app.quit();
+      if (connection === active) connection = null;
+      active.close();
+      scheduleReconnect();
+      return;
+    }
+    await showLive(status, liveVisibleBeforeConnect);
+    reconnectAttempt = 0;
+  } catch (error) {
+    if (!attemptedConnection) observeManagementOutage(error);
+    if (attemptedConnection && connection === attemptedConnection) {
+      stopHeartbeat();
+      connection = null;
+      lease = null;
+      attemptedConnection.close();
+    }
+    if (!hasCurrentLiveDocument() && !liveVisibleBeforeConnect) {
+      try {
+        await showSetup({
+          configured: Boolean(currentStatus?.configured),
+          connection: "service_unavailable",
+          autoStart: false,
+          leaseAvailable: false,
+        });
+      } catch {
+        // Reconnect remains bounded even when the local setup document cannot load.
+      }
+    }
     scheduleReconnect();
   }
 }
 
-async function showLive(status: ViewerStatus): Promise<void> {
+async function showLive(status: ViewerStatus, preserveExistingDocument = false): Promise<void> {
   if (!connection || !status.config) return showSetup(status);
   if (!lease) {
     try {
       lease = await connection.acquireLease();
       reportDiagnostic({ level: "info", component: "viewer.main", event: "lease_acquired", state: "running" });
     } catch (error) {
-      if (error instanceof ManagementRequestError && error.code === "lease_busy") return app.quit();
-      return showSetup(status);
+      if (error instanceof ManagementRequestError && error.code === "lease_busy" && !preserveExistingDocument) {
+        return app.quit();
+      }
+      throw error;
     }
   }
+  const nextLiveURL = viewerURL(status.config.serverUrl);
+  const loadAction = liveDocumentLoadAction({
+    liveVisible: preserveExistingDocument && hasCurrentLiveDocument(),
+    currentURL: currentLiveURL,
+    nextURL: nextLiveURL,
+  });
   cancelScheduledReconnect();
   startHeartbeat();
-  currentLiveURL = viewerURL(status.config.serverUrl);
+  currentLiveURL = nextLiveURL;
   connection.reportViewer(lease.leaseId, "running");
-  reportDiagnostic({ level: "info", component: "viewer.main", event: "live_load_started", state: "running" });
   setupVisible = false;
+  if (loadAction === "preserve") {
+    reportRenderer("ready");
+    reportDiagnostic({ level: "info", component: "viewer.main", event: "lease_reacquired", state: "running" });
+    reportManagementRecovery();
+    return;
+  }
+  reportDiagnostic({ level: "info", component: "viewer.main", event: "live_load_started", state: "running" });
   await createWindow().loadURL(currentLiveURL);
   reportDiagnostic({ level: "info", component: "viewer.main", event: "live_loaded", state: "running" });
+  reportManagementRecovery();
 }
 
 async function showSetup(status: ViewerStatus | null): Promise<void> {
@@ -238,9 +304,44 @@ function reportDiagnostic(payload: unknown): void {
   if (lease) connection?.reportDiagnostic(lease.leaseId, payload);
 }
 
+function observeManagementOutage(error: unknown): void {
+  if (!managementOutage) {
+    managementOutage = { startedAt: Date.now(), errorCode: managementFailureCode(error), reconnectCount: 0 };
+    return;
+  }
+  managementOutage.reconnectCount = Math.min(100, managementOutage.reconnectCount + 1);
+}
+
+function reportManagementRecovery(): void {
+  const outage = managementOutage;
+  if (!outage) return;
+  managementOutage = null;
+  reportDiagnostic({
+    level: "warn",
+    component: "viewer.control",
+    event: "management_recovered",
+    state: "running",
+    errorCode: outage.errorCode,
+    durationMs: Math.min(30 * 60_000, Math.max(0, Date.now() - outage.startedAt)),
+    reconnectCount: outage.reconnectCount,
+  });
+}
+
 function startHeartbeat(): void {
   stopHeartbeat();
-  if (lease) heartbeat = setInterval(() => connection?.heartbeat(lease?.leaseId ?? ""), lease.heartbeatSeconds * 1_000);
+  const activeConnection = connection;
+  const activeLease = lease;
+  if (!activeConnection || !activeLease) return;
+  let inFlight = false;
+  const pulse = () => {
+    if (inFlight || connection !== activeConnection || lease !== activeLease) return;
+    inFlight = true;
+    void activeConnection.heartbeat(activeLease.leaseId).catch(() => undefined).finally(() => {
+      inFlight = false;
+    });
+  };
+  heartbeat = setInterval(pulse, activeLease.heartbeatSeconds * 1_000);
+  pulse();
 }
 
 function stopHeartbeat(): void {
@@ -261,6 +362,15 @@ function cancelScheduledReconnect(): void {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = null;
   reconnectAttempt = 0;
+}
+
+function hasCurrentLiveDocument(): boolean {
+  if (!window || window.isDestroyed() || setupVisible || !currentLiveURL) return false;
+  try {
+    return window.webContents.getURL() === currentLiveURL;
+  } catch {
+    return false;
+  }
 }
 
 function hardenSession(target: BrowserWindow): void {

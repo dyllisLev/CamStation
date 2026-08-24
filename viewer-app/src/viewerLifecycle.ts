@@ -12,8 +12,16 @@ export function startupAction(status: StartupStatus, autoStartLaunch: boolean): 
   return "acquire_lease";
 }
 
-export function disconnectAction({ explicitShutdown }: { readonly explicitShutdown: boolean; readonly retryCount: number }): "quit" | "show_service_error_and_reconnect" {
-  return explicitShutdown ? "quit" : "show_service_error_and_reconnect";
+export function disconnectAction({
+  explicitShutdown,
+  liveVisible,
+}: {
+  readonly explicitShutdown: boolean;
+  readonly retryCount: number;
+  readonly liveVisible: boolean;
+}): "quit" | "preserve_live_and_reconnect" | "show_service_error_and_reconnect" {
+  if (explicitShutdown) return "quit";
+  return liveVisible ? "preserve_live_and_reconnect" : "show_service_error_and_reconnect";
 }
 
 export function reconnectDelaySeconds(retryCount: number): 1 | 2 | 5 | 10 | 30 {
@@ -22,4 +30,16 @@ export function reconnectDelaySeconds(retryCount: number): 1 | 2 | 5 | 10 | 30 {
 
 export function setupLoadAction(setupVisible: boolean): "load" | "preserve" {
   return setupVisible ? "preserve" : "load";
+}
+
+export function liveDocumentLoadAction({
+  liveVisible,
+  currentURL,
+  nextURL,
+}: {
+  readonly liveVisible: boolean;
+  readonly currentURL: string;
+  readonly nextURL: string;
+}): "load" | "preserve" {
+  return liveVisible && currentURL === nextURL ? "preserve" : "load";
 }

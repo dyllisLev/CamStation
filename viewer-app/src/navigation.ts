@@ -23,6 +23,7 @@ export function browserWindowOptions(preload: string, packaged: boolean): Browse
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: false,
       devTools: !packaged,
     },
   };

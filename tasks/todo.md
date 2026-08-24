@@ -1,3 +1,315 @@
+# 2026-08-25 Viewer 관리 채널 자기복구 운영 배포
+
+## 배포 사양과 안전 경계
+
+- 배포 대상은 `ssh cctv`의 현재 Docker production 한 서비스, host operational watcher 한 파일,
+  `monitoring-pc`의 MSI 소유 Viewer/ViewerService 한 제품이다. 카메라 설정·DB·녹화 파일·nginx·Windows
+  Viewer 설정/client identity·제어 driver는 변경하지 않는다.
+- 서버 후보는 clean `main` exact commit에서 만드는 immutable image
+  `camstation:2.0.0-rc.20260825.21-viewer-self-healing`, Viewer 후보는 같은 commit의 unsigned internal MSI
+  `2.0.28`이다. 배포 전 image ID, MSI size/SHA-256/ProductCode/UpgradeCode와 source commit을 고정한다.
+- 롤백 기준은 현재 healthy image `camstation:2.0.0-rc.20260822.20-storage-cleanup`과 설치된 Viewer
+  `2.0.27`이다. root-only Compose 백업과 정확한 2.0.27 MSI 복구 자산을 확인하기 전에는 각 전환을
+  시작하지 않는다.
+- 서버는 Compose의 image 참조만 원자적으로 바꿔 `camstation` 하나만 재생성한다. watcher는 후보
+  hash를 검증한 뒤 exact 설치 파일만 교체하고 one-shot 성공 후 timer 상태를 확인한다. Windows는
+  공식 target wrapper의 artifact transfer와 bounded `system --intent change`만 사용한다.
+
+## 계획
+
+- [ ] 현재 Git diff가 이번 Viewer 복구·frame truth·fast cooldown·watcher freshness 범위인지 재검토하고
+  전체 회귀시험을 clean commit에서 다시 통과시킨다.
+- [ ] 전용 Windows build host에서 Viewer 2.0.28 MSI를 clean exact commit으로 만들고 metadata, size,
+  SHA-256, ProductCode/UpgradeCode, sourceDirty=false를 검증한다.
+- [ ] 서버 이미지를 같은 commit으로 build/save/transfer/load하고 smoke test 후 기존 Compose와 image ID를
+  보존한다.
+- [ ] 서버 image와 watcher를 전환하고 container healthy/restart 0, camera/stream/recorder 8/8, DB/file
+  녹화 연속성, watcher 실행 성공을 확인한다. 실패하면 Viewer를 건드리기 전에 서버만 원복한다.
+- [ ] monitoring-pc에 MSI를 공식 wrapper로 전달해 Service→Viewer 순으로 정확히 중지한 뒤 major upgrade,
+  Service/Viewer 복원, 설정/client identity 보존을 검증한다. 실패하면 정확한 2.0.27 MSI로 원복한다.
+- [ ] exact Viewer와 desktop capture에서 실제 8타일 진행을 확인하고 Viewer/renderer/stream heartbeat가
+  새 시각으로 전진하며 watcher 3회 연속 receiving 8/8인지 검증한다.
+- [ ] control/setup/capture/config task, 원격 run, driver TCP listener/firewall 잔여 0과 배포 후 recorder
+  segment rollover를 확인하고 Review·교훈·구현 상태를 갱신한다.
+
+## 합격/중단 기준
+
+- 서버 전환 후 90초 안에 container health, camera/stream/recorder 8/8이 아니거나 새 녹화 row/file이
+  전진하지 않으면 기존 image/Compose로 즉시 원복하고 Viewer 배포를 중단한다.
+- Viewer 전환 후 90초 안에 실제 화면 8/8이 아니면 정확한 2.0.27 MSI로 원복한다. 화면이 살아도
+  Viewer/renderer heartbeat 또는 8개 media progress가 30초 안에 전진하지 않으면 새 결함으로 보고
+  원복한다.
+- 최종 합격은 watcher 1분 표본 3회 연속 alert 0·receiving 8/8, Service Running/Automatic,
+  container healthy/restart 0, recorder 8/8과 새 segment 전진, Windows 잔여 작업/연결/방화벽 0이다.
+
+## Review
+
+- 진행 중.
+
+---
+
+# 2026-08-25 Viewer 관리 채널 자기복구·freshness 확정
+
+## 변경 계약
+
+- 실제 영상 경로와 Viewer 관리 경로를 독립 축으로 유지한다. 관리 채널 장애 때문에 이미 재생 중인
+  Viewer 창을 setup 화면으로 교체하거나 전체 Viewer·stream·server를 재시작하지 않는다.
+- named-pipe request는 유한 deadline을 가지며, heartbeat 실패·half-open·lease 만료를 동일한 bounded
+  reconnect 경로로 수렴시킨다. 새 연결은 새 lease를 획득하고 기존 renderer bridge가 telemetry를 다시
+  전달하게 하며 중복 Viewer나 중복 lease를 만들지 않는다.
+- Service가 서버에 보내는 Viewer/renderer 상태와 watcher의 `healthy`는 timestamp freshness를 포함한다.
+  cached `running/ready` enum만으로 건강을 주장하지 않는다.
+- frame callback과 background throttling 변경은 media truth/trigger 완화로 유지하되, 관리 채널
+  자기복구의 대체물로 취급하지 않는다.
+
+## 계획
+
+- [x] monitoring-pc 공식 preflight와 실제 화면을 보존한 채 Service/lease/renderer/stream 시계, 현재 pipe
+  status와 bounded local log를 읽기 전용으로 수집해 최초 trigger와 영구화 결함을 분리한다.
+- [x] request 무응답, application-level lease 거부, socket close, reconnect 중 재실패, stale cached state를
+  각각 실패 우선 회귀 테스트로 고정한다.
+- [x] Viewer management request deadline·단일 disconnect 통지·pending 정리와 heartbeat 실패 수렴을
+  최소 변경으로 구현한다.
+- [x] 기존 live window를 유지하는 bounded reconnect·lease 재획득을 구현하고 setup/초기 연결 경로와
+  명확히 분리한다.
+- [x] Service heartbeat payload와 operational watcher에 Viewer/renderer freshness 판정을 추가한다.
+- [x] Web/Viewer/Python/Go 전체 관련 테스트·lint·build·diff hygiene를 실행하고 환경상 미검증 항목을
+  합격으로 기록하지 않는다.
+- [x] 배포 가능한 artifact와 rollback 경계를 검토한 뒤, 운영 반영을 수행하는 경우 실제 화면 8/8,
+  새 lease/telemetry, watcher 연속 3표본 8/8과 Windows 잔여 작업 0을 검증한다.
+
+## 합격 기준
+
+- 관리 request는 5초 이내 성공하거나 timeout으로 종료되며 pending request가 남지 않고 disconnect는
+  연결 generation당 한 번만 전달된다.
+- 15초 lease 만료 또는 half-open 뒤 기존 live document와 8개 영상은 유지되고, 30초 안에 새 연결·lease로
+  수렴해 Viewer/renderer/stream timestamp가 다시 전진한다.
+- Viewer 또는 renderer heartbeat가 30초 이상 stale이면 API/watcher가 healthy로 세지 않으며, Service
+  heartbeat만 신선한 모순 상태를 별도 alert로 식별한다.
+- 정상 stream에는 reconnect가 없고, management reconnect가 playback recovery budget을 초기화하거나
+  중복 resubscribe를 만들지 않는다.
+- 운영 반영 시 watcher 1분 표본 3회 연속 receiving 8/8, 실제 Viewer 8/8 진행, Viewer Service Running,
+  control/setup/capture/config task·driver TCP listener·firewall residue 0을 모두 만족한다.
+
+## Review
+
+- 공식 monitoring-pc audit에서 Service는 Running/Auto, interactive Viewer process group은 모두
+  `Responding=true`, 실제 Viewer exact-window는 8개 카메라 영상과 카메라 시각이 전진했다. 같은 순간
+  Service→server heartbeat만 2~10초로 신선하고 lease/renderer/stream progress는 105~113초부터 함께
+  노후화됐다. 따라서 영상 decoder 장애가 아니라 Viewer→Service 관리 채널 정지가 확정된 영구화
+  경로다. 최초 trigger가 renderer scheduling pause인지 named-pipe half-open인지는 운영 증거만으로
+  확정하지 않았다.
+- 최종 read-only 재확인에서도 KST 08:20:45~47의 exact-window에 실제 카메라 8개가 모두 표시됐고,
+  KST 08:19:42 서버 watcher는 camera/stream/recorder 8/8과 Viewer telemetry 0/8을 동시에 기록했다.
+  Service는 Running, session은 Active, capture task는 삭제됐고 원격 run도 제거됐다. 따라서 현재
+  사용자 영상은 살아 있지만 구버전 관리 telemetry blind spot은 운영 반영 전까지 계속된다.
+- 실패 우선 테스트에서 silent request가 종료되지 않고 기존 disconnect가 live 문서를 setup으로
+  교체하며 stale heartbeat를 watcher가 healthy로 세는 RED를 확인했다. request/connect 5초 deadline,
+  generation당 한 번의 terminal failure, pending timer 정리, heartbeat 실패의 socket teardown을
+  구현했다. 기존 live URL은 그대로 보존하고 1/2/5/10/30초 재연결에서 새 lease만 획득한다.
+- LeaseManager 만료는 exact owner를 한 번만 통지하고 callback은 mutex 밖에서 실행한다. Server는
+  connection generation을 기억해 늦은 expire/disconnect가 새 Viewer 상태를 덮지 못하게 했고,
+  만료 시 timestamp/stream 증거는 보존한 채 `unresponsive`로 내린다. 예상치 못한 lease disconnect와
+  만료는 Service warn에 남고, 복구된 Viewer는 원문 없이 bounded failure class·지속·재시도 수를
+  `management_recovered`로 남긴다.
+- Service→server payload는 Viewer/renderer heartbeat가 15초 이상 stale이면 cached
+  `running/ready`를 `unresponsive`로 파생한다. watcher는 30초 freshness를 독립 확인하며
+  `viewer_heartbeat_stale`/`viewer_renderer_stale`과 age/count를 기록한다. 과거 stream progress가
+  남아 receiving 8/8이어도 관리 채널 stale을 healthy로 세지 않는다.
+- 검증은 Viewer 54/54, Web 87/87, watcher 6/6, 전체 `go test ./...`, ViewerService `-race`, Web lint,
+  Web/Viewer production build, Linux daemon build, Windows ViewerService test cross-compile/build,
+  `gofmt -d`와 `git diff --check`를 통과했다. 고정 Go 1.25.12 digest를 일회성 컨테이너로 사용했고
+  저장소는 read-only mount했다.
+- 운영 Viewer는 조사 시점부터 실제 8/8로 살아 있어 재시작하지 않았다. 이번 source는 아직 production
+  container/MSI에 배포하지 않았다. server image와 Viewer MSI를 함께 바꾸는 rollout은 immutable
+  artifact·rollback과 명시적 운영 적용 단계가 필요하므로, 3개 watcher 표본·새 lease·화면 8/8 gate는
+  배포 후 검증으로 남긴다.
+
+---
+
+# 2026-08-25 Viewer 운영 복구 우선·상태 계약 안정화
+
+## 계획
+
+- [x] 기존 작업 변경을 보존하고 monitoring-pc의 공식 target/session/driver/service preflight를 통과한다.
+- [x] 기존 Viewer 창을 exact-window와 전체 desktop capture로 확인하고 실제 표시·프레임 진행 상태를 증거로 고정한다.
+- [x] Viewer가 이미 8/8 재생 중이면 불필요한 재시작을 생략하고, 실제 화면과 서비스·renderer 상태를 함께 증명한다.
+- [x] `online/healthy`와 카메라별 media progress가 모순되지 않도록 Viewer heartbeat·서버 DTO/store·watcher 집계 경계를 추적한다.
+- [x] 기존 1회 15초 fast-cooldown 변경을 보존하면서 presented-frame 진행률 회귀시험과 최소 수정안을 구현한다.
+- [x] Viewer management request에 유한 deadline을 두고 heartbeat/lease 실패 시 기존 live 창을 유지한 채 bounded reconnect·lease 재획득을 수행한다.
+- [x] 서버와 watcher의 `healthy` 판정에 Viewer/renderer heartbeat freshness를 포함해 cached `running/ready`가 건강으로 남지 않게 한다.
+- [x] Web/Viewer/Go 관련 테스트와 build, diff hygiene를 통과시키고 운영 반영 여부·잔여 위험을 검토한다.
+
+## 합격 기준
+
+- monitoring-pc의 실제 Viewer 창에서 활성 카메라 8개가 보이고 진행하며, 수정 배포 후 서버 watcher도 연속 3표본에서 receiving 8/8이다.
+- Viewer service/control/renderer/media-progress 상태가 서로 다른 사실로 보고되고, 90초 넘게 progress가 없으면 watcher가 `viewer_media_missing`으로 경보한다.
+- renderer 또는 heartbeat 정지 회귀에서 90초 이내 degraded가 되고 300초 안에 bounded recovery가 시작되며 정상 타일·recorder에는 영향이 없다.
+- 모든 공식 Windows 제어 run이 정리되고 control/setup/capture/config task, TCP listener, firewall 잔여가 0이다.
+
+## Review
+
+- 2026-08-25 06:40~06:51 KST의 공식 exact-window 2회와 전체 desktop capture에서 활성 카메라
+  8개가 모두 표시됐고 카메라 자체 시각과 장면이 전진했다. Viewer Service는 Running, renderer는
+  ready였으며 공식 제어·setup·capture·config task와 TCP listener/firewall 잔여는 모두 0이었다.
+  이미 살아 있는 Viewer를 재시작하거나 창·서비스·설정을 변경하지 않았다.
+- 같은 시각 서버 watcher는 `viewer_media_missing`, receiving 0/8을 반복했다. 설치 watcher와 저장소
+  watcher의 hash 및 집계 함수는 같았다. 추가 DB 교차 확인에서는 Service→server heartbeat만 약 10초로
+  신선하고 Viewer lease heartbeat·renderer heartbeat·stream update·media progress가 모두 같은 시점에서
+  112초 이상 멈춰 있었다. 직접 원인은 실제 영상 경로가 아니라 Viewer→Viewer Service 관리 채널의
+  무응답/lease 상실이 자동 복구되지 않는 것이며, 최초 trigger가 renderer scheduling인지 named-pipe
+  half-open인지는 아직 확정하지 않았다.
+- Web hook은 `requestVideoFrameCallback`으로 실제 표시 프레임을 관찰해 최대 초당 1회 progress를
+  갱신하고 기존 `timeupdate`를 호환 fallback으로 유지한다. 연결이 없거나 cooldown인 동안에는
+  progress를 만들지 않으며 unmount 때 callback을 정확히 취소한다. 항상 켜져 있는 Electron 창에는
+  `backgroundThrottling=false`를 고정했다. 이는 renderer scheduling trigger를 줄이고 frame 판정을
+  정확하게 하는 부분 완화다. management request timeout·lease 재획득·stale health 파생이 없어 현재
+  원인을 완전히 해결하지는 않는다. 기존 fast-cooldown 변경은 그대로 보존했다.
+- RED 후 추가한 frame observer 2개와 BrowserWindow 계약 테스트가 통과했다. 전체 Web test 87/87,
+  Viewer test 49/49, Web lint, Web production build, Viewer TypeScript/package build와
+  `git diff --check`가 통과했다. 현재 Ubuntu 환경에는 Go 실행 파일이 없어 전체 Go test/daemon build는
+  수행하지 못했으며 합격으로 기록하지 않는다.
+- 새 Web bundle과 Viewer source는 운영 container/MSI에 배포하지 않았다. 따라서 watcher receiving
+  연속 8/8은 rollout 후 검증 gate로 남아 있고, 운영 Viewer 2.0.27과 현재 server image는 변경되지 않았다.
+
+---
+
+# 2026-08-24 일일 감사 안정화 중심 브리핑 재구성
+
+## 계획
+
+- [x] 현재 06:00 감사 schedule과 과거 06:30 사용자 reporter 대상 상태를 재조회한다.
+- [x] 오늘 처음이거나 달라진 오류 중 시스템/프로그램 결함 가능성이 높은 항목을 우선 판별하는 기준을 고정한다.
+- [x] 같은 사건의 camera→server/recorder/Viewer 파생 증거를 하나의 안정화 이슈로 병합하고 핵심 3건을 먼저 쓰는 보고 형식으로 감사 prompt를 갱신한다.
+- [x] 현재 사용자가 직접 받는 원 감사 output을 같은 핵심 순서로 고정하고, 종료된 과거 reporter 대상에는 중복 heartbeat를 만들지 않는다.
+- [x] schedule의 비변경 필드와 안전·자원 경계를 재검증하고 Review 및 교훈을 기록한다.
+
+## Review
+
+- 기존 보고는 수집 완전성, 발견 문제, 다일 비교, 축별 결과, 현재 상태에서 같은 episode의 증거가
+  반복돼 오늘의 시스템 결함 후보가 뒤로 밀렸다. 새 prompt의 최우선 목적을 프로그램 안정화로 명시하고
+  원인 영역을 system-likely/external-likely/unknown으로 먼저 분류하도록 바꿨다.
+- camera→go2rtc→live-warm/recorder→Viewer로 전파된 동일 시간대 사건은 한 인과 행으로 병합한다.
+  외부 source reset 뒤 Viewer cooldown이나 supervisor 복구가 영향을 연장하면 외부 trigger와 시스템
+  복구 결함을 분리해 후자만 안정화 핵심 이슈로 올린다.
+- 최종 보고는 감사 구간·수집 완전성 최대 5줄 뒤 오늘의 안정화 결론을 먼저 쓰고,
+  오늘의 프로그램 안정화 핵심 이슈를 최대 3행으로 제한한다. 나머지 운영 문제·신규/변형은 중복 없는
+  압축 표, 반복 재시작·품질 신호·06시 수치는 하나의 후반 절로 모으고 조치도 즉시/개발 각각 최대 3개다.
+- 과거 06:30 reporter가 가리키던 agent 5b39b3dd…는 closed 상태이고 현재 사용자는 06:00 schedule
+  run output을 직접 확인하고 있다. 종료 대상을 재생성하거나 중복 알림을 추가하지 않고 원 output 자체를
+  브리핑 형식으로 고쳤다.
+- 재조회 결과 schedule ab13f419은 active, 0 6 * * */Asia/Seoul, 다음 실행
+  2026-08-25 06:00 KST, provider/model/cwd/mode/isolation, 만료·run 수 제한 없음, 과거 run 12개를
+  유지한다. 24시간 반개구간, 읽기 전용 안전 경계, 15분 수집/25분 전체 상한, ffprobe 40개 상한,
+  다일 14일 비교와 run output 외 보고서 파일 금지도 그대로다. 즉시 실행은 하지 않았다.
+
+---
+
+# 2026-08-24 일일 감사 다일 패턴 비교·스케줄 프롬프트 갱신
+
+## 계획
+
+- [x] Paseo 감사 schedule의 설정과 보존된 전체 run 이력을 읽기 전용으로 확인한다.
+- [x] 성공한 일별 감사의 새벽 카메라별 사건 시각·오류 연쇄를 비교하고 반복 후보와 당일 신규·변형 패턴을 분리한다.
+- [x] 기존 06:00 KST cadence·안전 경계·실행 상한을 보존하면서 다일 기준선 및 당일 특이 이벤트 집중 규칙을 prompt에 추가한다.
+- [x] 변경된 schedule을 재조회해 prompt와 비변경 필드가 정확한지 검증한다.
+- [x] 비교 결과, 판정 한계와 schedule 변경 내용을 Review에 기록한다.
+
+## Review
+
+- schedule `ab13f419`의 보존 run 12개를 모두 확인했다. 성공·비어 있지 않은 24시간 감사 보고서는
+  10개이고, 최초 취소 run 1개는 같은 구간의 후속 성공 run으로 대체됐다. KST
+  `[2026-08-18 06:00, 2026-08-19 06:00)`은 Paseo daemon 재시작으로 run이 실패해 비교 보고서가 없다.
+- 실제 장치 trigger/completion 로그가 없어 확정 시각은 만들지 않았다. 가장 강한 반복 후보는
+  소방서3·4의 `02:01~02:07` KST(서로 다른 2일, 404→worker exit/retry)와 소방서1의
+  `03:50~03:51` KST(서로 다른 2일, timeout/404 또는 bad-cseq와 live/Viewer 영향)다. 집-마당의
+  `03:08~03:13` KST는 2일 관찰됐지만 단일 축 요약이 섞여 낮은 확신 후보로 남겼다.
+- 염소장은 여러 성공 일자에 동일한 `media_stall→setup_timeout→episode_exhausted→약 5분 cooldown`
+  연쇄가 반복됐지만 시각이 `02:09~04:27` KST로 넓게 흩어져 고정 restart minute를 추정하지 않았다.
+  소방서5와 집-창고1·2도 고정 시각을 뒷받침할 다일 증거가 부족하다.
+- 일별 특이 패턴 중 가장 큰 outlier는 08-22 07:31~11:28의 5대 source/producer 장애로, DB gap
+  73회와 294-byte ready 파일 ffprobe 실패 32개를 만들었다. 최신 08-23~24에는 소방서5의 주간
+  Viewer-only 300초 cooldown 2회가 새 패턴이고, 염소장 02:09·소방서1 02:52는 기존 강한 후보
+  시각보다 이른 변형 후보다. `stream.warm context deadline exceeded`는 직전에도 183회였으므로
+  최신 128회는 신규가 아닌 반복 품질 신호다.
+- prompt는 이전 14일의 성공 일별 output 전부, 실패·결손 날짜, ±15분 다축 군집, 확신도,
+  신규/변형 우선 슬롯, 비교 가능한 일별 중앙값·범위, 별도 `반복 새벽 재시작 후보`와
+  `당일 신규·변형 패턴` 표를 요구하도록 갱신했다. 과거 raw 로그 재수집과 현재 raw 파일 추가 pass는
+  금지했다.
+- 재조회 결과 schedule은 active, `0 6 * * *`/`Asia/Seoul`, 다음 실행
+  `2026-08-25 06:00 KST`, cwd/provider/model/mode/isolation, 만료 없음, 최대 run 없음, 보존 run 12개를
+  유지한다. 읽기 전용 안전 경계, 15분 수집/25분 전체 상한, ffprobe 최대 40개, run output 외 보고서
+  파일 금지 문구도 그대로 남아 있다. schedule을 즉시 실행하지 않았고 운영 시스템은 변경하지 않았다.
+
+---
+
+# 2026-08-20 예정 카메라 재시작 후 Viewer 빠른 복구
+
+## 변경 계약
+
+- 새벽 02:00~05:00 KST의 예정된 카메라 재시작으로 생기는 짧은 source reset은 카메라 오류로
+  재분류하거나 카메라 설정을 변경하지 않는다.
+- Viewer가 한 번의 30초 복구 episode를 소진한 뒤 바로 5분간 멈추지 않게 한다. 첫 소진에만
+  15초 fast cooldown을 허용하고 새 전체 후보 episode를 한 번 실행한다.
+- fast episode도 실패하면 기존 5분 저빈도 cooldown으로 돌아가 재연결 폭주를 막는다. 5분 연속
+  media progress 또는 검증된 primary 복귀 뒤에만 fast cooldown 예산을 다시 채운다.
+- 복구는 영향 타일 하나에만 한정하며 정상 타일, Viewer 프로세스, 서버 stream, recorder를
+  재시작하지 않는다.
+
+## 계획
+
+- [x] 기존 300초 첫 cooldown을 실패로 고정하는 회귀 테스트를 추가하고 RED를 확인한다.
+- [x] `PlaybackRecovery`에 15초 1회 fast cooldown 예산과 안정 재생 후 reset을 구현한다.
+- [x] live playback 설계 문서와 구현 상태를 새 복구 계약에 맞춘다.
+- [x] focused Web test, 전체 Web test/lint/build를 통과시킨다.
+- [ ] 전체 Go test/build를 통과시킨다. 의존성 proxy TLS timeout으로 환경 검증이 막혔다.
+- [x] 변경 파일과 생성 asset을 검토하고 운영 미배포 상태 및 검증 결과를 기록한다.
+
+## 검토
+
+- 이전 구현에서 첫 episode 소진 결과가 `until=331000`(300초)이어서 새 기대값
+  `until=46000`(15초)에 실패하는 RED를 확인한 뒤 구현했다.
+- 첫 소진 15초, 두 번째 소진 300초, 5분 연속 progress 재충전, 검증된 primary 복귀 재충전,
+  짧은 progress 비재충전을 직접 테스트했다. Web 전체 test 85/85, lint, production build와
+  `git diff --check`가 통과했다.
+- 고정 Go 1.25.12 이미지의 일부 독립 패키지는 통과했지만, SQLite/YAML 모듈 다운로드가
+  `proxy.golang.org` TLS handshake timeout으로 끝나 전체 Go test/build는 합격 판정을 하지 않았다.
+- embedded Web asset은 새 hash로 재생성했다. 운영 서버, container, DB, monitoring PC에는 배포하거나
+  변경하지 않았다.
+
+---
+
+# 2026-08-22 백업 비활성 시 녹화 용량 정리 복구
+
+## 계획
+
+- [x] 운영 DB를 read-only/query-only로 열어 700 GiB 제한, 백업 비활성, 미백업 보호 활성,
+  ready 3,628개 전부 pending, 최근 자동 정리 삭제 0개를 확인한다.
+- [x] `backup.enabled=false`이면 `protectUnbacked`를 비활성화하는 설정 정규화와 cleanup 방어 로직을
+  실패 우선 회귀 테스트로 구현한다.
+- [x] 관련 store/cleanup/API 테스트와 전체 Go 테스트·빌드를 통과시킨다.
+- [x] 기존 작업 트리를 보존한 exact revision 이미지로 운영에 반영하고, 자동 정리가 700 GiB 이하로
+  수렴하며 container/camera/stream/recorder/Viewer가 정상인지 검증한다.
+
+## Review
+
+- 운영 DB에서 700 GiB 제한 대비 855,314,752,508 bytes, backup disabled,
+  `protectUnbacked=true`, ready 3,628개 전부 pending, backed-up 후보 0개를 확인했다. 자동 cleanup은
+  반복 실행됐지만 삭제 0건이었다.
+- 실패 우선 테스트는 cleanup과 설정 공개 양쪽에서 재현됐다. 유효 보호 조건을
+  `backup.enabled && protectUnbacked`로 고정하고, 비활성 backup의 저장·공개 설정과 importer 기본값을
+  false로 정규화했다. focused package와 `go test ./...`, daemon build, immutable image smoke가 통과했다.
+- commit `008ece5f12a98c9328e2436f3b4864f6cfa545ac`을 `main`에 fast-forward/push하고 image
+  `camstation:2.0.0-rc.20260822.20-storage-cleanup`으로 운영 반영했다. image ID는
+  `sha256:37f37493d053a8731aca022875885216a979e723bb053d32805cb5046f2cac7f`다.
+- startup cleanup은 522개를 지웠고 11:30 KST 다음 segment-close cleanup이 1개를 추가 정리해 총
+  523개가 `capacity cleanup`으로 전환됐다. 저장량은 751,262,717,968 bytes로 700 GiB 한도 아래이며,
+  삭제 파일 잔존 0, ready missing/0-byte/size mismatch 0, 최신 8개 ffprobe/A/V 8/8이다.
+- 최종 container healthy/restart 0, non-root/read-only/no-new-privileges, camera/stream/recorder/Viewer
+  8/8, recorder error 0이다. watcher는 2026-08-22 11:33:49 KST `ok`, alert/error 0,
+  media disk 75.6%다. root-only Compose rollback 백업은
+  `compose.pre-storage-cleanup-20260822T022526Z.yaml`로 보존했다.
+
 # 2026-08-17 Viewer WebSocket 1시간 종료 수정
 
 ## 변경 계약

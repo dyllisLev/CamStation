@@ -4,6 +4,7 @@ import net from "node:net";
 export const MANAGEMENT_PIPE_NAME = String.raw`\\.\pipe\CamStationViewerService`;
 export const MANAGEMENT_PROTOCOL_VERSION = 2;
 export const MAX_MANAGEMENT_MESSAGE_BYTES = 64 * 1024;
+export const MANAGEMENT_REQUEST_TIMEOUT_MS = 5_000;
 
 export type ConfigDraft = {
   readonly serverUrl: string;
@@ -49,6 +50,7 @@ type EventEnvelope = {
 type PendingRequest = {
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
+  readonly timer: ReturnType<typeof setTimeout>;
 };
 
 export class ManagementRequestError extends Error {
@@ -60,6 +62,23 @@ export class ManagementRequestError extends Error {
   }
 }
 
+export type ManagementFailureCode =
+  | "request_timeout"
+  | "connect_timeout"
+  | "lease_failed"
+  | "pipe_closed"
+  | "transport_failed";
+
+export function managementFailureCode(error: unknown): ManagementFailureCode {
+  if (error instanceof ManagementRequestError) {
+    if (error.code === "request_timeout" || error.code === "connect_timeout" || error.code === "lease_failed") {
+      return error.code;
+    }
+  }
+  if (error instanceof Error && error.message === "management pipe closed") return "pipe_closed";
+  return "transport_failed";
+}
+
 export class ManagementConnection {
   #closed = false;
   #buffer = Buffer.alloc(0);
@@ -67,21 +86,49 @@ export class ManagementConnection {
   #disconnectHandlers = new Set<(error: Error) => void>();
   #commandHandlers = new Set<(command: ViewerCommand) => void | Promise<void>>();
   private readonly socket: net.Socket;
+  private readonly requestTimeoutMs: number;
 
-  private constructor(socket: net.Socket) {
+  private constructor(socket: net.Socket, requestTimeoutMs: number) {
     this.socket = socket;
+    this.requestTimeoutMs = requestTimeoutMs;
     socket.on("data", (chunk: Buffer) => this.receive(chunk));
     socket.on("error", (error) => this.fail(error));
     socket.on("close", () => this.fail(new Error("management pipe closed")));
   }
 
-  static async connect(pipeName = MANAGEMENT_PIPE_NAME): Promise<ManagementConnection> {
-    const socket = await new Promise<net.Socket>((resolve, reject) => {
+  static async connect(
+    pipeName = MANAGEMENT_PIPE_NAME,
+    requestTimeoutMs = MANAGEMENT_REQUEST_TIMEOUT_MS,
+  ): Promise<ManagementConnection> {
+    if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 30_000) {
+      throw new Error("management request timeout is invalid");
+    }
+    return new Promise<ManagementConnection>((resolve, reject) => {
       const candidate = net.createConnection(pipeName);
-      candidate.once("connect", () => resolve(candidate));
-      candidate.once("error", reject);
+      const cleanup = () => {
+        clearTimeout(timer);
+        candidate.removeListener("connect", onConnect);
+        candidate.removeListener("error", onError);
+      };
+      const onConnect = () => {
+        // Attach the permanent handlers before removing the temporary error
+        // listener so a just-connected pipe never has an unowned error gap.
+        const connection = new ManagementConnection(candidate, requestTimeoutMs);
+        cleanup();
+        resolve(connection);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        candidate.destroy();
+        reject(new ManagementRequestError("connect_timeout", "management pipe connect timed out"));
+      }, requestTimeoutMs);
+      candidate.once("connect", onConnect);
+      candidate.once("error", onError);
     });
-    return new ManagementConnection(socket);
   }
 
   async status(): Promise<ViewerStatus> {
@@ -102,8 +149,14 @@ export class ManagementConnection {
     return payload;
   }
 
-  heartbeat(leaseId: string): void {
-    void this.request("lease_heartbeat", { leaseId }).catch(() => undefined);
+  async heartbeat(leaseId: string): Promise<void> {
+    try {
+      await this.request("lease_heartbeat", { leaseId });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error("management heartbeat failed");
+      this.terminate(failure);
+      throw failure;
+    }
   }
 
   release(leaseId: string): void {
@@ -136,8 +189,8 @@ export class ManagementConnection {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.rejectPending(new Error("management pipe closed"));
     this.socket.end();
-    this.fail(new Error("management pipe closed"));
   }
 
   onDisconnect(handler: (error: Error) => void): () => void {
@@ -159,11 +212,13 @@ export class ManagementConnection {
     const encoded = Buffer.from(`${JSON.stringify(request)}\n`, "utf8");
     if (encoded.length > MAX_MANAGEMENT_MESSAGE_BYTES) return Promise.reject(new Error("management message exceeds 64 KiB"));
     return new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(requestId, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.terminate(new ManagementRequestError("request_timeout", "management request timed out"));
+      }, this.requestTimeoutMs);
+      this.#pending.set(requestId, { resolve, reject, timer });
       this.socket.write(encoded, (error?: Error | null) => {
         if (error) {
-          this.#pending.delete(requestId);
-          reject(error);
+          this.terminate(error);
         }
       });
     });
@@ -207,17 +262,37 @@ export class ManagementConnection {
       const pending = this.#pending.get(response.requestId);
       if (!pending) continue;
       this.#pending.delete(response.requestId);
+      clearTimeout(pending.timer);
       if (response.ok) pending.resolve(response.payload);
       else pending.reject(new ManagementRequestError(response.errorCode || "request_failed", response.message || "management request failed"));
     }
   }
 
   private fail(error: Error): void {
-    if (this.#closed && this.#pending.size === 0) return;
+    if (this.#closed) return;
     this.#closed = true;
-    for (const pending of this.#pending.values()) pending.reject(error);
+    this.rejectPending(error);
+    for (const handler of this.#disconnectHandlers) {
+      try {
+        handler(error);
+      } catch {
+        // A consumer callback cannot revive or block a failed generation.
+      }
+    }
+  }
+
+  private terminate(error: Error): void {
+    if (this.#closed) return;
+    this.fail(error);
+    this.socket.destroy();
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
     this.#pending.clear();
-    for (const handler of this.#disconnectHandlers) handler(error);
   }
 }
 

@@ -115,7 +115,8 @@ sudo systemctl start camstation-log-watch.service
 ```
 
 환경 파일의 API bind, container, SQLite DB, daemon/output log, state/media 경로는 실제 Compose mount와
-맞아야 한다. 운영 기본은 1분 간격, API·Docker probe당 5초, logger freshness 180초, Viewer progress 90초,
+맞아야 한다. 운영 기본은 1분 간격, API·Docker probe당 5초, logger freshness 180초,
+Viewer/renderer heartbeat freshness 30초, Viewer progress 90초,
 `operational-watch.jsonl` active 포함 10 MiB×4다. state는 2 GiB, media는 20 GiB 미만이거나 사용률
 90% 이상이면 경고하고 95% 이상이면 오류로 올린다. watcher는 DB를 read-only로 열어 활성 segment의
 시작 age와 최신 ready 종료 age를 집계하며, 설정된 segment 길이보다 300초 이상 늦으면
@@ -230,6 +231,11 @@ PY
 `status=ok`는 해당 시점의 camera/stream/recorder/Viewer 수와 media progress, logger, disk가 모두
 기준을 만족했다는 뜻이다. `degraded` 또는 `error`는 `alerts`의 고정 code로 원인을 좁힌 뒤 같은 시각의
 `camstationd.jsonl*`을 상세 조사한다.
+
+Viewer의 문자열 상태가 `running/ready`여도 heartbeat가 30초 이상 오래되면 watcher는 해당 Viewer를
+healthy로 세지 않는다. 이때 `viewer_heartbeat_stale` 또는 `viewer_renderer_stale`을 내고,
+`viewerHeartbeatFresh`, `rendererHeartbeatFresh`, 두 최신 heartbeat age를 함께 기록한다. 과거 stream
+진행이 남아 있어 `receivingCameras`가 8이어도 관리 채널이 stale이면 정상으로 판정하지 않는다.
 
 Viewer에 경고·오류가 있거나 장애 조사 중 debug를 켰다면 서버와 Viewer에 같은 playback `sessionId`가
 남는다. Viewer log에서 세션을 고른 뒤 서버에서 같은 값을 찾으면 signaling, first media, fallback,

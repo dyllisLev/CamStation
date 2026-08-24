@@ -14,6 +14,7 @@ import {
   type PlaybackRecoveryStep,
   type PlaybackTransport,
 } from "./playbackRecovery";
+import { observePresentedVideoFrames } from "./videoFrameProgress";
 
 export type PlaybackPhase =
   | "connecting"
@@ -87,6 +88,7 @@ export function useWebRtcMseStream(
     let setupTimer: ReturnType<typeof setTimeout> | null = null;
     let stallTimer: ReturnType<typeof setTimeout> | null = null;
     let lastVideoTime = -1;
+    let lastPresentedFrameAt = 0;
     let lastBinaryStateAt = 0;
     let lastProgressStateAt = 0;
     let attemptStartedAt = sessionStartedAt;
@@ -158,6 +160,7 @@ export function useWebRtcMseStream(
     function publishAttempt(options: AttemptOptions, errorCategory: PlaybackErrorCategory) {
       lastBinaryStateAt = 0;
       lastProgressStateAt = 0;
+      lastPresentedFrameAt = 0;
       setPlayback((current) => ({
         ...current,
         transport: options.transport,
@@ -335,6 +338,13 @@ export function useWebRtcMseStream(
       markProgress(generation);
     }
 
+    const stopPresentedFrameObservation = observePresentedVideoFrames(video, () => {
+      const now = Date.now();
+      if (!closeConnection || now - lastPresentedFrameAt < 1_000) return;
+      lastPresentedFrameAt = now;
+      markProgress(generation);
+    });
+
     function beginAttempt(
       options: AttemptOptions,
       previousError: PlaybackErrorCategory = "none",
@@ -386,6 +396,7 @@ export function useWebRtcMseStream(
       emitDiagnostic("session_closed");
       destroyed = true;
       generation++;
+      stopPresentedFrameObservation();
       video.removeEventListener("timeupdate", handleTimeUpdate);
       teardownAttempt();
     };

@@ -34,6 +34,7 @@ test("BrowserWindow uses the hardened renderer boundary", () => {
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
+    backgroundThrottling: false,
     devTools: false,
   });
 });
@@ -57,6 +58,14 @@ test("Viewer owns fullscreen through native BrowserWindow IPC", async () => {
 test("entering live cancels a pending setup reconnect", async () => {
   const source = await readFile(path.resolve(import.meta.dirname, "../src/main.ts"), "utf8");
   assert.match(source, /async function showLive[\s\S]+?cancelScheduledReconnect\(\);[\s\S]+?loadURL\(currentLiveURL\)/u);
+});
+
+test("management recovery records only bounded post-reconnect evidence", async () => {
+  const source = await readFile(path.resolve(import.meta.dirname, "../src/main.ts"), "utf8");
+  assert.match(source, /event: "management_recovered"/u);
+  assert.match(source, /durationMs: Math\.min\(30 \* 60_000, Math\.max\(0,/u);
+  assert.match(source, /managementOutage\.reconnectCount = Math\.min\(100,/u);
+  assert.doesNotMatch(source, /management_recovered[\s\S]{0,400}error\.message/u);
 });
 
 test("setup document loads its renderer as an ES module", async () => {

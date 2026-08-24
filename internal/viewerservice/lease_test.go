@@ -101,6 +101,32 @@ func TestLeaseRefreshesAndExpiresAfterFifteenSeconds(t *testing.T) {
 	}
 }
 
+func TestLeaseExpiryNotifiesExactOwnerOnce(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	leases := NewLeaseManager(clock.Now, 15*time.Second)
+	expired := make([]string, 0, 1)
+	leases.SetExpirationHandler(func(connectionID string) {
+		expired = append(expired, connectionID)
+		if owner := leases.Owner(); owner != "" {
+			t.Fatalf("expiration callback observed owner=%q", owner)
+		}
+	})
+	if _, err := leases.Acquire("connection-a", Peer{PID: 10, SessionID: 2, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.Advance(15 * time.Second)
+	if !leases.Available() {
+		t.Fatal("expired lease did not become available")
+	}
+	if !leases.Available() {
+		t.Fatal("expired lease did not remain available")
+	}
+	if len(expired) != 1 || expired[0] != "connection-a" {
+		t.Fatalf("expired owners=%v", expired)
+	}
+}
+
 func TestLeaseConnectionReleaseIsImmediate(t *testing.T) {
 	leases := NewLeaseManager(time.Now, 15*time.Second)
 	if _, err := leases.Acquire("connection-a", Peer{PID: 10, SessionID: 2, Interactive: true}); err != nil {

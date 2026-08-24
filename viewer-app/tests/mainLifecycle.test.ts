@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { disconnectAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "../src/viewerLifecycle.ts";
+import { disconnectAction, liveDocumentLoadAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "../src/viewerLifecycle.ts";
 
 test("direct launch decides between setup, quiet exit, and live Viewer", () => {
   assert.equal(startupAction({ configured: false, autoStart: true, leaseAvailable: true }, false), "show_setup");
@@ -11,8 +11,9 @@ test("direct launch decides between setup, quiet exit, and live Viewer", () => {
 });
 
 test("service disconnect is recoverable unless Viewer is explicitly closing", () => {
-  assert.equal(disconnectAction({ explicitShutdown: false, retryCount: 0 }), "show_service_error_and_reconnect");
-  assert.equal(disconnectAction({ explicitShutdown: true, retryCount: 0 }), "quit");
+  assert.equal(disconnectAction({ explicitShutdown: false, retryCount: 0, liveVisible: false }), "show_service_error_and_reconnect");
+  assert.equal(disconnectAction({ explicitShutdown: false, retryCount: 0, liveVisible: true }), "preserve_live_and_reconnect");
+  assert.equal(disconnectAction({ explicitShutdown: true, retryCount: 0, liveVisible: true }), "quit");
 });
 
 test("service reconnect retries use the bounded 1/2/5/10/30-second sequence", () => {
@@ -22,4 +23,22 @@ test("service reconnect retries use the bounded 1/2/5/10/30-second sequence", ()
 test("offline reconnect preserves an already visible setup form", () => {
   assert.equal(setupLoadAction(false), "load");
   assert.equal(setupLoadAction(true), "preserve");
+});
+
+test("management reconnect preserves only the same verified live document", () => {
+  assert.equal(liveDocumentLoadAction({
+    liveVisible: true,
+    currentURL: "http://camstation/live?viewer=1",
+    nextURL: "http://camstation/live?viewer=1",
+  }), "preserve");
+  assert.equal(liveDocumentLoadAction({
+    liveVisible: true,
+    currentURL: "http://old/live?viewer=1",
+    nextURL: "http://new/live?viewer=1",
+  }), "load");
+  assert.equal(liveDocumentLoadAction({
+    liveVisible: false,
+    currentURL: "http://camstation/live?viewer=1",
+    nextURL: "http://camstation/live?viewer=1",
+  }), "load");
 });

@@ -1,5 +1,82 @@
 # Lessons
 
+## 2026-08-25 — 관리 채널 복구는 deadline·generation·증거 보존을 함께 닫는다
+
+- request timeout만 추가하고 끝내지 않는다. timeout/error/close/application-level lease 실패를 연결
+  generation당 한 terminal path로 모아 pending timer를 전부 정리하고, old heartbeat와 늦은 callback이
+  새 lease에 손대지 못하게 한다. live 문서는 별도 생명주기로 유지해야 control 복구가 실제 영상을
+  끊지 않는다.
+- lease expiry callback에서 manager mutex를 쥔 채 connection close나 상태 lock을 잡지 않는다. 만료
+  state를 먼저 commit하고 callback은 lock 밖에서 실행하되, Server가 exact connection generation을
+  비교해야 늦은 expiry/disconnect가 이미 복구된 Viewer를 `unresponsive/closed`로 되돌리는 race를 막는다.
+- Viewer 로컬 로그 writer가 동일 management pipe 반대편 Service에 있으면 pipe 단절 순간에는 원인을
+  기록할 수 없다. Service는 예상치 못한 lease disconnect/expiry를 warn으로 남기고, 살아남은 Viewer는
+  재연결 뒤 최초 bounded error class·중단 시간·재시도 수를 recovery event로 보충한다. raw OS 오류나
+  pipe path를 진단 필드에 넣지 않는다.
+
+## 2026-08-25 — Viewer 0/N은 service·lease·renderer·stream 시계를 먼저 분리한다
+
+- 화면은 움직이고 watcher만 0/N일 때 `lastProgressAt` 생성 코드만 보고 원인을 확정하지 않는다. 서버로
+  들어오는 Service heartbeat, Viewer lease heartbeat, renderer heartbeat, stream `updatedAt`, media
+  `lastProgressAt`의 age를 같은 순간 비교한다. 여러 하위 시계가 동시에 멎고 Service heartbeat만
+  신선하면 renderer event 하나가 아니라 Viewer→Service 관리 채널 장애다.
+- 5초 heartbeat와 15초 lease가 있어도 request deadline이 없고 오류를 삼키며 lease를 재획득하지 않으면
+  half-open 또는 한 번의 lease 만료 뒤 영구 blind spot이 된다. socket close 재연결만으로 control
+  self-healing을 구현했다고 간주하지 않는다.
+- cached `running/ready` enum은 freshness 없이 health 증거가 아니다. watcher와 API의 `healthy`는
+  Viewer/renderer heartbeat age를 포함해야 하며, frame callback과 background throttling 수정은 media
+  계측·trigger 완화일 뿐 management channel 복구를 대신하지 않는다.
+
+## 2026-08-25 — Viewer 복구 전에 실제 화면과 progress 계약을 따로 증명한다
+
+- 서버의 `Viewer online/healthy`나 watcher `receiving 0/N`만 보고 Viewer를 재시작하지 않는다. 공식
+  exact-window와 전체 desktop capture를 시간 간격을 두고 비교해 실제 타일·카메라 시각·장면 진행을
+  먼저 확인한다. 영상이 살아 있으면 복구 동작보다 telemetry 경계를 조사한다.
+- 운영 로그 경로, API bind, 도구 설치 여부를 문서 기본값으로 추측하지 않는다. 실제 systemd unit과
+  root-only environment, 설치 script hash에서 안전하게 파생하되 URL·credential·전체 argument는
+  출력하지 않는다. 잘못된 기본값 조회를 반복하지 말고 즉시 증거 기반 경로로 전환한다.
+- 항상 켜진 Chromium 영상의 진행률을 `timeupdate/currentTime` 하나에 의존하지 않는다. 실제 화면에
+  표시된 프레임은 `requestVideoFrameCallback`으로 관찰하고 낮은 빈도로 상태를 갱신하며, API가 없는
+  환경에만 기존 event를 fallback으로 둔다. Electron monitoring window는 백그라운드 throttling 계약도
+  회귀시험으로 고정한다.
+
+## 2026-08-24 — 안정화 브리핑은 축별 로그가 아니라 인과 사건과 오늘의 변화로 시작한다
+
+- camera, go2rtc, recorder, Viewer, watcher가 같은 장애를 각각 기록해도 보고서에서 여러 문제로
+  반복하지 않는다. 시간·대상·event 순서가 이어지면 한 인과 사건으로 병합하고 component별 record는
+  그 행의 근거로만 사용한다.
+- 프로그램 안정화 점검의 첫 화면은 오늘 신규·변형인 시스템 결함 후보 최대 3건이어야 한다. 수집량,
+  반복 품질 신호, 전체 정상 카메라 표가 핵심 결론보다 먼저 나오면 증거가 정확해도 브리핑은 실패다.
+- source/network trigger와 시스템 복구 결함을 분리한다. 외부 reset 자체를 프로그램 오류라 부르지
+  않지만, source 복귀 뒤 cooldown·supervisor·finalization이 영향을 연장하거나 손상을 만들면 시스템
+  부분을 독립 안정화 이슈로 올린다.
+- 조치는 이슈 번호에 연결된 계측·재현·회귀시험·합격 기준으로 제한한다. 계속 관찰, 서비스 재시작,
+  설정 검토 같은 일반론은 구체적인 재발 조건과 판정 수치가 없으면 브리핑에 넣지 않는다.
+
+## 2026-08-24 — 일일 감사는 단일 날짜 판정과 다일 변화 탐지를 함께 수행한다
+
+- 새벽 카메라 재시작 시각은 한 번의 Viewer cooldown이나 동일 문자열만으로 만들지 않는다. 같은 카메라의
+  호환되는 go2rtc/live-warm/recorder/Viewer event 연쇄가 서로 다른 날짜에 좁은 KST 시각 군집으로
+  반복될 때만 후보 범위를 제시하고, 장치 trigger/completion 로그가 없으면 `확정`이라 쓰지 않는다.
+- 반복 패턴이라고 현재 장애를 면제하지 않는다. 기준선과 일치해도 카메라별 300초 이상 미수신, 녹화
+  gap·손상, 현재 핵심 기반 장애는 기존 임계값대로 문제에 남긴다.
+- 일별 감사에서 다빈도 fingerprint만 순위화하면 낮은 횟수의 첫 발생이나 대상·시각·영향이 달라진 변형을
+  놓친다. 최근 성공 보고서의 bounded 기준선과 비교해 신규·변형 후보 슬롯을 먼저 확보하고, 실패한
+  audit 날짜와 비교 불가능한 지표는 정상으로 보간하지 않는다.
+- 같은 fingerprint라도 새 카메라·새 시간대·긴 지속·녹화 영향이 붙으면 변형이고, fingerprint가 달라도
+  component·정규화 오류·event 순서·영향이 같으면 같은 계열일 수 있다. exact fingerprint와 원인 판정을
+  동일시하지 않는다.
+
+## 2026-08-20 — 예정 재시작과 Viewer가 만든 장애 시간을 분리한다
+
+- 운영자가 확인한 02:00~05:00 KST 카메라 재시작 schedule은 짧은 source reset의 정상 원인이다.
+  같은 신호를 카메라 결함으로 다시 조사하거나 설정 변경 대상으로 만들지 않는다.
+- 정상 trigger가 끝난 뒤 source media가 복귀했는데도 Viewer가 고정 cooldown 때문에 수신하지 않으면
+  장애 원인은 Viewer 복구 정책이다. 현재 8/8이라는 사실로 닫지 말고 실제 cooldown과 복구 시각을
+  대조해 사용자 영향 시간을 만든 정책을 수정한다.
+- 재연결 폭주 방지와 빠른 복구는 양자택일이 아니다. 첫 소진에만 짧은 추가 episode를 허용하고
+  재실패 시 기존 저빈도 cadence로 복귀하며, 충분한 연속 media progress 뒤에만 빠른 예산을 reset한다.
+
 ## 2026-08-17 — timeout 수정은 오류 시각이 아니라 연결 generation과 같은 session으로 검증한다
 
 - graceful reload 뒤 기록된 `socket` 오류를 모두 새 설정의 재발로 세지 않는다. 각 `sessionId`의 최초
@@ -1239,3 +1316,13 @@
   catch만 남기지 말고 `service_stop`, `viewer_close`, `msiexec`, `restore` 단계와 실제 exit code를 분리한다.
 
 ---
+
+## 2026-08-22 — 백업이 꺼져 있으면 미백업 보호도 유효하지 않아야 한다
+
+- `maxStorageGB>0`, `backup.enabled=false`, `protectUnbacked=true`를 동시에 허용하면 모든 ready 녹화가
+  영구히 삭제 후보에서 빠져 자동 정리가 성공/삭제 0건만 반복한다. 이 상태를 정상적인 용량 제한으로
+  표시하지 않는다.
+- 미백업 보호의 유효 조건은 `backup.enabled && protectUnbacked`로 단일화한다. 백업 비활성 설정은 저장·
+  공개 시 보호를 false로 정규화하고, cleanup도 모순된 기존 DB 값에 대비해 같은 조건을 직접 적용한다.
+- 운영 반영 전에는 초과 용량, 실제 삭제 후보와 예상 삭제 범위를 읽기 전용으로 산출한다. 반영 후에는
+  용량 수렴뿐 아니라 오래된 ready row만 deleted 처리됐고 active 녹화와 8개 recorder가 유지되는지 확인한다.

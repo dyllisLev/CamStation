@@ -71,7 +71,14 @@ Focused tiles reverse the first two choices. This preserves the focus output as 
 
 The hook remains compatible with single-stream callers such as dashboard previews; they retry the same stream after the full-cycle delay.
 
-Once a fallback produces media, it is only a temporary visible route. The tile keeps that working connection untouched while a hidden bounded probe checks the preferred output once per minute, and switches back only after the primary video clock genuinely advances. If no candidate is playing, every five-minute cooldown expiry starts a fresh bounded recovery episode that revisits both primary transports, the fallback, and isolated resubscription.
+Once a fallback produces media, it is only a temporary visible route. The tile keeps that working connection untouched while a hidden bounded probe checks the preferred output once per minute, and switches back only after the primary video clock genuinely advances. If no candidate is playing, the first exhausted recovery episode gets one 15-second fast cooldown and then revisits both primary transports, the fallback, and isolated resubscription. If that fresh episode also fails, later wake-ups use the five-minute low-frequency cooldown. Five minutes of continuous media progress or a verified primary promotion rearms the one fast cooldown; brief progress does not.
+
+For an actively rendered video element, progress is driven by Chromium's
+`requestVideoFrameCallback` and rate-limited to one state update per second.
+`timeupdate/currentTime` remains a compatibility fallback, but it is not the
+sole liveness source because a monitoring window can keep presenting frames
+while that event becomes intermittent. An observer is cancelled when its tile
+unmounts and cannot report progress while no playback connection is active.
 
 ## Tile Feedback
 

@@ -125,8 +125,8 @@ class WatchTests(unittest.TestCase):
                     "status": "online",
                     "agent": {"state": "online"},
                     "control": {"state": "online"},
-                    "viewer": {"state": "running"},
-                    "renderer": {"state": "ready"},
+                    "viewer": {"state": "running", "lastHeartbeatAt": progress},
+                    "renderer": {"state": "ready", "lastHeartbeatAt": progress},
                     "streams": streams,
                 }
             ],
@@ -216,6 +216,36 @@ class WatchTests(unittest.TestCase):
             encoded = watch.encode_record(record).decode("utf-8")
             self.assertNotIn("rtsp://", encoded)
             self.assertNotIn("/private/path", encoded)
+
+    def test_stale_viewer_and_renderer_heartbeats_cannot_count_as_healthy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(Path(directory))
+            payloads = self.healthy_payloads()
+            # Exactly at the configured 30-second boundary is stale, not fresh.
+            payloads["/api/viewers"][0]["viewer"]["lastHeartbeatAt"] = "2026-08-13T07:59:30Z"
+            payloads["/api/viewers"][0]["renderer"]["lastHeartbeatAt"] = "2026-08-13T07:59:30Z"
+
+            def fetcher(_base: str, endpoint: str, _timeout: int) -> object:
+                return payloads[endpoint]
+
+            def runner(args: list[str], _timeout: int) -> str:
+                if "inspect" in args:
+                    return '{"running":true,"status":"running","health":"healthy","restartCount":0,"image":"camstation:test"}'
+                return ""
+
+            record = watch.collect_snapshot(
+                config,
+                now=NOW,
+                fetcher=fetcher,
+                runner=runner,
+                disk_probe=lambda _path: {"usedPercent": 25.0, "freeBytes": 100 * 1024**3},
+            )
+            self.assertEqual(record["viewers"]["online"], 1)
+            self.assertEqual(record["viewers"]["healthy"], 0)
+            self.assertEqual(record["viewers"]["receivingCameras"], 8)
+            self.assertIn("viewer_heartbeat_stale", record["alerts"])
+            self.assertIn("viewer_renderer_stale", record["alerts"])
+            self.assertIn("viewer_health_degraded", record["alerts"])
 
     def test_rotating_append_keeps_exact_file_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

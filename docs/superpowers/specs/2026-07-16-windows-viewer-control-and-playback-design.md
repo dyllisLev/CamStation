@@ -303,6 +303,14 @@ Agent heartbeat with an unhealthy command channel makes it
 shows the last Agent heartbeat, last command-channel success, and last video
 progress as different timestamps.
 
+Per-stream video progress comes from actual frames presented by Chromium via
+`requestVideoFrameCallback`, rate-limited to one state update per second.
+`timeupdate/currentTime` remains a compatibility fallback, not the sole
+liveness source. The always-on Electron monitoring window disables background
+throttling. A renderer heartbeat without a recently presented frame never
+advances stream progress, and cooldown or disconnected streams cannot emit
+synthetic progress.
+
 ## Server-Directed Automatic Update
 
 Publishing a release creates immutable metadata with version, filename,
@@ -408,10 +416,14 @@ Each WebRTC or MSE connection attempt has a five-second setup/progress deadline.
 The complete active recovery episode, including transport changes and the one
 isolated resubscribe, is capped at 30 seconds from stall detection. When that
 deadline expires, the stream reports a terminal episode result and enters its
-cooldown. It does not continuously cycle candidates in the background. Every
-five minutes it starts one fresh, 30-second per-stream recovery episode that
-revisits the primary transports, the approved fallback, and the isolated
-resubscribe step until media progress returns or the tile is unmounted.
+cooldown. It does not continuously cycle candidates in the background. The
+first exhausted episode in a stability epoch receives one 15-second fast
+cooldown, then starts one fresh 30-second per-stream episode that revisits the
+primary transports, the approved fallback, and the isolated resubscribe step.
+If that episode also fails, later wake-ups use the five-minute low-frequency
+cooldown until media progress returns or the tile is unmounted. Only five
+minutes of continuous media progress or a verified primary promotion rearms
+the one fast cooldown.
 
 An approved fallback output is temporary, not a terminal healthy route. While
 the fallback has genuine media progress, the visible fallback connection stays
@@ -437,20 +449,23 @@ Recovery counters and cooldowns persist across process restarts so restarting
 cannot reset a loop budget.
 
 Control reconnect within one recovery episode uses 1, 2, 5, 10, and 30 second
-delays with jitter. After the bounded sequence, the Agent moves to a five-minute
-low-frequency probe. A server or network outage does not repeatedly restart the
-Viewer.
+delays with jitter. After the first bounded sequence, the Viewer permits one
+15-second fast cooldown and one fresh bounded episode. A second exhaustion
+moves to the five-minute low-frequency probe. A server or network outage does
+not repeatedly restart the Viewer.
 
 Escalation rules:
 
 - stale stream: attempt the initial WebRTC connection and one WebRTC reconnect,
   then try MSE primary and one approved MSE fallback candidate once each;
-- exhausted stream attempts: perform one isolated resubscribe, then enter a
-  five-minute per-stream cooldown; each cooldown expiry starts one fresh bounded
+- exhausted stream attempts: perform one isolated resubscribe, then use one
+  15-second per-stream fast cooldown; its expiry starts one fresh bounded
   recovery episode across the primary transports, approved fallback, and
-  isolated resubscribe, and another failure schedules the next cooldown instead
-  of stopping;
-- stable playback for five minutes resets that stream recovery episode;
+  isolated resubscribe. Another failure schedules five-minute cooldowns instead
+  of cycling quickly or stopping;
+- stable playback for five minutes or a verified primary promotion resets that
+  stream recovery episode and rearms its one fast cooldown; brief progress does
+  neither;
 - fallback playback: keep the fallback visible while probing the primary once
   per minute; promote only after real video-clock progress and repeat after a
   failed WebRTC/MSE probe sequence;
@@ -544,6 +559,9 @@ Playback:
 - forced WebRTC failure switches that stream to MSE;
 - a stall is detected within ten seconds and isolated recovery completes within
   30 seconds when the server stream is healthy;
+- while all eight visible tiles advance, three consecutive one-minute watcher
+  samples report eight recently progressing streams; freezing one tile stops
+  only that stream's progress and starts its bounded stall recovery;
 - renderer crash, hang, GPU failure, and process termination recover within the
   15-second IPC-stale, five-second shutdown, ten-second bootstrap, 20-second
   renderer-ready, and 45-second end-to-end deadlines;

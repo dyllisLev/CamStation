@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	DefaultControlReadDeadline      = 25 * time.Second
-	DefaultHeartbeatRequestDeadline = 10 * time.Second
-	ControlTransportSSE             = "sse"
-	ControlTransportLongPoll        = "long_poll"
-	controlTransportHeartbeat       = "heartbeat"
-	maxControlMessageBytes          = 64 * 1024
+	DefaultControlReadDeadline       = 25 * time.Second
+	DefaultHeartbeatRequestDeadline  = 10 * time.Second
+	ViewerRuntimeHeartbeatStaleAfter = 15 * time.Second
+	ControlTransportSSE              = "sse"
+	ControlTransportLongPoll         = "long_poll"
+	controlTransportHeartbeat        = "heartbeat"
+	maxControlMessageBytes           = 64 * 1024
 )
 
 var (
@@ -699,6 +700,11 @@ func (loop HTTPControlLoop) Run(ctx context.Context, config MachineConfig, sourc
 
 func (loop HTTPControlLoop) sendHeartbeat(ctx context.Context, config MachineConfig, source StatusSource, sink CommandSink) {
 	status := readStatus(ctx, source)
+	now := time.Now().UTC()
+	if loop.Now != nil {
+		now = loop.Now().UTC()
+	}
+	status = withViewerFreshness(status, now, ViewerRuntimeHeartbeatStaleAfter)
 	installed := strings.TrimSpace(loop.InstalledVersion)
 	if installed == "" {
 		installed = "unknown"
@@ -753,6 +759,22 @@ func (loop HTTPControlLoop) sendHeartbeat(ctx context.Context, config MachineCon
 			SizeBytes: desired.SizeBytes, CommandID: desired.CommandID, Generation: desired.Generation,
 		})
 	}
+}
+
+func withViewerFreshness(status StatusSnapshot, now time.Time, staleAfter time.Duration) StatusSnapshot {
+	if staleAfter <= 0 {
+		return status
+	}
+	stale := func(value *time.Time) bool {
+		return value == nil || !now.Before(value.Add(staleAfter))
+	}
+	if status.Viewer == "running" && stale(status.ViewerLastHeartbeatAt) {
+		status.Viewer = "unresponsive"
+	}
+	if status.Renderer == "ready" && stale(status.RendererLastHeartbeatAt) {
+		status.Renderer = "unresponsive"
+	}
+	return status
 }
 
 func clientFor(loop HTTPControlLoop, config MachineConfig) ControlClient {

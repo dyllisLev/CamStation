@@ -113,6 +113,35 @@ func TestHeartbeatUsesLeaseTelemetryFromServer(t *testing.T) {
 	}
 }
 
+func TestViewerFreshnessDowngradesCachedRuntimeWithoutErasingEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-16 * time.Second)
+	progress := now.Add(-20 * time.Second)
+	snapshot := StatusSnapshot{
+		Viewer: "running", ViewerLastHeartbeatAt: &old,
+		Renderer: "ready", RendererLastHeartbeatAt: &old, RendererLastProgressAt: &progress,
+		Streams: []ViewerStreamState{{StreamName: "yard-live", State: "playing", LastProgressAt: &progress}},
+	}
+
+	got := withViewerFreshness(snapshot, now, 15*time.Second)
+	if got.Viewer != "unresponsive" || got.Renderer != "unresponsive" {
+		t.Fatalf("freshness state=%+v", got)
+	}
+	if got.ViewerLastHeartbeatAt != snapshot.ViewerLastHeartbeatAt ||
+		got.RendererLastHeartbeatAt != snapshot.RendererLastHeartbeatAt ||
+		got.RendererLastProgressAt != snapshot.RendererLastProgressAt || len(got.Streams) != 1 {
+		t.Fatalf("freshness erased evidence: %+v", got)
+	}
+
+	fresh := now.Add(-5 * time.Second)
+	snapshot.ViewerLastHeartbeatAt = &fresh
+	snapshot.RendererLastHeartbeatAt = &fresh
+	got = withViewerFreshness(snapshot, now, 15*time.Second)
+	if got.Viewer != "running" || got.Renderer != "ready" {
+		t.Fatalf("fresh runtime downgraded: %+v", got)
+	}
+}
+
 func TestHeartbeatMarksStatusStorageFailureDegraded(t *testing.T) {
 	var payload HeartbeatPayload
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -86,6 +86,7 @@ type Server struct {
 	commandResult    func(LocalCommandResult) error
 
 	mu                      sync.Mutex
+	leaseConnectionID       string
 	connection              string
 	controlLastSuccessAt    *time.Time
 	viewer                  string
@@ -204,6 +205,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 				return server.errorResponse(ctx, request, fmt.Errorf("%w: %v", ErrLoggingUnavailable, err)), nil
 			}
 		}
+		server.activateLease(connectionID)
 		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_acquired", State: "active"})
 		return successResponse(request, LeaseGrant{LeaseID: lease.ID, HeartbeatSeconds: LeaseHeartbeatSeconds, LogPath: logPath}), nil
 	case "lease_heartbeat":
@@ -225,7 +227,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 			return Response{}, fmt.Errorf("%w: %v", ErrPeerIdentity, err)
 		}
 		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_released", State: "released"})
-		server.setViewerState("closed", "not_ready")
+		server.setViewerStateForLease(connectionID, "closed", "not_ready", true)
 		return successResponse(request, nil), nil
 	case "viewer_status", "renderer_status", "stream_telemetry", "diagnostic_event":
 		leaseID, payload, err := decodeLeasePayload(request.Payload)
@@ -307,9 +309,18 @@ func validLocalCommandResult(result LocalCommandResult) bool {
 
 func (server *Server) HandleDisconnect(connectionID string) {
 	if server.leases != nil && server.leases.ReleaseConnection(connectionID) {
-		server.writeServiceRecord(LogRecord{Component: "viewer.control", Event: "lease_disconnected", State: "released"})
-		server.setViewerState("closed", "not_ready")
+		server.writeServiceRecord(LogRecord{
+			Level: opslog.Warn, Component: "viewer.control", Event: "lease_disconnected", State: "released",
+		})
+		server.setViewerStateForLease(connectionID, "closed", "not_ready", true)
 	}
+}
+
+func (server *Server) HandleLeaseExpired(connectionID string) {
+	server.writeServiceRecord(LogRecord{
+		Level: opslog.Warn, Component: "viewer.control", Event: "lease_expired", State: "expired",
+	})
+	server.setViewerStateForLease(connectionID, "unresponsive", "unresponsive", false)
 }
 
 func (server *Server) statusResponse(ctx context.Context, request Request) (Response, error) {
@@ -518,6 +529,43 @@ func (server *Server) setViewerState(viewer, renderer string) {
 	server.renderer = renderer
 	server.streams = nil
 	server.streamProgressLoggedAt = make(map[string]time.Time)
+	writer := server.serviceLogWriter
+	server.mu.Unlock()
+	if previousViewer != viewer {
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(viewer), Component: "viewer.main", Event: "state_changed", State: viewer,
+		})
+	}
+	if previousRenderer != renderer {
+		writeServiceRecord(writer, LogRecord{
+			Level: viewerStateLevel(renderer), Component: "viewer.renderer", Event: "state_changed", State: renderer,
+		})
+	}
+}
+
+func (server *Server) activateLease(connectionID string) {
+	server.mu.Lock()
+	server.leaseConnectionID = connectionID
+	server.mu.Unlock()
+}
+
+// setViewerStateForLease prevents a delayed disconnect or expiration from an
+// older pipe generation from overwriting a replacement Viewer's state.
+func (server *Server) setViewerStateForLease(connectionID, viewer, renderer string, clearStreams bool) {
+	server.mu.Lock()
+	if connectionID == "" || server.leaseConnectionID != connectionID {
+		server.mu.Unlock()
+		return
+	}
+	server.leaseConnectionID = ""
+	previousViewer := server.viewer
+	previousRenderer := server.renderer
+	server.viewer = viewer
+	server.renderer = renderer
+	if clearStreams {
+		server.streams = nil
+		server.streamProgressLoggedAt = make(map[string]time.Time)
+	}
 	writer := server.serviceLogWriter
 	server.mu.Unlock()
 	if previousViewer != viewer {

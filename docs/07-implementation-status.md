@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-08-17
+Last updated: 2026-08-25
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -24,6 +24,64 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-25 Viewer management self-healing and presented-frame hardening (source complete; rollout pending)
+
+- Official Viewer-window and full-desktop captures showed all eight enabled camera tiles visibly advancing
+  while the server watcher repeatedly reported `viewer_media_missing` and receiving 0/8. Viewer Service,
+  control and renderer state remained healthy, so restarting the already-working Viewer was unnecessary.
+- Server API and read-only DB evidence showed brief fleet-wide progress bursts followed by all eight rows
+  becoming stale after roughly 90 seconds. A later same-instant comparison found the Service-to-server
+  heartbeat fresh while Viewer lease heartbeat, renderer heartbeat, stream update and media progress ages
+  were all stale by the same amount. The installed watcher matches the repository hash and aggregation logic.
+  This isolates the direct failure to the Viewer-to-Service management path, not merely `timeupdate`.
+- The live playback hook now observes `requestVideoFrameCallback`, records actual presented frames at most
+  once per second, retains `timeupdate` as a compatibility fallback, and cancels the observer on cleanup.
+  It cannot report progress without an active connection or during cooldown. The Electron monitoring window
+  disables background throttling so its always-on playback and telemetry are not deprioritized. These changes
+  improve frame truth and reduce one scheduling trigger, but do not repair an expired or half-open management
+  lease by themselves.
+- Management connect and every request now have a five-second deadline. Timeout, pipe error/close and heartbeat
+  rejection terminate one connection generation, clear every pending timer and enter the existing bounded
+  1/2/5/10/30-second reconnect path. If the exact same live document is still visible, reconnect acquires a new
+  lease without navigating or resetting playback recovery. Initial setup and explicit shutdown remain separate.
+- Lease expiry notifies only the exact owner after releasing the LeaseManager mutex. The Server tracks the active
+  connection generation so delayed expiry/disconnect callbacks cannot overwrite a replacement Viewer. Expiry
+  retains bounded timestamps and stream evidence while reporting Viewer/renderer `unresponsive`; an unexpected
+  disconnect and expiry are warn-level Service evidence. A surviving Viewer records a bounded
+  `management_recovered` event after its next successful lease without retaining raw OS error text.
+- Service heartbeats derive stale cached `running/ready` states as `unresponsive` after 15 seconds. The production
+  watcher independently requires Viewer and renderer heartbeat freshness within 30 seconds for `healthy`, emits
+  separate stale alert codes and retains only aggregate ages/counts. Media reception keeps its independent
+  90-second threshold.
+- The failure tests were confirmed RED before implementation. All 87 Web tests, all 54 Viewer tests, all 6 watcher
+  tests, full `go test ./...`, the ViewerService race suite, Web lint, Web and Viewer production builds, Linux
+  daemon build, Windows ViewerService cross-compile/build, `gofmt -d`, and `git diff --check` pass. Go validation
+  used the repository-pinned Go 1.25.12 image digest with a read-only source mount.
+- The rebuilt Web asset and Viewer source have not been deployed to the production container or monitoring
+  PC. Post-rollout acceptance requires three consecutive one-minute watcher samples at receiving 8/8 while
+  independent captures continue to show all eight streams advancing, plus a fresh replacement lease and zero
+  Windows control/setup/capture/config task, listener or firewall residue. The first trigger—renderer scheduling
+  pause versus named-pipe half-open—remains unconfirmed until a controlled Windows fault test.
+
+### 2026-08-20 scheduled-camera-restart Viewer fast recovery (source only; rollout pending)
+
+- Production evidence showed that a normal scheduled camera restart could finish just after the first
+  bounded playback episode, while the Viewer waited the entire fixed five-minute cooldown before trying
+  again. The camera restart remains a normal input event; the excessive Viewer blackout is the defect.
+- `PlaybackRecovery` now grants one 15-second fast cooldown after the first exhausted episode and then
+  reruns the complete primary WebRTC, primary MSE, fallback MSE and isolated resubscribe sequence. A second
+  exhaustion returns to the existing five-minute low-frequency cadence, so a long server/network outage
+  cannot create an unbounded reconnect loop.
+- Five minutes of continuous media progress or a verified primary promotion rearms the fast cooldown.
+  Brief binary/progress recovery does not, and the change remains isolated to the affected tile.
+- The regression was confirmed RED against the previous 300-second first cooldown, then all 85 Web tests,
+  lint, and the production Web build passed. The embedded hashed asset was rebuilt. Full Go test/build was
+  attempted with the repository's pinned Go 1.25.12 image, but packages requiring uncached SQLite/YAML
+  modules could not reach `proxy.golang.org` before the TLS handshake timeout; this is an environment
+  verification limit, not a passing Go result.
+- This repository change has not been deployed to the production container or monitoring PC. Production
+  revision and image identifiers above remain the active baseline until a separately approved rollout.
 
 ### 2026-08-17 Viewer WebSocket idle-timeout correction
 

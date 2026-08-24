@@ -39,6 +39,16 @@ type LeaseManager struct {
 	ttl          time.Duration
 	lease        *Lease
 	connectionID string
+	onExpired    func(string)
+}
+
+// SetExpirationHandler installs an exact-owner callback. Expiration state is
+// committed under the manager lock, but the callback always runs after that
+// lock is released so it may safely inspect the manager or close the owner.
+func (manager *LeaseManager) SetExpirationHandler(handler func(string)) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.onExpired = handler
 }
 
 func NewLeaseManager(now func() time.Time, ttl time.Duration) *LeaseManager {
@@ -53,48 +63,65 @@ func (manager *LeaseManager) Acquire(connectionID string, peer Peer) (Lease, err
 		return Lease{}, ErrPeerIdentity
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
+	expiredConnectionID, handler := manager.expireLocked()
 	if manager.lease != nil {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return Lease{}, ErrLeaseBusy
 	}
 	id, err := newLeaseID()
 	if err != nil {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return Lease{}, err
 	}
 	lease := Lease{ID: id, PID: peer.PID, SessionID: peer.SessionID, ExpiresAt: manager.now().Add(manager.ttl)}
 	manager.lease = &lease
 	manager.connectionID = connectionID
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
 	return lease, nil
 }
 
 func (manager *LeaseManager) Refresh(connectionID, leaseID string, peer Peer) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	expiredConnectionID, handler := manager.expireLocked()
 	if !manager.ownsLocked(connectionID, leaseID, peer) {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return ErrLeaseOwner
 	}
 	manager.lease.ExpiresAt = manager.now().Add(manager.ttl)
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
 	return nil
 }
 
 func (manager *LeaseManager) Authorize(connectionID, leaseID string, peer Peer) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	expiredConnectionID, handler := manager.expireLocked()
 	if !manager.ownsLocked(connectionID, leaseID, peer) {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return ErrLeaseOwner
 	}
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
 	return nil
 }
 
 func (manager *LeaseManager) Release(connectionID, leaseID string, peer Peer) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	expiredConnectionID, handler := manager.expireLocked()
 	if !manager.ownsLocked(connectionID, leaseID, peer) {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return ErrLeaseOwner
 	}
 	manager.lease = nil
 	manager.connectionID = ""
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
 	return nil
 }
 
@@ -111,33 +138,43 @@ func (manager *LeaseManager) ReleaseConnection(connectionID string) bool {
 
 func (manager *LeaseManager) Available() bool {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
-	return manager.lease == nil
+	expiredConnectionID, handler := manager.expireLocked()
+	available := manager.lease == nil
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
+	return available
 }
 
 func (manager *LeaseManager) Owner() string {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
-	return manager.connectionID
+	expiredConnectionID, handler := manager.expireLocked()
+	owner := manager.connectionID
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
+	return owner
 }
 
 func (manager *LeaseManager) Token() (LeaseToken, bool) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
+	expiredConnectionID, handler := manager.expireLocked()
 	if manager.lease == nil || manager.connectionID == "" {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return LeaseToken{}, false
 	}
-	return LeaseToken{ConnectionID: manager.connectionID, LeaseID: manager.lease.ID}, true
+	token := LeaseToken{ConnectionID: manager.connectionID, LeaseID: manager.lease.ID}
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
+	return token, true
 }
 
 func (manager *LeaseManager) ValidateToken(token LeaseToken) bool {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
-	return manager.ownsTokenLocked(token)
+	expiredConnectionID, handler := manager.expireLocked()
+	valid := manager.ownsTokenLocked(token)
+	manager.mu.Unlock()
+	notifyExpiration(handler, expiredConnectionID)
+	return valid
 }
 
 func (manager *LeaseManager) WithToken(token LeaseToken, callback func() error) error {
@@ -145,11 +182,13 @@ func (manager *LeaseManager) WithToken(token LeaseToken, callback func() error) 
 		return ErrLeaseOwner
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
+	expiredConnectionID, handler := manager.expireLocked()
 	if !manager.ownsTokenLocked(token) {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return ErrLeaseOwner
 	}
+	defer manager.mu.Unlock()
 	return callback()
 }
 
@@ -160,16 +199,17 @@ func (manager *LeaseManager) WithOwner(connectionID string, callback func() erro
 		return ErrLeaseOwner
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked()
+	expiredConnectionID, handler := manager.expireLocked()
 	if manager.lease == nil || connectionID == "" || manager.connectionID != connectionID {
+		manager.mu.Unlock()
+		notifyExpiration(handler, expiredConnectionID)
 		return ErrLeaseOwner
 	}
+	defer manager.mu.Unlock()
 	return callback()
 }
 
 func (manager *LeaseManager) ownsLocked(connectionID, leaseID string, peer Peer) bool {
-	manager.expireLocked()
 	return manager.lease != nil && validLeasePeer(connectionID, peer) && manager.connectionID == connectionID &&
 		manager.lease.ID == leaseID && manager.lease.PID == peer.PID && manager.lease.SessionID == peer.SessionID
 }
@@ -179,10 +219,19 @@ func (manager *LeaseManager) ownsTokenLocked(token LeaseToken) bool {
 		manager.connectionID == token.ConnectionID && manager.lease.ID == token.LeaseID
 }
 
-func (manager *LeaseManager) expireLocked() {
+func (manager *LeaseManager) expireLocked() (string, func(string)) {
 	if manager.lease != nil && !manager.now().Before(manager.lease.ExpiresAt) {
+		expiredConnectionID := manager.connectionID
 		manager.lease = nil
 		manager.connectionID = ""
+		return expiredConnectionID, manager.onExpired
+	}
+	return "", nil
+}
+
+func notifyExpiration(handler func(string), connectionID string) {
+	if handler != nil && connectionID != "" {
+		handler(connectionID)
 	}
 }
 

@@ -241,7 +241,13 @@ func (service *Service) server() *Server {
 	if service.Logs != nil {
 		logError = service.Logs.ErrorLogger
 	}
-	service.Server = NewServer(manager, NewLeaseManager(time.Now, 15*time.Second), "", logError)
+	leases := NewLeaseManager(time.Now, 15*time.Second)
+	server := NewServer(manager, leases, "", logError)
+	leases.SetExpirationHandler(func(connectionID string) {
+		server.HandleLeaseExpired(connectionID)
+		service.closeConnectionByID(connectionID)
+	})
+	service.Server = server
 	service.Server.SetCommandResultHandler(service.acceptCommandResult)
 	if service.Logs != nil {
 		service.Server.SetLeaseLogAssigner(service.Logs.AssignViewerLog)
@@ -249,6 +255,15 @@ func (service *Service) server() *Server {
 		service.Server.SetServiceLogWriter(service.Logs.WriteService)
 	}
 	return service.Server
+}
+
+func (service *Service) closeConnectionByID(connectionID string) {
+	service.mu.Lock()
+	state := service.byID[connectionID]
+	service.mu.Unlock()
+	if state != nil {
+		_ = state.connection.Close()
+	}
 }
 
 func (service *Service) runControl(ctx context.Context, server *Server) {

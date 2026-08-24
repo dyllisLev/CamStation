@@ -551,11 +551,21 @@ func TestLeaseBusyResponseContainsNoSecretLeaseData(t *testing.T) {
 
 func TestDisconnectReleasesOwnedLeaseImmediately(t *testing.T) {
 	server := testServer(&memoryConfigStore{config: testMachineConfig()}, nil)
+	var disconnectRecord LogRecord
+	server.SetServiceLogWriter(func(record LogRecord) error {
+		if record.Event == "lease_disconnected" {
+			disconnectRecord = record
+		}
+		return nil
+	})
 	request := Request{Version: PipeProtocolVersion, RequestID: "lease", Type: "acquire_lease"}
 	if response, err := server.Handle(context.Background(), "connection-a", Peer{PID: 10, SessionID: 2, Interactive: true}, request); err != nil || !response.OK {
 		t.Fatalf("acquire response=%+v err=%v", response, err)
 	}
 	server.HandleDisconnect("connection-a")
+	if disconnectRecord.Level != opslog.Warn || disconnectRecord.Component != "viewer.control" {
+		t.Fatalf("unexpected disconnect record=%+v", disconnectRecord)
+	}
 	request.RequestID = "lease-2"
 	if response, err := server.Handle(context.Background(), "connection-b", Peer{PID: 11, SessionID: 3, Interactive: true}, request); err != nil || !response.OK {
 		t.Fatalf("acquire after disconnect response=%+v err=%v", response, err)
@@ -680,6 +690,108 @@ func TestRequestLeaseRefreshReportsAndReleaseRequireOwner(t *testing.T) {
 	}
 	if snapshot.Viewer != "closed" || snapshot.Renderer != "not_ready" || len(snapshot.Streams) != 0 {
 		t.Fatalf("released monitoring snapshot=%+v", snapshot)
+	}
+}
+
+func TestExpiredLeaseDowngradesRuntimeRetainsEvidenceAndRecovers(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	leases := NewLeaseManager(clock.Now, 15*time.Second)
+	server := NewServer(ConfigManager{Store: &memoryConfigStore{config: testMachineConfig()}}, leases, "2.0.0", nil)
+	records := make([]LogRecord, 0, 8)
+	server.SetServiceLogWriter(func(record LogRecord) error {
+		records = append(records, record)
+		return nil
+	})
+	expiredOwner := ""
+	leases.SetExpirationHandler(func(connectionID string) {
+		expiredOwner = connectionID
+		server.HandleLeaseExpired(connectionID)
+	})
+	peer := Peer{PID: 10, SessionID: 2, Interactive: true}
+	grantResponse, err := server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "acquire-a", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("grant=%+v err=%v", grantResponse, err)
+	}
+	var grant LeaseGrant
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []Request{
+		{Version: PipeProtocolVersion, RequestID: "viewer", Type: "viewer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "running"})},
+		{Version: PipeProtocolVersion, RequestID: "renderer", Type: "renderer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "ready"})},
+		{Version: PipeProtocolVersion, RequestID: "stream", Type: "stream_telemetry", Payload: leasePayload(t, grant.LeaseID, map[string]any{
+			"streamName": "yard-live", "transport": "webrtc", "phase": "playing", "lastProgressAt": clock.Now().UnixMilli(),
+		})},
+	} {
+		if response, handleErr := server.Handle(t.Context(), "connection-a", peer, request); handleErr != nil || !response.OK {
+			t.Fatalf("%s response=%+v err=%v", request.Type, response, handleErr)
+		}
+	}
+
+	clock.Advance(15 * time.Second)
+	if !leases.Available() || expiredOwner != "connection-a" {
+		t.Fatalf("available=%v expiredOwner=%q", leases.Available(), expiredOwner)
+	}
+	snapshot, err := server.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Viewer != "unresponsive" || snapshot.Renderer != "unresponsive" ||
+		snapshot.ViewerLastHeartbeatAt == nil || snapshot.RendererLastHeartbeatAt == nil ||
+		snapshot.RendererLastProgressAt == nil || len(snapshot.Streams) != 1 {
+		t.Fatalf("expired snapshot=%+v", snapshot)
+	}
+	leaseExpiredRecords := 0
+	for _, record := range records {
+		if record.Component == "viewer.control" && record.Event == "lease_expired" {
+			leaseExpiredRecords++
+		}
+	}
+	if leaseExpiredRecords != 1 {
+		t.Fatalf("lease expired records=%d records=%+v", leaseExpiredRecords, records)
+	}
+
+	peerB := Peer{PID: 11, SessionID: 3, Interactive: true}
+	grantResponse, err = server.Handle(t.Context(), "connection-b", peerB, Request{
+		Version: PipeProtocolVersion, RequestID: "acquire-b", Type: "acquire_lease",
+	})
+	if err != nil || !grantResponse.OK {
+		t.Fatalf("replacement grant=%+v err=%v", grantResponse, err)
+	}
+	if err := json.Unmarshal(grantResponse.Payload, &grant); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []Request{
+		{Version: PipeProtocolVersion, RequestID: "viewer-recovered", Type: "viewer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "running"})},
+		{Version: PipeProtocolVersion, RequestID: "renderer-recovered", Type: "renderer_status", Payload: leasePayload(t, grant.LeaseID, map[string]any{"state": "ready"})},
+	} {
+		if response, handleErr := server.Handle(t.Context(), "connection-b", peerB, request); handleErr != nil || !response.OK {
+			t.Fatalf("%s response=%+v err=%v", request.Type, response, handleErr)
+		}
+	}
+	snapshot, err = server.Snapshot(t.Context())
+	if err != nil || snapshot.Viewer != "running" || snapshot.Renderer != "ready" {
+		t.Fatalf("recovered snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestLateLeaseEndCannotDowngradeReplacementGeneration(t *testing.T) {
+	server := NewServer(ConfigManager{Store: &memoryConfigStore{config: testMachineConfig()}}, NewLeaseManager(time.Now, time.Minute), "2.0.0", nil)
+	server.activateLease("connection-a")
+	server.setViewerState("running", "ready")
+	server.activateLease("connection-b")
+
+	server.HandleLeaseExpired("connection-a")
+	server.setViewerStateForLease("connection-a", "closed", "not_ready", true)
+
+	snapshot, err := server.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Viewer != "running" || snapshot.Renderer != "ready" {
+		t.Fatalf("late generation overwrote replacement snapshot=%+v", snapshot)
 	}
 }
 

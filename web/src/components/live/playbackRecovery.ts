@@ -2,6 +2,7 @@ export const PLAYBACK_SETUP_MS = 5_000;
 export const PLAYBACK_STALL_MS = 10_000;
 export const PLAYBACK_EPISODE_MS = 30_000;
 export const PLAYBACK_STABLE_RESET_MS = 5 * 60_000;
+export const PLAYBACK_FAST_COOLDOWN_MS = 15_000;
 export const PLAYBACK_COOLDOWN_MS = 5 * 60_000;
 export const PLAYBACK_PRIMARY_PROBE_INTERVAL_MS = 60_000;
 
@@ -157,6 +158,7 @@ export class PlaybackRecovery {
   private stableSince: number | null = null;
   private lastProgressAt: number | null = null;
   private stallStartedAt: number | null = null;
+  private fastCooldownAvailable = true;
 
   constructor(streamNames: readonly string[]) {
     this.streamNames = streamNames.filter((name, index) => Boolean(name) && streamNames.indexOf(name) === index);
@@ -190,6 +192,7 @@ export class PlaybackRecovery {
     this.episodeStartedAt = null;
     this.step = 0;
     this.stableSince = now;
+    this.fastCooldownAvailable = true;
     return true;
   }
 
@@ -226,10 +229,13 @@ export class PlaybackRecovery {
     this.stableSince = null;
     this.lastProgressAt = null;
     this.stallStartedAt = null;
+    this.fastCooldownAvailable = true;
   }
 
   private cooldown(now: number): PlaybackRecoveryStep {
-    return { action: "cooldown", until: now + PLAYBACK_COOLDOWN_MS };
+    const delayMs = this.fastCooldownAvailable ? PLAYBACK_FAST_COOLDOWN_MS : PLAYBACK_COOLDOWN_MS;
+    this.fastCooldownAvailable = false;
+    return { action: "cooldown", until: now + delayMs };
   }
 }
 

@@ -94,6 +94,7 @@ class Config:
     request_timeout_seconds: int = 5
     log_window_seconds: int = 300
     logger_stale_seconds: int = 180
+    viewer_heartbeat_stale_seconds: int = 30
     viewer_progress_stale_seconds: int = 90
     recorder_segment_grace_seconds: int = 300
     warn_burst_threshold: int = 10
@@ -122,6 +123,9 @@ class Config:
             request_timeout_seconds=int_env(environ, "CAMSTATION_WATCH_TIMEOUT_SECONDS", 5, 1, 30),
             log_window_seconds=int_env(environ, "CAMSTATION_WATCH_LOG_WINDOW_SECONDS", 300, 60, 3600),
             logger_stale_seconds=int_env(environ, "CAMSTATION_WATCH_LOGGER_STALE_SECONDS", 180, 30, 3600),
+            viewer_heartbeat_stale_seconds=int_env(
+                environ, "CAMSTATION_WATCH_VIEWER_HEARTBEAT_STALE_SECONDS", 30, 15, 600
+            ),
             viewer_progress_stale_seconds=int_env(environ, "CAMSTATION_WATCH_VIEWER_PROGRESS_STALE_SECONDS", 90, 15, 600),
             recorder_segment_grace_seconds=int_env(environ, "CAMSTATION_WATCH_RECORDER_SEGMENT_GRACE_SECONDS", 300, 60, 3600),
             warn_burst_threshold=int_env(environ, "CAMSTATION_WATCH_WARN_BURST", 10, 1, 10000),
@@ -448,24 +452,54 @@ def recording_freshness(
     }
 
 
-def aggregate_viewers(value: Any, candidates: list[set[str]], now: dt.datetime, stale_seconds: int) -> dict[str, Any]:
+def aggregate_viewers(
+    value: Any,
+    candidates: list[set[str]],
+    now: dt.datetime,
+    progress_stale_seconds: int,
+    heartbeat_stale_seconds: int,
+) -> dict[str, Any]:
     if not isinstance(value, list):
         raise ProbeError("viewers_shape")
     viewers = [viewer for viewer in value if isinstance(viewer, dict)]
     online = [viewer for viewer in viewers if viewer.get("status") == "online"]
     healthy = 0
+    viewer_heartbeat_fresh = 0
+    renderer_heartbeat_fresh = 0
     recent_streams: set[str] = set()
     newest_progress: dt.datetime | None = None
+    newest_viewer_heartbeat: dt.datetime | None = None
+    newest_renderer_heartbeat: dt.datetime | None = None
     for viewer in online:
         agent = viewer.get("agent") if isinstance(viewer.get("agent"), dict) else {}
         control = viewer.get("control") if isinstance(viewer.get("control"), dict) else {}
         process = viewer.get("viewer") if isinstance(viewer.get("viewer"), dict) else {}
         renderer = viewer.get("renderer") if isinstance(viewer.get("renderer"), dict) else {}
+        viewer_heartbeat = parse_timestamp(process.get("lastHeartbeatAt"))
+        renderer_heartbeat = parse_timestamp(renderer.get("lastHeartbeatAt"))
+        viewer_is_fresh = (
+            viewer_heartbeat is not None
+            and age_seconds(now, viewer_heartbeat) < heartbeat_stale_seconds
+        )
+        renderer_is_fresh = (
+            renderer_heartbeat is not None
+            and age_seconds(now, renderer_heartbeat) < heartbeat_stale_seconds
+        )
+        if viewer_is_fresh:
+            viewer_heartbeat_fresh += 1
+            if newest_viewer_heartbeat is None or viewer_heartbeat > newest_viewer_heartbeat:
+                newest_viewer_heartbeat = viewer_heartbeat
+        if renderer_is_fresh:
+            renderer_heartbeat_fresh += 1
+            if newest_renderer_heartbeat is None or renderer_heartbeat > newest_renderer_heartbeat:
+                newest_renderer_heartbeat = renderer_heartbeat
         if (
             agent.get("state") == "online"
             and control.get("state") in {"online", "healthy"}
             and process.get("state") == "running"
             and renderer.get("state") == "ready"
+            and viewer_is_fresh
+            and renderer_is_fresh
         ):
             healthy += 1
         streams = viewer.get("streams") if isinstance(viewer.get("streams"), list) else []
@@ -473,7 +507,7 @@ def aggregate_viewers(value: Any, candidates: list[set[str]], now: dt.datetime, 
             if not isinstance(stream, dict) or stream.get("state") != "playing":
                 continue
             progress = parse_timestamp(stream.get("lastProgressAt"))
-            if progress is None or age_seconds(now, progress) > stale_seconds:
+            if progress is None or age_seconds(now, progress) > progress_stale_seconds:
                 continue
             name = stream.get("streamName")
             if isinstance(name, str) and name and len(name) <= 128:
@@ -485,6 +519,10 @@ def aggregate_viewers(value: Any, candidates: list[set[str]], now: dt.datetime, 
         "total": len(viewers),
         "online": len(online),
         "healthy": healthy,
+        "viewerHeartbeatFresh": viewer_heartbeat_fresh,
+        "rendererHeartbeatFresh": renderer_heartbeat_fresh,
+        "newestViewerHeartbeatAgeSeconds": age_seconds(now, newest_viewer_heartbeat),
+        "newestRendererHeartbeatAgeSeconds": age_seconds(now, newest_renderer_heartbeat),
         "expectedCameras": len(candidates),
         "receivingCameras": receiving,
         "newestProgressAgeSeconds": age_seconds(now, newest_progress),
@@ -614,13 +652,21 @@ def collect_snapshot(
     if payloads["viewers"] is not None:
         try:
             viewers = aggregate_viewers(
-                payloads["viewers"], camera_candidates, now, config.viewer_progress_stale_seconds
+                payloads["viewers"],
+                camera_candidates,
+                now,
+                config.viewer_progress_stale_seconds,
+                config.viewer_heartbeat_stale_seconds,
             )
             snapshot["viewers"] = viewers
             if viewers["online"] < 1:
                 add_alert(alerts, "viewer_offline", "error")
             elif viewers["healthy"] < viewers["online"]:
                 add_alert(alerts, "viewer_health_degraded", "degraded")
+            if viewers["online"] > 0 and viewers["viewerHeartbeatFresh"] < viewers["online"]:
+                add_alert(alerts, "viewer_heartbeat_stale", "error")
+            if viewers["online"] > 0 and viewers["rendererHeartbeatFresh"] < viewers["online"]:
+                add_alert(alerts, "viewer_renderer_stale", "error")
             if viewers["expectedCameras"] > 0 and viewers["receivingCameras"] < viewers["expectedCameras"]:
                 add_alert(
                     alerts,
