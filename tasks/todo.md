@@ -17,29 +17,43 @@
 
 ## 계획
 
-- [ ] 현재 Git diff가 이번 Viewer 복구·frame truth·fast cooldown·watcher freshness 범위인지 재검토하고
+- [x] 현재 Git diff가 이번 Viewer 복구·frame truth·fast cooldown·watcher freshness 범위인지 재검토하고
   전체 회귀시험을 clean commit에서 다시 통과시킨다.
-- [ ] 전용 Windows build host에서 Viewer 2.0.28 MSI를 clean exact commit으로 만들고 metadata, size,
+- [x] 전용 Windows build host에서 Viewer 2.0.28 MSI를 clean exact commit으로 만들고 metadata, size,
   SHA-256, ProductCode/UpgradeCode, sourceDirty=false를 검증한다.
-- [ ] 서버 이미지를 같은 commit으로 build/save/transfer/load하고 smoke test 후 기존 Compose와 image ID를
+- [x] 서버 이미지를 같은 commit으로 build/save/transfer/load하고 smoke test 후 기존 Compose와 image ID를
   보존한다.
-- [ ] 서버 image와 watcher를 전환하고 container healthy/restart 0, camera/stream/recorder 8/8, DB/file
+- [x] 서버 image와 watcher를 전환하고 container healthy/restart 0, camera/stream/recorder 8/8, DB/file
   녹화 연속성, watcher 실행 성공을 확인한다. 실패하면 Viewer를 건드리기 전에 서버만 원복한다.
-- [ ] monitoring-pc에 MSI를 공식 wrapper로 전달해 Service→Viewer 순으로 정확히 중지한 뒤 major upgrade,
+- [x] monitoring-pc에 MSI를 공식 wrapper로 전달해 Service→Viewer 순으로 정확히 중지한 뒤 major upgrade,
   Service/Viewer 복원, 설정/client identity 보존을 검증한다. 실패하면 정확한 2.0.27 MSI로 원복한다.
 - [ ] exact Viewer와 desktop capture에서 실제 8타일 진행을 확인하고 Viewer/renderer/stream heartbeat가
   새 시각으로 전진하며 watcher 3회 연속 receiving 8/8인지 검증한다.
 - [ ] control/setup/capture/config task, 원격 run, driver TCP listener/firewall 잔여 0과 배포 후 recorder
   segment rollover를 확인하고 Review·교훈·구현 상태를 갱신한다.
 
+### 배포 중 확인된 client clock skew 보정
+
+- [x] 실제 Viewer 8/8, 단일 Viewer/Service process group, lease-backed 로컬 진단과 서버 heartbeat를 대조해
+  관리 채널 단절이 아니라 monitoring PC UTC가 서버보다 약 102초 느린 현상임을 확정한다.
+- [x] watcher가 server receipt와 독립적인 control success 시각으로 보수적 clock correction을 계산하되
+  15초 안전 여유를 남겨 실제 30초 Viewer/renderer stale을 정상으로 숨기지 않게 한다.
+- [x] 정상·실제 stale·과도하거나 근거 없는 skew 회귀시험을 통과시키고 숫자만 남는
+  `viewer_clock_skew` 경보와 보정 계측을 검증한다.
+- [ ] server/container/Viewer를 재시작하지 않고 watcher exact file만 hash-checked 교체한 뒤 세 연속 표본에서
+  Viewer healthy 1/1·receiving 8/8이고 기존 stale/media 경보가 사라지는지 확인한다.
+- [x] Windows 시간 동기화 미정상은 외부 운영 조치로 분리하고, 승인 없이 OS 시간·서비스 설정은 변경하지 않는다.
+
 ## 합격/중단 기준
 
-- 서버 전환 후 90초 안에 container health, camera/stream/recorder 8/8이 아니거나 새 녹화 row/file이
-  전진하지 않으면 기존 image/Compose로 즉시 원복하고 Viewer 배포를 중단한다.
+- 서버 전환 후 container health는 90초 안에, camera/stream/recorder 8/8은 기존 운영에서 확인된
+  live-warm 재시도 최악값을 포함한 7분 안에 수렴해야 한다. 이 안에 새 녹화 row/file이 전진하지 않으면
+  기존 image/Compose로 즉시 원복하고 Viewer 배포를 중단한다.
 - Viewer 전환 후 90초 안에 실제 화면 8/8이 아니면 정확한 2.0.27 MSI로 원복한다. 화면이 살아도
   Viewer/renderer heartbeat 또는 8개 media progress가 30초 안에 전진하지 않으면 새 결함으로 보고
   원복한다.
-- 최종 합격은 watcher 1분 표본 3회 연속 alert 0·receiving 8/8, Service Running/Automatic,
+- 최종 Viewer 합격은 watcher 1분 표본 3회 연속 receiving 8/8·Viewer healthy 1/1이고 clock skew 외
+  Viewer stale/media alert 0, Service Running/Automatic,
   container healthy/restart 0, recorder 8/8과 새 segment 전진, Windows 잔여 작업/연결/방화벽 0이다.
 
 ## Review

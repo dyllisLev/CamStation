@@ -1326,3 +1326,25 @@
   공개 시 보호를 false로 정규화하고, cleanup도 모순된 기존 DB 값에 대비해 같은 조건을 직접 적용한다.
 - 운영 반영 전에는 초과 용량, 실제 삭제 후보와 예상 삭제 범위를 읽기 전용으로 산출한다. 반영 후에는
   용량 수렴뿐 아니라 오래된 ready row만 deleted 처리됐고 active 녹화와 8개 recorder가 유지되는지 확인한다.
+
+## 2026-08-25 — 교차 host freshness 실패 전에 시계 오프셋을 독립 측정한다
+
+- server receipt는 신선한데 client가 찍은 Viewer/renderer/progress 시각만 같은 크기로 오래돼 보이면 pipe
+  정지로 단정하지 않는다. 실제 화면, 단일 process/lease, disconnect/expire 로그와 함께 두 host UTC를
+  같은 HTTP 왕복에서 측정한다. freshness 집계의 `newest...AgeSeconds=null`은 원 timestamp 부재뿐 아니라
+  모든 표본이 threshold 밖인 경우에도 생길 수 있으므로 API 원시 시각을 별도로 확인한다.
+- 운영 watcher는 client 절대시각을 무조건 신뢰하거나 freshness 기준을 느슨하게 만들지 않는다. server가
+  찍은 heartbeat receipt와 관리 채널과 독립적인 control success 시각으로 bounded correction을 계산하고,
+  heartbeat 주기보다 큰 안전 여유를 빼 실제 30초 관리 정지가 계속 stale이 되게 한다. 보정 후 정상
+  수신과 OS clock skew 경보는 별도 축으로 보고한다.
+- 시간 동기화가 비정상이어도 승인 없이 Windows 시계나 W32Time 설정을 바꾸지 않는다. 프로그램의 오판은
+  무중단 watcher 변경으로 막고, OS 시간 원본 복구는 별도 운영 변경으로 남긴다.
+
+## 2026-08-25 — container stop budget은 recorder worker 종료 합보다 길어야 한다
+
+- recorder worker를 직렬로 종료하면서 각 worker에 10초를 허용하고 Docker stop timeout이 45초라면 8개
+  worker의 정상 종료 계약을 만족할 수 없다. 배포 전 `worker 수 × 최악 종료시간`과 container grace를
+  대조하고, 종료는 bounded parallel fan-out으로 만든 뒤 모든 결과를 모아야 한다.
+- 새 image의 시작 상태가 정상이어도 이전 container 종료 중 생성된 partial segment는 별도 손실이다.
+  DB status, 실제 파일, size 일치와 ffprobe를 배포 전후 구간에서 확인하고, 깨진 ready와 recovery failed를
+  새 image rollback으로 복구할 수 없으면 추가 재시작을 피한 채 결함으로 기록한다.

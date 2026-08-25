@@ -28,6 +28,8 @@ IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,191}$")
 ALERT_RANK = {"degraded": 1, "error": 2}
 MAX_HTTP_BYTES = 8 * 1024 * 1024
 MAX_RECORD_BYTES = 16 * 1024
+VIEWER_CLOCK_CORRECTION_GUARD_SECONDS = 15
+VIEWER_CLOCK_MAX_OFFSET_SECONDS = 12 * 60 * 60
 
 
 class WatchConfigError(ValueError):
@@ -167,6 +169,37 @@ def age_seconds(now: dt.datetime, value: dt.datetime | None) -> int | None:
     if value is None:
         return None
     return max(0, int((now - value).total_seconds()))
+
+
+def viewer_clock_correction(viewer: dict[str, Any]) -> tuple[dt.timedelta, int | None, bool]:
+    """Return a conservative client-clock correction anchored by server receipt.
+
+    The outer heartbeat time is stamped by the server while control.lastSuccessAt
+    is stamped independently by ViewerService.  Their difference includes at
+    most one heartbeat interval, so keep a fixed guard instead of applying the
+    entire observed offset.  This leaves a real 30-second management outage
+    stale even when the Windows clock itself is behind.
+    """
+    control = viewer.get("control") if isinstance(viewer.get("control"), dict) else {}
+    received_at = parse_timestamp(viewer.get("lastHeartbeatAt"))
+    control_at = parse_timestamp(control.get("lastSuccessAt"))
+    if received_at is None or control_at is None:
+        return dt.timedelta(), None, False
+    observed = int((received_at - control_at).total_seconds())
+    if abs(observed) > VIEWER_CLOCK_MAX_OFFSET_SECONDS:
+        return dt.timedelta(), observed, True
+    if -VIEWER_CLOCK_CORRECTION_GUARD_SECONDS < observed < VIEWER_CLOCK_CORRECTION_GUARD_SECONDS:
+        return dt.timedelta(), observed, False
+    # The server receipt necessarily follows the prior control success.  Always
+    # subtract the guard, including when the client clock is ahead, so the
+    # corrected client timestamp remains conservatively old rather than future.
+    applied = observed - VIEWER_CLOCK_CORRECTION_GUARD_SECONDS
+    return dt.timedelta(seconds=applied), observed, False
+
+
+def corrected_client_timestamp(value: Any, correction: dt.timedelta) -> dt.datetime | None:
+    parsed = parse_timestamp(value)
+    return parsed + correction if parsed is not None else None
 
 
 def http_get_json(base: str, endpoint: str, timeout: int) -> Any:
@@ -470,13 +503,25 @@ def aggregate_viewers(
     newest_progress: dt.datetime | None = None
     newest_viewer_heartbeat: dt.datetime | None = None
     newest_renderer_heartbeat: dt.datetime | None = None
+    observed_clock_offsets: list[int] = []
+    applied_clock_corrections: list[int] = []
+    clock_skewed = 0
+    clock_correction_rejected = 0
     for viewer in online:
         agent = viewer.get("agent") if isinstance(viewer.get("agent"), dict) else {}
         control = viewer.get("control") if isinstance(viewer.get("control"), dict) else {}
         process = viewer.get("viewer") if isinstance(viewer.get("viewer"), dict) else {}
         renderer = viewer.get("renderer") if isinstance(viewer.get("renderer"), dict) else {}
-        viewer_heartbeat = parse_timestamp(process.get("lastHeartbeatAt"))
-        renderer_heartbeat = parse_timestamp(renderer.get("lastHeartbeatAt"))
+        clock_correction, observed_clock_offset, rejected_clock_correction = viewer_clock_correction(viewer)
+        if observed_clock_offset is not None:
+            observed_clock_offsets.append(observed_clock_offset)
+            applied_clock_corrections.append(int(clock_correction.total_seconds()))
+            if abs(observed_clock_offset) >= heartbeat_stale_seconds:
+                clock_skewed += 1
+            if rejected_clock_correction:
+                clock_correction_rejected += 1
+        viewer_heartbeat = corrected_client_timestamp(process.get("lastHeartbeatAt"), clock_correction)
+        renderer_heartbeat = corrected_client_timestamp(renderer.get("lastHeartbeatAt"), clock_correction)
         viewer_is_fresh = (
             viewer_heartbeat is not None
             and age_seconds(now, viewer_heartbeat) < heartbeat_stale_seconds
@@ -506,7 +551,7 @@ def aggregate_viewers(
         for stream in streams:
             if not isinstance(stream, dict) or stream.get("state") != "playing":
                 continue
-            progress = parse_timestamp(stream.get("lastProgressAt"))
+            progress = corrected_client_timestamp(stream.get("lastProgressAt"), clock_correction)
             if progress is None or age_seconds(now, progress) > progress_stale_seconds:
                 continue
             name = stream.get("streamName")
@@ -526,6 +571,10 @@ def aggregate_viewers(
         "expectedCameras": len(candidates),
         "receivingCameras": receiving,
         "newestProgressAgeSeconds": age_seconds(now, newest_progress),
+        "clockSkewedViewers": clock_skewed,
+        "clockCorrectionRejectedViewers": clock_correction_rejected,
+        "maxObservedClockOffsetSeconds": max(observed_clock_offsets, key=abs, default=None),
+        "maxAppliedClockCorrectionSeconds": max(applied_clock_corrections, key=abs, default=None),
     }
 
 
@@ -667,6 +716,8 @@ def collect_snapshot(
                 add_alert(alerts, "viewer_heartbeat_stale", "error")
             if viewers["online"] > 0 and viewers["rendererHeartbeatFresh"] < viewers["online"]:
                 add_alert(alerts, "viewer_renderer_stale", "error")
+            if viewers["clockSkewedViewers"] > 0:
+                add_alert(alerts, "viewer_clock_skew", "degraded")
             if viewers["expectedCameras"] > 0 and viewers["receivingCameras"] < viewers["expectedCameras"]:
                 add_alert(
                     alerts,

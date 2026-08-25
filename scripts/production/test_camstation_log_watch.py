@@ -247,6 +247,93 @@ class WatchTests(unittest.TestCase):
             self.assertIn("viewer_renderer_stale", record["alerts"])
             self.assertIn("viewer_health_degraded", record["alerts"])
 
+    def test_client_clock_skew_is_corrected_but_remains_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(Path(directory))
+            payloads = self.healthy_payloads()
+            viewer = payloads["/api/viewers"][0]
+            viewer["lastHeartbeatAt"] = "2026-08-13T07:59:59Z"
+            viewer["control"]["lastSuccessAt"] = "2026-08-13T07:58:16Z"
+            viewer["viewer"]["lastHeartbeatAt"] = "2026-08-13T07:58:18Z"
+            viewer["renderer"]["lastHeartbeatAt"] = "2026-08-13T07:58:18Z"
+            for stream in viewer["streams"]:
+                stream["lastProgressAt"] = "2026-08-13T07:58:18Z"
+
+            def fetcher(_base: str, endpoint: str, _timeout: int) -> object:
+                return payloads[endpoint]
+
+            def runner(args: list[str], _timeout: int) -> str:
+                if "inspect" in args:
+                    return '{"running":true,"status":"running","health":"healthy","restartCount":0,"image":"camstation:test"}'
+                return ""
+
+            record = watch.collect_snapshot(
+                config,
+                now=NOW,
+                fetcher=fetcher,
+                runner=runner,
+                disk_probe=lambda _path: {"usedPercent": 25.0, "freeBytes": 100 * 1024**3},
+            )
+            self.assertEqual(record["viewers"]["healthy"], 1)
+            self.assertEqual(record["viewers"]["receivingCameras"], 8)
+            self.assertEqual(record["viewers"]["clockSkewedViewers"], 1)
+            self.assertEqual(record["viewers"]["maxObservedClockOffsetSeconds"], 103)
+            self.assertEqual(record["viewers"]["maxAppliedClockCorrectionSeconds"], 88)
+            self.assertIn("viewer_clock_skew", record["alerts"])
+            self.assertNotIn("viewer_heartbeat_stale", record["alerts"])
+            self.assertNotIn("viewer_renderer_stale", record["alerts"])
+            self.assertNotIn("viewer_media_missing", record["alerts"])
+
+    def test_clock_correction_does_not_hide_real_management_staleness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = self.config(Path(directory))
+            payloads = self.healthy_payloads()
+            viewer = payloads["/api/viewers"][0]
+            viewer["lastHeartbeatAt"] = "2026-08-13T07:59:59Z"
+            viewer["control"]["lastSuccessAt"] = "2026-08-13T07:58:16Z"
+            viewer["viewer"]["lastHeartbeatAt"] = "2026-08-13T07:57:38Z"
+            viewer["renderer"]["lastHeartbeatAt"] = "2026-08-13T07:57:38Z"
+
+            def fetcher(_base: str, endpoint: str, _timeout: int) -> object:
+                return payloads[endpoint]
+
+            def runner(args: list[str], _timeout: int) -> str:
+                if "inspect" in args:
+                    return '{"running":true,"status":"running","health":"healthy","restartCount":0,"image":"camstation:test"}'
+                return ""
+
+            record = watch.collect_snapshot(
+                config,
+                now=NOW,
+                fetcher=fetcher,
+                runner=runner,
+                disk_probe=lambda _path: {"usedPercent": 25.0, "freeBytes": 100 * 1024**3},
+            )
+            self.assertEqual(record["viewers"]["healthy"], 0)
+            self.assertIn("viewer_clock_skew", record["alerts"])
+            self.assertIn("viewer_heartbeat_stale", record["alerts"])
+            self.assertIn("viewer_renderer_stale", record["alerts"])
+
+    def test_extreme_clock_offset_is_not_corrected(self) -> None:
+        viewer = {
+            "lastHeartbeatAt": "2026-08-13T08:00:00Z",
+            "control": {"lastSuccessAt": "2026-08-12T08:00:00Z"},
+        }
+        correction, observed, rejected = watch.viewer_clock_correction(viewer)
+        self.assertEqual(correction, dt.timedelta())
+        self.assertEqual(observed, 24 * 60 * 60)
+        self.assertTrue(rejected)
+
+    def test_client_clock_ahead_correction_is_conservatively_old(self) -> None:
+        viewer = {
+            "lastHeartbeatAt": "2026-08-13T08:00:00Z",
+            "control": {"lastSuccessAt": "2026-08-13T08:01:43Z"},
+        }
+        correction, observed, rejected = watch.viewer_clock_correction(viewer)
+        self.assertEqual(correction, dt.timedelta(seconds=-118))
+        self.assertEqual(observed, -103)
+        self.assertFalse(rejected)
+
     def test_rotating_append_keeps_exact_file_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "watch.jsonl"
