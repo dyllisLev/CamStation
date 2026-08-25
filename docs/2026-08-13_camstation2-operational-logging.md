@@ -10,20 +10,28 @@ Windows Viewer 로컬 로그는 서버에 보고할 수 없는 마지막 구간�
 
 ## 현재 운영 반영 상태
 
-- 서버: `camstation:2.0.0-rc.20260814.19-recorder-timestamp`, source revision `61b4672`,
-  image ID `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`
+- 서버: `camstation:2.0.0-rc.20260825.21-viewer-self-healing`, source revision `0f5a2de`,
+  image ID `sha256:2db36aabe704b290dd904bd1ba251fa43b3e863d9b00c85f2df5504b69d60179`
 - daemon 로그: `/var/lib/camstation2-production/data/logs/camstationd.jsonl`, 64 MiB×32
 - 자동 추이: `/var/lib/camstation2-production/data/logs/operational-watch.jsonl`, 1분, 10 MiB×4;
   `camstation-log-watch.timer` enabled/active
-- `monitoring-pc`: Viewer 2.0.27, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3;
+- `monitoring-pc`: Viewer 2.0.28, Service Running/Auto, 로컬 로그 `warn`, override 없음, 5 MiB×3;
   새 Viewer 창은 Windows 최대화 상태로 시작
-- 2026-08-14 08:02 KST 최종 표본: container healthy/restart 0, camera·stream·recorder·Viewer 8/8,
-  recording current/ready 8/8, stale 0, watcher `ok`, alert/error/persistent-write-failure 0
+- watcher source revision `a8b3eae`, 설치 SHA-256
+  `a1c62ea1e8f835eb9ea787ffb50f745e54ab1b80018eb1f4bd34004b8abceafa`
+- 2026-08-25 09:47:18 KST 최종 표본: container healthy/restart 0, camera·stream·recorder 8/8,
+  Viewer healthy 1/1·receiving 8/8, recording current/ready 8/8, stale 0. Windows clock skew 때문에
+  watcher는 `degraded`와 `viewer_clock_skew` 하나만 유지한다.
 
-`.19` 재시작 직후 일부 live-warm이 준비되지 않은 로컬 stream에 먼저 접근해 404 signature 4종을 한 번씩
-남겼고 Viewer도 cooldown 재연결을 수행했다. recorder 오류는 없었고 5분 안에 Viewer 8/8·watcher `ok`로
-수렴했으며 이후 오류는 증가하지 않았다. 08:00 KST 첫 clock 경계에서는 recorder 8개가 모두 segment를
-닫고 다시 열었고 닫힌 8개 파일은 모두 `ffprobe`에 성공했다.
+monitoring PC의 UTC는 같은 HTTP 왕복에서 서버보다 102.197초 느리고 W32Time source는 동기화되지 않은
+상태였다. watcher는 server receipt와 독립적인 control success 시각 차이에서 15초 안전 여유를 뺀
+bounded correction을 Viewer/renderer/progress에만 적용한다. 실제 30초 management stale 기준은 유지하고
+clock skew 자체는 숨기지 않는다. OS 시간이나 W32Time 설정은 이번 배포에서 변경하지 않았다.
+
+`.21` container 재생성 때 기존 recorder의 직렬 worker 종료 최악값이 Docker 45초 stop budget을 넘겼다.
+09:00 KST partial 8개 중 4개는 failed recovery, 4개는 ready지만 `ffprobe` 실패다. 이후 09:02~09:30
+8개 segment는 파일 존재·DB size 일치·`ffprobe` 성공이고 09:30 current 8개는 모두 증가 중이다. 추가
+container 재시작 전에는 recorder 종료를 bounded parallel로 바꾸거나 충분한 stop grace를 증명해야 한다.
 
 ### Paseo 매일 06시 24시간 감사
 

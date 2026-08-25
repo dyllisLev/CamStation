@@ -27,9 +27,9 @@
   녹화 연속성, watcher 실행 성공을 확인한다. 실패하면 Viewer를 건드리기 전에 서버만 원복한다.
 - [x] monitoring-pc에 MSI를 공식 wrapper로 전달해 Service→Viewer 순으로 정확히 중지한 뒤 major upgrade,
   Service/Viewer 복원, 설정/client identity 보존을 검증한다. 실패하면 정확한 2.0.27 MSI로 원복한다.
-- [ ] exact Viewer와 desktop capture에서 실제 8타일 진행을 확인하고 Viewer/renderer/stream heartbeat가
+- [x] exact Viewer와 desktop capture에서 실제 8타일 진행을 확인하고 Viewer/renderer/stream heartbeat가
   새 시각으로 전진하며 watcher 3회 연속 receiving 8/8인지 검증한다.
-- [ ] control/setup/capture/config task, 원격 run, driver TCP listener/firewall 잔여 0과 배포 후 recorder
+- [x] control/setup/capture/config task, 원격 run, driver TCP listener/firewall 잔여 0과 배포 후 recorder
   segment rollover를 확인하고 Review·교훈·구현 상태를 갱신한다.
 
 ### 배포 중 확인된 client clock skew 보정
@@ -40,7 +40,7 @@
   15초 안전 여유를 남겨 실제 30초 Viewer/renderer stale을 정상으로 숨기지 않게 한다.
 - [x] 정상·실제 stale·과도하거나 근거 없는 skew 회귀시험을 통과시키고 숫자만 남는
   `viewer_clock_skew` 경보와 보정 계측을 검증한다.
-- [ ] server/container/Viewer를 재시작하지 않고 watcher exact file만 hash-checked 교체한 뒤 세 연속 표본에서
+- [x] server/container/Viewer를 재시작하지 않고 watcher exact file만 hash-checked 교체한 뒤 세 연속 표본에서
   Viewer healthy 1/1·receiving 8/8이고 기존 stale/media 경보가 사라지는지 확인한다.
 - [x] Windows 시간 동기화 미정상은 외부 운영 조치로 분리하고, 승인 없이 OS 시간·서비스 설정은 변경하지 않는다.
 
@@ -58,7 +58,29 @@
 
 ## Review
 
-- 진행 중.
+- server/Viewer source `0f5a2de`에서 immutable image
+  `camstation:2.0.0-rc.20260825.21-viewer-self-healing`과 Viewer 2.0.28 MSI를 clean build했다. image ID는
+  `sha256:2db36aabe704b290dd904bd1ba251fa43b3e863d9b00c85f2df5504b69d60179`, MSI SHA-256은
+  `b87767b7d434ed9259dcd53a80d8b42d767b011709779d35cf74b584ef32241c`이고 rollback image/MSI와 root-only
+  Compose/watcher 백업을 전환 전에 고정했다.
+- production container는 `.21` exact image, healthy, restart 0이고 camera·public stream·recorder가
+  8/8이다. Viewer 2.0.28은 ProductCode `{B9E81E3B-D3C7-4957-B851-C0FECCE955B8}`, Service Running/Auto,
+  설정/client identity 보존으로 설치됐다. exact-window capture는 실제 8개 영상을 표시했고 최종 공식
+  audit의 control/setup/capture/config task, driver TCP connection과 firewall rule은 모두 0이다.
+- 최초 watcher 실패는 관리 pipe 단절이 아니었다. 같은 HTTP 왕복에서 monitoring PC UTC가 서버보다
+  102.197초 느리고 W32Time source가 동기화되지 않은 상태임을 확인했다. 단일 Viewer/Service process와
+  lease-backed 진단은 계속 진행했고 disconnect/expire 및 Windows crash/hang은 0이었다. OS 시각은
+  변경하지 않았다.
+- watcher commit `a8b3eae`는 server receipt와 control success로 client clock offset을 계산하고 15초
+  안전 여유를 남겨 실제 management stale을 숨기지 않는다. 설치 hash는
+  `a1c62ea1e8f835eb9ea787ffb50f745e54ab1b80018eb1f4bd34004b8abceafa`다. 10개 회귀시험과 production
+  policy가 통과했고, 09:45:09·09:46:13·09:47:18 KST 세 표본은 Viewer healthy 1/1·receiving 8/8,
+  freshness 13~18초였다. 남은 alert는 `viewer_clock_skew` 하나다.
+- container recreate는 별도 recorder 종료 결함을 노출했다. 45초 stop timeout 아래 8개 worker를
+  최대 10초씩 직렬 종료해 09:00 KST partial 중 소방서1/집-마당/집-창고1/집-창고2는 failed recovery,
+  소방서3/소방서4/염소장/소방서5는 ready지만 `ffprobe` 실패가 됐다. 09:02~09:30 다음 8개 파일은 모두
+  존재·DB size 일치·`ffprobe` 성공이고 09:30 current 8개는 5초 표본에서 모두 증가했다. 추가 routine
+  container restart 전에 bounded-parallel recorder shutdown과 충분한 stop grace 회귀시험이 필요하다.
 
 ---
 

@@ -7,17 +7,20 @@ This document records the current implementation state so the next session can c
 ## Current Branch And Remote
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
-- Active branch used for this work: `main`; the Viewer WebSocket timeout source fix is commit `08e3ac2`
+- Active branch used for this work: `main`; Viewer self-healing is `0f5a2de` and the clock-skew-aware
+  operational watcher is `a8b3eae`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 source revision: `61b467250c1c97c3de4b98a8fd1ef1c4d0207299`
-- Current deployed image: `camstation:2.0.0-rc.20260814.19-recorder-timestamp`, image ID
-  `sha256:f2f6f23d329230ba6beac7368da84c44edc40564b19f20ac87e96d267a0ccef2`
+- Current deployed 2.0 server/Viewer source revision: `0f5a2de5979e6a1dadf2ef7122b75a087fc52beb`
+- Current deployed image: `camstation:2.0.0-rc.20260825.21-viewer-self-healing`, image ID
+  `sha256:2db36aabe704b290dd904bd1ba251fa43b3e863d9b00c85f2df5504b69d60179`
+- Current deployed watcher source revision: `a8b3eae`; installed SHA-256
+  `a1c62ea1e8f835eb9ea787ffb50f745e54ab1b80018eb1f4bd34004b8abceafa`
 - Current active nginx Viewer WebSocket policy: exact `/player/api/ws` read/send timeout `365d`, general
   proxy timeout unchanged at `3600s`; active runtime include SHA-256
   `3bf5ba6259569e2eb2f3381ee61ba01de43362ea28792137d29d208422325ae3`
-- Current monitoring PC Viewer: 2.0.27 built from `56de740`; ProductCode
-  `{9A18B580-AA6E-4F2D-AE45-986523915BBE}`; Service Running/Auto; local logging `warn`, 5 MiB × 3;
+- Current monitoring PC Viewer: 2.0.28 built from `0f5a2de`; ProductCode
+  `{B9E81E3B-D3C7-4957-B851-C0FECCE955B8}`; Service Running/Auto; local logging `warn`, 5 MiB × 3;
   first visible window starts maximized
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
@@ -25,16 +28,16 @@ This document records the current implementation state so the next session can c
 
 ## Implemented
 
-### 2026-08-25 Viewer management self-healing and presented-frame hardening (source complete; rollout pending)
+### 2026-08-25 Viewer management self-healing, presented-frame hardening and clock-skew-safe watcher (deployed)
 
 - Official Viewer-window and full-desktop captures showed all eight enabled camera tiles visibly advancing
   while the server watcher repeatedly reported `viewer_media_missing` and receiving 0/8. Viewer Service,
   control and renderer state remained healthy, so restarting the already-working Viewer was unnecessary.
-- Server API and read-only DB evidence showed brief fleet-wide progress bursts followed by all eight rows
-  becoming stale after roughly 90 seconds. A later same-instant comparison found the Service-to-server
-  heartbeat fresh while Viewer lease heartbeat, renderer heartbeat, stream update and media progress ages
-  were all stale by the same amount. The installed watcher matches the repository hash and aggregation logic.
-  This isolates the direct failure to the Viewer-to-Service management path, not merely `timeupdate`.
+- Server API initially appeared to show a fresh Service heartbeat and Viewer/renderer/progress timestamps stale
+  by the same amount. Deployment-time cross-host measurement then proved the monitoring PC UTC clock was
+  102.197 seconds behind the server. The Viewer and Service were single, continuously responding process groups,
+  no lease disconnect/expiry was logged, and lease-backed diagnostics continued. The stale watcher result was
+  therefore a cross-host clock interpretation defect rather than a stopped management pipe in this episode.
 - The live playback hook now observes `requestVideoFrameCallback`, records actual presented frames at most
   once per second, retains `timeupdate` as a compatibility fallback, and cancels the observer on cleanup.
   It cannot report progress without an active connection or during cooldown. The Electron monitoring window
@@ -58,11 +61,19 @@ This document records the current implementation state so the next session can c
   tests, full `go test ./...`, the ViewerService race suite, Web lint, Web and Viewer production builds, Linux
   daemon build, Windows ViewerService cross-compile/build, `gofmt -d`, and `git diff --check` pass. Go validation
   used the repository-pinned Go 1.25.12 image digest with a read-only source mount.
-- The rebuilt Web asset and Viewer source have not been deployed to the production container or monitoring
-  PC. Post-rollout acceptance requires three consecutive one-minute watcher samples at receiving 8/8 while
-  independent captures continue to show all eight streams advancing, plus a fresh replacement lease and zero
-  Windows control/setup/capture/config task, listener or firewall residue. The first trigger—renderer scheduling
-  pause versus named-pipe half-open—remains unconfirmed until a controlled Windows fault test.
+- The immutable server image and Viewer 2.0.28 MSI are deployed. The watcher now estimates bounded client-clock
+  correction from server receipt versus independent control success, subtracts a 15-second safety guard, rejects
+  offsets above 12 hours, and retains `viewer_clock_skew` as a separate degraded alert. Synthetic lag/ahead,
+  true-stale and rejected-offset regressions pass. Three consecutive production samples at 09:45:09, 09:46:13
+  and 09:47:18 KST reported Viewer healthy 1/1 and receiving 8/8 with only the clock-skew alert. Exact capture
+  showed all eight live tiles, and Windows control/setup/capture/config task, TCP listener and firewall residue
+  are zero.
+- The server recreate exposed an independent recorder shutdown defect. The existing container's 45-second stop
+  budget cannot cover eight serial worker terminations that may each take ten seconds. Four 09:00 KST partial
+  rows were recovered as failed and four were stored as ready but fail `ffprobe`. The next 09:02–09:30 segment
+  for every recording stream exists, matches DB size and passes `ffprobe`; all eight 09:30 current files are
+  growing. Do not perform another routine container restart until shutdown becomes bounded-parallel or the
+  effective grace contract is made sufficient.
 
 ### 2026-08-20 scheduled-camera-restart Viewer fast recovery (source only; rollout pending)
 
