@@ -92,7 +92,7 @@ export function ViewerPage() {
 }
 
 function ViewerVideo({ camera }: { camera: Camera }) {
-  const playback = useMseStream(playbackStreamCandidates(camera));
+  const playback = useMseStream(playbackStreamCandidates(camera), "viewer_page");
   const status = playback.phase === "playing" ? "재생 중" : "연결 중";
 
   return (

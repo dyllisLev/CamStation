@@ -50,9 +50,11 @@ func TestPlaybackDiagnosticsRespectLogLevelAndWriteCorrelatedSafeEvents(t *testi
 		"usingFallback":true
 	}`)
 	warnStatus := postPlaybackEvent(t, mux, `{
-		"sessionId":"playback-12345678","event":"attempt_failed","streamName":"gate-live",
+		"sessionId":"playback-12345678","documentId":"document-12345678","surface":"official_viewer",
+		"event":"attempt_failed","streamName":"gate-live","candidateRole":"primary",
 		"transport":"webrtc","phase":"connecting","attempt":1,"elapsedMs":5019,
-		"attemptElapsedMs":5001,"errorCategory":"setup_timeout","readyState":0
+		"attemptGeneration":3,"resubscribeGeneration":1,"attemptElapsedMs":5001,
+		"errorCategory":"setup_timeout","terminalReason":"setup_timeout","readyState":0
 	}`)
 	if infoStatus != http.StatusNoContent || primaryRestoredStatus != http.StatusNoContent || warnStatus != http.StatusNoContent {
 		t.Fatalf("info/primary-restored/warn statuses = %d/%d/%d", infoStatus, primaryRestoredStatus, warnStatus)
@@ -63,12 +65,14 @@ func TestPlaybackDiagnosticsRespectLogLevelAndWriteCorrelatedSafeEvents(t *testi
 		`"streamName":"gate-live"`, `"transport":"webrtc"`, `"level":"warn"`,
 		`"event":"primary_probe_succeeded"`, `"transport":"mse"`, `"usingFallback":true`,
 		`"event":"attempt_failed"`, `"errorCategory":"setup_timeout"`, `"attemptElapsedMs":5001`,
+		`"documentId":"document-12345678"`, `"surface":"official_viewer"`, `"candidateRole":"primary"`,
+		`"attemptGeneration":3`, `"resubscribeGeneration":1`, `"terminalReason":"setup_timeout"`,
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("playback log missing %s: %s", want, logText)
 		}
 	}
-	for _, forbidden := range []string{"rtsp://", "candidate", "sdp", "authorization", "password"} {
+	for _, forbidden := range []string{"rtsp://", "candidate:", "sdp=", "authorization", "password"} {
 		if strings.Contains(strings.ToLower(logText), forbidden) {
 			t.Fatalf("playback log contains forbidden %q: %s", forbidden, logText)
 		}
@@ -96,8 +100,10 @@ func TestPlaybackDiagnosticsUseSharedOperationalLoggerAndClientCorrelation(t *te
 	mux := http.NewServeMux()
 	deps.registerPlaybackDiagnosticRoutes(mux)
 	status := postPlaybackEventFrom(t, mux, "192.0.2.40:45000", `{
-		"sessionId":"playback-12345678","event":"first_media","streamName":"gate-live",
-		"transport":"webrtc","phase":"connecting","attempt":1,"elapsedMs":42,"readyState":4
+		"sessionId":"playback-12345678","documentId":"document-12345678","surface":"official_viewer",
+		"event":"first_media","streamName":"gate-live","candidateRole":"primary",
+		"transport":"webrtc","phase":"connecting","attempt":1,"attemptGeneration":2,
+		"resubscribeGeneration":1,"elapsedMs":42,"readyState":4
 	}`)
 	if status != http.StatusNoContent {
 		t.Fatalf("status=%d", status)
@@ -108,6 +114,8 @@ func TestPlaybackDiagnosticsUseSharedOperationalLoggerAndClientCorrelation(t *te
 	}
 	if record.Component != "playback" || record.Level != "debug" || record.Event != "first_media" ||
 		record.SessionID != "playback-12345678" || record.StreamName != "gate-live" ||
+		record.DocumentID != "document-12345678" || record.Surface != "official_viewer" ||
+		record.CandidateRole != "primary" || record.AttemptGeneration != 2 || record.ResubscribeGeneration != 1 ||
 		record.CameraID != camera.ID || record.ClientIP != "192.0.2.40" ||
 		record.Transport != "webrtc" || record.ReadyState != 4 {
 		t.Fatalf("record=%+v", record)
@@ -141,12 +149,16 @@ func TestPlaybackDiagnosticsRejectUnknownFieldsUnregisteredStreamsAndFloods(t *t
 		"sessionId":"playback-12345678","event":"attempt_started","streamName":"missing",
 		"transport":"webrtc","phase":"connecting","attempt":1
 	}`)
+	invalidContext := postPlaybackEventFrom(t, mux, "10.0.0.33:45000", `{
+		"sessionId":"playback-12345678","documentId":"document-12345678","surface":"pretend_viewer",
+		"event":"attempt_started","streamName":"gate-live","transport":"webrtc","phase":"connecting","attempt":1
+	}`)
 	first := postPlaybackEvent(t, mux, validPlaybackEventBody("socket_open", 1))
 	second := postPlaybackEvent(t, mux, validPlaybackEventBody("signaling_answer", 1))
 	third := postPlaybackEvent(t, mux, validPlaybackEventBody("first_media", 1))
 
-	if unknownField != http.StatusBadRequest || unregistered != http.StatusNotFound {
-		t.Fatalf("invalid statuses = unknown:%d stream:%d", unknownField, unregistered)
+	if unknownField != http.StatusBadRequest || unregistered != http.StatusNotFound || invalidContext != http.StatusBadRequest {
+		t.Fatalf("invalid statuses = unknown:%d stream:%d context:%d", unknownField, unregistered, invalidContext)
 	}
 	if first != http.StatusNoContent || second != http.StatusNoContent || third != http.StatusTooManyRequests {
 		t.Fatalf("rate statuses = %d/%d/%d", first, second, third)

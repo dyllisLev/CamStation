@@ -1,5 +1,16 @@
 # Lessons
 
+## 2026-08-28 — 일일 안정화 감사는 제품 경계를 좁히고 결론을 먼저 쓴다
+
+- 사용자가 서버↔Viewer 재생 안정화를 매일 확인하려는 경우 전체 NVR 감사를 반복하지 않는다. 카메라
+  ingest와 recorder는 같은 시각에 source가 정상인지 배제하는 대조 증거로만 쓰고, 카메라 timeout·EOF·
+  재시작 후보와 영향 없는 timestamp 경고는 브리핑 대상에서 제외한다.
+- 최종 output은 `어디서 무엇이 실패했는지`, `가장 가능성 높은 원인`, `현재 복구 여부`를 최대 3건으로
+  먼저 쓴다. 수집량·전체 카메라 표·긴 방법론·일반적인 조치 목록은 증거 결손이 없는 한 생략한다.
+- `sessionId`와 client IP만으로는 공식 Viewer, 일반 브라우저, 재사용된 renderer 문서를 구분하기 어렵다.
+  익명 document ID, surface, candidate role, attempt/resubscribe generation, terminal reason을 함께 남기고,
+  로컬 management lease는 원문 대신 짧은 지문으로만 연결한다.
+
 ## 2026-08-25 — 관리 채널 복구는 deadline·generation·증거 보존을 함께 닫는다
 
 - request timeout만 추가하고 끝내지 않는다. timeout/error/close/application-level lease 실패를 연결

@@ -10,6 +10,13 @@ const DIAGNOSTIC_EVENT = /^[a-z][a-z0-9_]{1,63}$/u;
 const DIAGNOSTIC_CODE = /^[a-z][a-z0-9_]{0,63}$/u;
 const DIAGNOSTIC_CORRELATION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const DIAGNOSTIC_SESSION = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u;
+const DIAGNOSTIC_SURFACES = new Set(["official_viewer", "viewer_browser", "operator_live", "viewer_page", "control_room_preview", "camera_profile_preview", "unknown"]);
+const DIAGNOSTIC_CANDIDATE_ROLES = new Set(["primary", "fallback", "primary_probe"]);
+const DIAGNOSTIC_TERMINAL_REASONS = new Set([
+  "setup_timeout", "media_stall", "socket", "signaling", "media", "unsupported",
+  "retry_budget_exhausted", "primary_restored", "resubscribe_requested", "candidates_changed",
+  "transport_changed", "surface_changed", "component_unmounted",
+]);
 
 export type ViewerStreamTelemetry = {
   readonly streamName: string;
@@ -64,15 +71,21 @@ export function safeViewerDiagnostic(input: Record<string, unknown>): Record<str
   };
   if (!copyPatternString(diagnostic, input, "correlationId", DIAGNOSTIC_CORRELATION)) return null;
   if (!copyPatternString(diagnostic, input, "sessionId", DIAGNOSTIC_SESSION)) return null;
+  if (!copyPatternString(diagnostic, input, "documentId", DIAGNOSTIC_SESSION)) return null;
   if (input.streamName !== undefined) {
     if (!safeStreamName(input.streamName)) return null;
     diagnostic.streamName = input.streamName;
   }
   if (!copyEnumString(diagnostic, input, "transport", TRANSPORTS)) return null;
   if (!copyEnumString(diagnostic, input, "phase", PHASES)) return null;
+  if (!copyEnumString(diagnostic, input, "surface", DIAGNOSTIC_SURFACES)) return null;
+  if (!copyEnumString(diagnostic, input, "candidateRole", DIAGNOSTIC_CANDIDATE_ROLES)) return null;
+  if (!copyEnumString(diagnostic, input, "terminalReason", DIAGNOSTIC_TERMINAL_REASONS)) return null;
   if (!copyPatternString(diagnostic, input, "state", DIAGNOSTIC_CODE)) return null;
   if (!copyPatternString(diagnostic, input, "errorCode", DIAGNOSTIC_CODE)) return null;
   copyBoundedDiagnosticInteger(diagnostic, input, "attempt", 0, 32);
+  copyBoundedDiagnosticInteger(diagnostic, input, "attemptGeneration", 0, 1_000_000);
+  copyBoundedDiagnosticInteger(diagnostic, input, "resubscribeGeneration", 0, 1_000_000);
   copyBoundedDiagnosticInteger(diagnostic, input, "durationMs", 0, 30 * 60_000);
   copyBoundedDiagnosticInteger(diagnostic, input, "attemptElapsedMs", 0, 30 * 60_000);
   copyBoundedDiagnosticInteger(diagnostic, input, "retryMs", 0, 30 * 60_000);

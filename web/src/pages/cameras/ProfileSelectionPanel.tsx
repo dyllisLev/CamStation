@@ -178,7 +178,7 @@ function StreamCandidateRow({ candidate }: { candidate: StreamCandidate }) {
 }
 
 function ProfilePreviewPlayer({ streamName }: { streamName: string }) {
-  const { videoRef, connected } = useMseStream(streamName);
+  const { videoRef, connected } = useMseStream(streamName, "camera_profile_preview");
   return (
     <div className="new-profile-preview-player">
       <video ref={videoRef} className="new-live-video" autoPlay muted playsInline disablePictureInPicture controls={false} />

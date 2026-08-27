@@ -25,10 +25,15 @@ test("reports only allowlisted Viewer diagnostic fields", () => {
     component: "viewer.playback",
     event: "attempt_failed",
     sessionId: "playback-12345678",
+    documentId: "document-12345678",
+    surface: "official_viewer",
     streamName: "yard-live",
+    candidateRole: "fallback",
     transport: "webrtc",
     phase: "retrying",
     attempt: 2,
+    attemptGeneration: 4,
+    resubscribeGeneration: 1,
     durationMs: 5_100,
     attemptElapsedMs: 5_001,
     readyState: 0,
@@ -36,6 +41,7 @@ test("reports only allowlisted Viewer diagnostic fields", () => {
     fallbackCount: 1,
     usingFallback: true,
     errorCode: "setup_timeout",
+    terminalReason: "setup_timeout",
     rawUrl: "rtsp://operator:secret@camera/live",
     sdp: "secret-session-description",
   }, bridge);
@@ -45,11 +51,17 @@ test("reports only allowlisted Viewer diagnostic fields", () => {
     component: "viewer.playback",
     event: "attempt_failed",
     sessionId: "playback-12345678",
+    documentId: "document-12345678",
     streamName: "yard-live",
     transport: "webrtc",
     phase: "retrying",
+    surface: "official_viewer",
+    candidateRole: "fallback",
+    terminalReason: "setup_timeout",
     errorCode: "setup_timeout",
     attempt: 2,
+    attemptGeneration: 4,
+    resubscribeGeneration: 1,
     durationMs: 5_100,
     attemptElapsedMs: 5_001,
     readyState: 0,
@@ -72,6 +84,7 @@ test("rejects unsafe Viewer diagnostic identities without affecting playback", (
   };
 
   assert.equal(safeViewerDiagnostic({ level: "debug", component: "viewer.playback", event: "first_media", streamName: "rtsp://camera/live" }), null);
+  assert.equal(safeViewerDiagnostic({ level: "debug", component: "viewer.playback", event: "first_media", surface: "pretend_viewer" }), null);
   reportViewerDiagnostic({ level: "debug", component: "viewer.playback", event: "first_media", streamName: "rtsp://camera/live" }, bridge);
   assert.equal(calls, 0);
   assert.doesNotThrow(() => reportViewerDiagnostic({ level: "info", component: "viewer.main", event: "live_loaded", state: "running" }, bridge));

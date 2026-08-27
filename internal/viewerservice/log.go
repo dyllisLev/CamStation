@@ -43,48 +43,62 @@ var (
 )
 
 type LogRecord struct {
-	Level            opslog.Level
-	Component        string
-	Event            string
-	State            string
-	Code             string
-	CorrelationID    string
-	SessionID        string
-	StreamName       string
-	Transport        string
-	Phase            string
-	Attempt          int
-	DurationMS       int64
-	AttemptElapsedMS int64
-	RetryMS          int64
-	ReadyState       int
-	ReconnectCount   int
-	FallbackCount    int
-	UsingFallback    bool
-	Detail           string
+	Level                 opslog.Level
+	Component             string
+	Event                 string
+	State                 string
+	Code                  string
+	CorrelationID         string
+	SessionID             string
+	DocumentID            string
+	LeaseFingerprint      string
+	StreamName            string
+	Surface               string
+	CandidateRole         string
+	Transport             string
+	Phase                 string
+	Attempt               int
+	AttemptGeneration     int
+	ResubscribeGeneration int
+	DurationMS            int64
+	AttemptElapsedMS      int64
+	RetryMS               int64
+	ReadyState            int
+	ReconnectCount        int
+	FallbackCount         int
+	UsingFallback         bool
+	TerminalReason        string
+	Detail                string
 }
 
 type logLine struct {
-	Timestamp        string `json:"timestamp"`
-	Level            string `json:"level"`
-	Component        string `json:"component"`
-	Event            string `json:"event"`
-	State            string `json:"state,omitempty"`
-	Code             string `json:"errorCode,omitempty"`
-	CorrelationID    string `json:"correlationId,omitempty"`
-	SessionID        string `json:"sessionId,omitempty"`
-	StreamName       string `json:"streamName,omitempty"`
-	Transport        string `json:"transport,omitempty"`
-	Phase            string `json:"phase,omitempty"`
-	Attempt          int    `json:"attempt,omitempty"`
-	DurationMS       int64  `json:"durationMs,omitempty"`
-	AttemptElapsedMS int64  `json:"attemptElapsedMs,omitempty"`
-	RetryMS          int64  `json:"retryMs,omitempty"`
-	ReadyState       int    `json:"readyState,omitempty"`
-	ReconnectCount   int    `json:"reconnectCount,omitempty"`
-	FallbackCount    int    `json:"fallbackCount,omitempty"`
-	UsingFallback    bool   `json:"usingFallback,omitempty"`
-	Detail           string `json:"detail,omitempty"`
+	Timestamp             string `json:"timestamp"`
+	Level                 string `json:"level"`
+	Component             string `json:"component"`
+	Event                 string `json:"event"`
+	State                 string `json:"state,omitempty"`
+	Code                  string `json:"errorCode,omitempty"`
+	CorrelationID         string `json:"correlationId,omitempty"`
+	SessionID             string `json:"sessionId,omitempty"`
+	DocumentID            string `json:"documentId,omitempty"`
+	LeaseFingerprint      string `json:"leaseFingerprint,omitempty"`
+	StreamName            string `json:"streamName,omitempty"`
+	Surface               string `json:"surface,omitempty"`
+	CandidateRole         string `json:"candidateRole,omitempty"`
+	Transport             string `json:"transport,omitempty"`
+	Phase                 string `json:"phase,omitempty"`
+	Attempt               int    `json:"attempt,omitempty"`
+	AttemptGeneration     int    `json:"attemptGeneration,omitempty"`
+	ResubscribeGeneration int    `json:"resubscribeGeneration,omitempty"`
+	DurationMS            int64  `json:"durationMs,omitempty"`
+	AttemptElapsedMS      int64  `json:"attemptElapsedMs,omitempty"`
+	RetryMS               int64  `json:"retryMs,omitempty"`
+	ReadyState            int    `json:"readyState,omitempty"`
+	ReconnectCount        int    `json:"reconnectCount,omitempty"`
+	FallbackCount         int    `json:"fallbackCount,omitempty"`
+	UsingFallback         bool   `json:"usingFallback,omitempty"`
+	TerminalReason        string `json:"terminalReason,omitempty"`
+	Detail                string `json:"detail,omitempty"`
 }
 
 type LogManager struct {
@@ -269,6 +283,11 @@ func viewerLogIdentity(peer Peer) (name, sid string, err error) {
 	return fmt.Sprintf("viewer-%d-%s.log", peer.SessionID, hex.EncodeToString(digest[:8])), sid, nil
 }
 
+func opaqueViewerLogFingerprint(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:8])
+}
+
 func (logs *LogManager) MaintainViewerLogs() error {
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
@@ -343,26 +362,33 @@ func (logs *LogManager) encode(record LogRecord) ([]byte, error) {
 		limit = logs.rotateSize
 	}
 	line := logLine{
-		Timestamp:        logs.now().UTC().Format(time.RFC3339Nano),
-		Level:            logRecordLevel(record).String(),
-		Component:        boundedLogText(logRecordComponent(record, "viewer.service"), 64),
-		Event:            boundedLogText(record.Event, 64),
-		State:            boundedLogText(record.State, 64),
-		Code:             boundedLogText(record.Code, 64),
-		CorrelationID:    boundedLogText(record.CorrelationID, 128),
-		SessionID:        boundedLogText(record.SessionID, 128),
-		StreamName:       boundedLogText(redactLogDetail(record.StreamName), 128),
-		Transport:        boundedLogText(record.Transport, 32),
-		Phase:            boundedLogText(record.Phase, 64),
-		Attempt:          record.Attempt,
-		DurationMS:       record.DurationMS,
-		AttemptElapsedMS: record.AttemptElapsedMS,
-		RetryMS:          record.RetryMS,
-		ReadyState:       record.ReadyState,
-		ReconnectCount:   record.ReconnectCount,
-		FallbackCount:    record.FallbackCount,
-		UsingFallback:    record.UsingFallback,
-		Detail:           boundedLogText(redactLogDetail(record.Detail), 2048),
+		Timestamp:             logs.now().UTC().Format(time.RFC3339Nano),
+		Level:                 logRecordLevel(record).String(),
+		Component:             boundedLogText(logRecordComponent(record, "viewer.service"), 64),
+		Event:                 boundedLogText(record.Event, 64),
+		State:                 boundedLogText(record.State, 64),
+		Code:                  boundedLogText(record.Code, 64),
+		CorrelationID:         boundedLogText(record.CorrelationID, 128),
+		SessionID:             boundedLogText(record.SessionID, 128),
+		DocumentID:            boundedLogText(record.DocumentID, 128),
+		LeaseFingerprint:      boundedLogText(record.LeaseFingerprint, 32),
+		StreamName:            boundedLogText(redactLogDetail(record.StreamName), 128),
+		Surface:               boundedLogText(record.Surface, 32),
+		CandidateRole:         boundedLogText(record.CandidateRole, 32),
+		Transport:             boundedLogText(record.Transport, 32),
+		Phase:                 boundedLogText(record.Phase, 64),
+		Attempt:               record.Attempt,
+		AttemptGeneration:     record.AttemptGeneration,
+		ResubscribeGeneration: record.ResubscribeGeneration,
+		DurationMS:            record.DurationMS,
+		AttemptElapsedMS:      record.AttemptElapsedMS,
+		RetryMS:               record.RetryMS,
+		ReadyState:            record.ReadyState,
+		ReconnectCount:        record.ReconnectCount,
+		FallbackCount:         record.FallbackCount,
+		UsingFallback:         record.UsingFallback,
+		TerminalReason:        boundedLogText(record.TerminalReason, 64),
+		Detail:                boundedLogText(redactLogDetail(record.Detail), 2048),
 	}
 	if line.Event == "" {
 		line.Event = "state_changed"

@@ -196,7 +196,7 @@ function ControlRoomDashboard() {
 }
 
 function CameraPreviewModal({ camera, onClose }: { camera: CameraModel; onClose: () => void }) {
-  const { videoRef } = useMseStream(liveStreamName(camera));
+  const { videoRef } = useMseStream(liveStreamName(camera), "control_room_preview");
 
   return (
     <div className="new-preview-backdrop" role="dialog" aria-modal="true" aria-label={`${camera.name} 미리보기`}>

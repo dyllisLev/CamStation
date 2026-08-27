@@ -248,6 +248,7 @@ func (server *Server) Handle(ctx context.Context, connectionID string, peer Peer
 			if writer == nil {
 				return server.errorResponse(ctx, request, ErrLoggingUnavailable), nil
 			}
+			record.LeaseFingerprint = opaqueViewerLogFingerprint(leaseID)
 			if err := writer(peer, record); err != nil {
 				return server.errorResponse(ctx, request, err), nil
 			}

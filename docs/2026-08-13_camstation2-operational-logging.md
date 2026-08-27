@@ -37,20 +37,18 @@ container 재시작 전에는 recorder 종료를 bounded parallel로 바꾸거�
 
 - schedule ID: `ab13f419`; 상태 `active`; 만료와 최대 실행 횟수 없음
 - cadence: 매일 `06:00 Asia/Seoul`; 감사 구간은 `[전날 06:00, 당일 06:00)`의 고정 24시간
-- 결과: 각 Paseo run 이력에 한국어 보고서로 남는다. 실제 영향 카메라명·stream명, 오류 구간·횟수·
-  복구 여부와 짧은 관련 원문을 포함하고 credential/token/Authorization 같은 비밀값만 제외한다.
-- 범위: 회전 daemon/watcher JSONL, read-only SQLite segment, container/timer/current API와 최신 파일
-  `ffprobe`를 교차한다. 서버에서 설명되지 않는 지속 Viewer 장애가 있을 때만 monitoring PC 로그를
-  공식 wrapper로 읽기 전용 대조한다.
-- 실행 상한: 로그 종류별 streaming pass, top-N 20개, 수집 15분, 전체 25분, ffprobe 최대 40개와 파일당
-  15초 timeout을 적용한다. 상한 밖의 자료는 누락을 숨기지 않고 판정 한계로 보고한다.
+- 결과: 각 Paseo run 이력에는 `문제 지점·예상 원인·06시 현재 상태`를 최대 3건, 짧은 한국어 문장으로
+  남긴다. 정상일 때는 공식 Viewer의 300초 이상 미수신 수와 현재 수신 수만으로 끝낸다.
+- 범위: 회전 daemon의 `playback`, Viewer heartbeat/renderer/stream 전이와 watcher 표본을 중심으로 본다.
+  카메라 media·recorder는 같은 구간의 source 정상 여부를 배제하는 최소 대조 증거로만 사용하며 카메라
+  연결 오류 자체는 결과에 싣지 않는다. 서버 증거만으로 지속 Viewer 장애 원인이 불명일 때만
+  `monitoring-pc`를 공식 wrapper로 읽기 전용 대조한다.
+- 실행 상한: daemon/watcher 종류별 단일 streaming pass, 사건 최대 3건, 수집 15분·전체 25분과 모든
+  외부 명령 timeout을 적용한다. 상한 밖의 자료는 정상으로 보간하지 않고 한 줄 증거 한계로 남긴다.
 - 안전 경계: schedule은 운영 서비스·container·DB·파일·PC·Git을 변경하거나 자동 복구하지 않는다.
 
-2026-08-14 clean run `e6d88c79-7408-44bd-b64b-d437ea069aca`는 21분 47초에 `succeeded`하고 보고서를
-schedule output에 저장했다. 이 실행은 daemon 608,315줄, watcher 547표본, SQLite와 40개 파일을 대조해
-06시 camera·stream·recorder·Viewer가 8/8이어도 최신 녹화 무결성은 5/8이고, `소방서1-recording`의
-rollover 정지와 소방서5·염소장 duration 이상, 약 14시간의 초기 로그 결손이 있어 `장애`로 판정했다.
-현재 `.19` 배포 후 첫 경계의 8/8 정상 증거는 위와 별개이며, 다음 24시간 감사에서 지속 여부를 재판정한다.
+2026-08-14 clean run `e6d88c79-7408-44bd-b64b-d437ea069aca`의 전체 NVR 감사 형식은 과거 기준선이며,
+현재 schedule의 간결한 서버↔Viewer 브리핑 형식으로 사용하지 않는다.
 
 조회 명령은 `paseo schedule inspect ab13f419`, 실행 이력은 `paseo schedule logs ab13f419`다.
 
@@ -248,6 +246,13 @@ healthy로 세지 않는다. 이때 `viewer_heartbeat_stale` 또는 `viewer_rend
 Viewer에 경고·오류가 있거나 장애 조사 중 debug를 켰다면 서버와 Viewer에 같은 playback `sessionId`가
 남는다. Viewer log에서 세션을 고른 뒤 서버에서 같은 값을 찾으면 signaling, first media, fallback,
 recovery, close를 한 흐름으로 연결할 수 있다.
+
+새 playback record는 `documentId`로 같은 renderer 문서의 여러 카메라 세션을 묶고, `surface`로
+`official_viewer`와 `viewer_browser`·운영자 미리보기를 분리한다. `candidateRole`, `attemptGeneration`,
+`resubscribeGeneration`, `terminalReason`은 fallback/probe와 늦은 callback, 명령 재구독, 실제 종료 원인을
+구분한다. Viewer 로컬 JSONL의 `leaseFingerprint`는 Service가 검증한 lease ID의 짧은 SHA-256 지문이며
+원본 lease ID를 기록하지 않는다. 이 필드가 없는 과거 revision은 `sessionId`·client IP까지만 근거로 삼고
+공식 Viewer 귀속을 확정하지 않는다.
 
 ```bash
 PLAYBACK_SESSION='playback-example1234'

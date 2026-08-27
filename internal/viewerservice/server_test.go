@@ -818,15 +818,20 @@ func TestDiagnosticEventRequiresLeaseValidatesFieldsAndWritesCorrelation(t *test
 	})
 	payload := leasePayload(t, grant.LeaseID, map[string]any{
 		"level": "debug", "component": "viewer.playback", "event": "first_media",
-		"sessionId": "playback-12345678", "streamName": "gate-live", "transport": "webrtc",
+		"sessionId": "playback-12345678", "documentId": "document-12345678",
+		"surface": "official_viewer", "streamName": "gate-live", "candidateRole": "primary",
+		"transport": "webrtc", "attemptGeneration": 3, "resubscribeGeneration": 1,
 		"phase": "playing", "attempt": 2, "durationMs": 42, "attemptElapsedMs": 21, "readyState": 4,
-		"reconnectCount": 1, "fallbackCount": 1, "usingFallback": true,
+		"reconnectCount": 1, "fallbackCount": 1, "usingFallback": true, "terminalReason": "primary_restored",
 	})
 	response, err := server.Handle(t.Context(), "connection-a", peer, Request{
 		Version: PipeProtocolVersion, RequestID: "diagnostic", Type: "diagnostic_event", Payload: payload,
 	})
 	if err != nil || !response.OK || got.Component != "viewer.playback" || got.Event != "first_media" ||
 		got.SessionID != "playback-12345678" || got.StreamName != "gate-live" || got.Attempt != 2 ||
+		got.DocumentID != "document-12345678" || got.LeaseFingerprint != opaqueViewerLogFingerprint(grant.LeaseID) ||
+		got.LeaseFingerprint == grant.LeaseID || got.Surface != "official_viewer" || got.CandidateRole != "primary" ||
+		got.AttemptGeneration != 3 || got.ResubscribeGeneration != 1 || got.TerminalReason != "primary_restored" ||
 		got.DurationMS != 42 || got.AttemptElapsedMS != 21 || got.ReadyState != 4 || !got.UsingFallback {
 		t.Fatalf("response=%+v record=%+v err=%v", response, got, err)
 	}
@@ -840,6 +845,16 @@ func TestDiagnosticEventRequiresLeaseValidatesFieldsAndWritesCorrelation(t *test
 	})
 	if err != nil || response.OK || response.ErrorCode != CodeInvalidRequest {
 		t.Fatalf("invalid response=%+v err=%v", response, err)
+	}
+	invalidContext := leasePayload(t, grant.LeaseID, map[string]any{
+		"level": "debug", "component": "viewer.playback", "event": "first_media",
+		"sessionId": "playback-12345678", "surface": "pretend_viewer", "streamName": "gate-live",
+	})
+	response, err = server.Handle(t.Context(), "connection-a", peer, Request{
+		Version: PipeProtocolVersion, RequestID: "invalid-context", Type: "diagnostic_event", Payload: invalidContext,
+	})
+	if err != nil || response.OK || response.ErrorCode != CodeInvalidRequest {
+		t.Fatalf("invalid context response=%+v err=%v", response, err)
 	}
 	if _, err := server.Handle(t.Context(), "connection-b", peer, Request{
 		Version: PipeProtocolVersion, RequestID: "foreign", Type: "diagnostic_event", Payload: payload,

@@ -6,7 +6,7 @@ import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import type { Camera, TimelineData } from "../../app/api";
 import { withAppBase } from "../../app/basePath";
-import { isViewerMode, viewerRoute } from "../../app/viewerMode";
+import { isViewerMode, livePlaybackSurface, viewerRoute } from "../../app/viewerMode";
 import {
   useCameras,
   useCreateLayout,
@@ -650,6 +650,7 @@ function LiveVideo({
 }) {
   const streamKey = streamNames.join("\u001f");
   const [resubscribeGeneration, setResubscribeGeneration] = useState(0);
+  const surface = livePlaybackSurface(window.location.search, Boolean(window.camstationViewer));
   const {
     videoRef,
     connected,
@@ -665,7 +666,7 @@ function LiveVideo({
     fallbackCount,
     resubscribeCount,
     errorCategory,
-  } = useWebRtcMseStream(streamNames, resubscribeGeneration);
+  } = useWebRtcMseStream(streamNames, resubscribeGeneration, "webrtc", surface);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;

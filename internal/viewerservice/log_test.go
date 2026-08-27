@@ -234,8 +234,10 @@ func TestLogViewerWritesStructuredLevelFilteredRecordThroughAssignedIdentity(t *
 	}
 	if err := logs.WriteViewer(peer, LogRecord{
 		Level: opslog.Debug, Component: "viewer.playback", Event: "first_media",
-		SessionID: "playback-12345678", StreamName: "gate-live", Transport: "webrtc",
-		Phase: "playing", Attempt: 2, DurationMS: 42,
+		SessionID: "playback-12345678", DocumentID: "document-12345678",
+		LeaseFingerprint: "0123456789abcdef", StreamName: "gate-live", Surface: "official_viewer",
+		CandidateRole: "primary", Transport: "webrtc", Phase: "playing", Attempt: 2,
+		AttemptGeneration: 3, ResubscribeGeneration: 1, TerminalReason: "primary_restored", DurationMS: 42,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +249,10 @@ func TestLogViewerWritesStructuredLevelFilteredRecordThroughAssignedIdentity(t *
 	decodeJSON(t, bytes.TrimSpace(data), &line)
 	if line.Level != "debug" || line.Component != "viewer.playback" || line.Event != "first_media" ||
 		line.SessionID != "playback-12345678" || line.StreamName != "gate-live" || line.Transport != "webrtc" ||
-		line.Phase != "playing" || line.Attempt != 2 || line.DurationMS != 42 {
+		line.DocumentID != "document-12345678" || line.LeaseFingerprint != "0123456789abcdef" ||
+		line.Surface != "official_viewer" || line.CandidateRole != "primary" ||
+		line.Phase != "playing" || line.Attempt != 2 || line.AttemptGeneration != 3 ||
+		line.ResubscribeGeneration != 1 || line.TerminalReason != "primary_restored" || line.DurationMS != 42 {
 		t.Fatalf("line=%+v", line)
 	}
 

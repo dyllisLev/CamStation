@@ -1,3 +1,70 @@
+# 2026-08-28 서버↔Viewer 재생 진단 운영 배포
+
+## 배포 사양과 안전 경계
+
+- 대상은 현재 clean source에서 만드는 immutable CamStation 서버 image와 `monitoring-pc`의 MSI 소유
+  Viewer/ViewerService다. watcher·카메라 설정·DB·녹화 파일·Windows client identity는 변경하지 않는다.
+- Viewer 진단 schema는 구버전 서버/Viewer와 양방향 호환을 유지한다. 따라서 Viewer를 먼저 전환해 화면과
+  8/8 수신을 확인하고, 그 뒤 서버를 전환한다. 각 artifact는 이전 버전으로 독립 rollback할 수 있어야 한다.
+- 직전 container recreate에서 45초 stop timeout과 recorder 직렬 종료가 녹화 partial을 손상시켰다.
+  현재 종료 경로와 실제 stop budget이 안전하다는 직접 증거 없이는 서버 container를 재생성하지 않는다.
+- 비밀값, URL credential, process 전체 argument는 출력하거나 배포 산출물에 추가하지 않는다. Windows 작업은
+  공식 target wrapper의 status/artifact/system/viewer-capture 모드만 사용한다.
+
+## 계획
+
+- [ ] Git diff·전체 시험·rollback image/MSI·운영 상태를 고정하고 배포 중단 기준을 확인한다.
+- [ ] exact clean commit에서 새 서버 image와 Viewer MSI를 만들고 revision/version/size/SHA-256을 고정한다.
+- [ ] Viewer Service를 공식 wrapper로 업그레이드하고 Service Running/Auto, 설정·identity 보존, 실제 화면과
+  Viewer 수신 8/8을 확인한다. 실패 시 기존 MSI로 원복한다.
+- [ ] 충분한 recorder 종료 예산을 증명한 뒤 서버 image만 전환하고 container/API/recorder/Viewer와 새
+  playback 진단 필드를 확인한다. 실패 시 기존 image/Compose로 원복한다.
+- [ ] 3회 연속 watcher 8/8, 새 segment 전진·파일 판독, Windows 잔여 작업 0을 확인하고 결과를 기록한다.
+
+## 합격/중단 기준
+
+- Viewer는 전환 후 90초 안에 Service Running/Automatic과 실제 화면 8/8, 30초 안에 갱신되는
+  Viewer/renderer/stream progress를 만족해야 한다.
+- 서버는 recorder 8개를 Docker stop budget 안에 clean 종료할 수 있어야 한다. 전환 후 90초 안에 healthy,
+  7분 안에 camera/stream/recorder/Viewer 8/8과 새 ready/current segment 전진을 만족해야 한다.
+- 최종 합격은 watcher 3표본 연속 Viewer receiving 8/8, container restart 0, 새 로그의
+  `surface=official_viewer`와 세션 귀속 필드 확인, Windows control/setup/capture/config 잔여 0이다.
+
+# 2026-08-28 서버↔Viewer 재생 진단·일일 감사 축소
+
+## 사양과 안전 경계
+
+- 이번 변경은 카메라 입력 자체가 아니라 서버 playback endpoint에서 공식 Viewer 화면까지의 재생 세션을
+  원인별로 구분하는 계측 패치다. 재생 정책·카메라 설정·운영 서비스는 변경하지 않는다.
+- 구조화 로그에는 문서 단위 익명 ID, 화면 종류, primary/fallback/probe 역할, 시도 세대, 명령 재구독
+  세대와 허용 목록 종료 사유만 추가한다. URL·SDP/ICE·credential·process argument는 수집하지 않는다.
+- Paseo schedule `ab13f419`는 `[전날 06:00, 당일 06:00) KST`와 읽기 전용 경계를 유지하되,
+  카메라/녹화는 source 정상 여부를 배제하는 최소 대조 증거로만 사용한다. 최종 브리핑은 문제, 예상 원인,
+  06시 현재 상태를 중심으로 짧게 제한한다.
+
+## 계획
+
+- [x] 기존 playback 진단의 식별 공백과 공식 Viewer/보조 화면 호출 경로를 확인한다.
+- [x] 변경 사양·검증 기준과 운영 무변경 경계를 이 문서에 고정한다.
+- [x] Web→서버 JSONL과 Viewer 로컬 JSONL에 새 bounded 진단 필드를 전달하고 validation·redaction 테스트를 보강한다.
+- [x] 공식 Viewer와 운영자/미리보기 화면이 정확한 `surface`를 보내도록 호출부를 연결한다.
+- [x] 운영 로그 문서와 사용자 피드백 교훈을 갱신한다.
+- [x] Web test/lint/build, Go focused/full test와 daemon build를 통과시킨다.
+- [x] schedule prompt를 간결한 서버↔Viewer 감사로 실제 갱신하고 재조회해 cadence·target 불변과 prompt 반영을 확인한다.
+
+## 검토
+
+- Web playback record에 `documentId`, `surface`, `candidateRole`, `attemptGeneration`,
+  `resubscribeGeneration`, `terminalReason`을 추가했다. 공식 native Viewer는 일반 `?viewer=1` 브라우저와
+  구분되며 Viewer Service는 raw lease ID 대신 16자리 `leaseFingerprint`만 로컬 JSONL에 붙인다.
+- `npm test` 89개, `npm run lint`, `npm run build`, focused Go 세 package와 `go test ./...`, 임시 경로
+  daemon build가 모두 통과했다. 생성 Web asset도 새 hash로 갱신했다.
+- schedule `ab13f419` prompt는 12,054자에서 3,983자로 줄였고 active, `0 6 * * * Asia/Seoul`, target
+  provider/model/cwd, 무제한 run/expiry 없음이 그대로임을 재조회했다. 출력은 최대 12줄의 문제·예상 원인·
+  현재 상태로 제한된다.
+- 운영 서버/Viewer에는 배포하지 않았다. 새 진단 필드는 이 source revision이 승인된 배포로 적용된 뒤부터
+  발생하며, schedule은 그 전 로그의 공식 Viewer 귀속을 확정하지 않도록 제한한다.
+
 # 2026-08-25 Viewer 관리 채널 자기복구 운영 배포
 
 ## 배포 사양과 안전 경계

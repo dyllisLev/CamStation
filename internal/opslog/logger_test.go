@@ -145,13 +145,19 @@ func TestLoggerWritesBoundedRedactedJSONRecord(t *testing.T) {
 	t.Cleanup(func() { _ = logger.Close() })
 
 	err = logger.Log(Info, "stream.live_warm", "worker_failed", Fields{
-		CorrelationID: "corr-1",
-		SessionID:     "playback-12345678",
-		ViewerID:      "password=viewer-secret",
-		StreamName:    "gate-live",
-		Attempt:       2,
-		RetryMS:       5000,
-		ErrorCode:     "input_timeout",
+		CorrelationID:         "corr-1",
+		SessionID:             "playback-12345678",
+		DocumentID:            "document-12345678",
+		ViewerID:              "password=viewer-secret",
+		StreamName:            "gate-live",
+		Surface:               "official_viewer",
+		CandidateRole:         "primary",
+		Attempt:               2,
+		AttemptGeneration:     3,
+		ResubscribeGeneration: 1,
+		RetryMS:               5000,
+		ErrorCode:             "input_timeout",
+		TerminalReason:        "setup_timeout",
 		Message: `open rtsp://admin:secret@10.0.0.2/live?token=abc failed password=hunter2 ` +
 			`at /var/lib/camstation/media/file.mp4 C:\ProgramData\CamStation\secret.log ` +
 			`from "/var/lib/CamStation Private/file.mp4" -----BEGIN PRIVATE KEY----- private-material -----END PRIVATE KEY----- ` +
@@ -171,7 +177,10 @@ func TestLoggerWritesBoundedRedactedJSONRecord(t *testing.T) {
 	}
 	if record.Timestamp != "2026-08-13T07:00:00.000000123Z" || record.Level != "info" ||
 		record.Component != "stream.live_warm" || record.Event != "worker_failed" ||
-		record.Attempt != 2 || record.RetryMS != 5000 || record.StreamName != "gate-live" {
+		record.Attempt != 2 || record.RetryMS != 5000 || record.StreamName != "gate-live" ||
+		record.DocumentID != "document-12345678" || record.Surface != "official_viewer" ||
+		record.CandidateRole != "primary" || record.AttemptGeneration != 3 ||
+		record.ResubscribeGeneration != 1 || record.TerminalReason != "setup_timeout" {
 		t.Fatalf("record=%+v", record)
 	}
 	lower := strings.ToLower(line)

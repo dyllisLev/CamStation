@@ -65,65 +65,77 @@ type Config struct {
 }
 
 type Fields struct {
-	CorrelationID      string
-	SessionID          string
-	ViewerID           string
-	ClientIP           string
-	CameraID           int64
-	StreamName         string
-	Filename           string
-	Transport          string
-	Phase              string
-	State              string
-	Attempt            int
-	DurationMS         int64
-	AttemptElapsedMS   int64
-	RetryMS            int64
-	Frame              int64
-	MediaTimeMS        int64
-	SizeBytes          int64
-	ReadyState         int
-	ReconnectCount     int
-	FallbackCount      int
-	UsingFallback      bool
-	MessageFingerprint string
-	SuppressedCount    int64
-	WindowMS           int64
-	ErrorCode          string
-	Message            string
+	CorrelationID         string
+	SessionID             string
+	DocumentID            string
+	ViewerID              string
+	ClientIP              string
+	CameraID              int64
+	StreamName            string
+	Surface               string
+	CandidateRole         string
+	Filename              string
+	Transport             string
+	Phase                 string
+	State                 string
+	Attempt               int
+	AttemptGeneration     int
+	ResubscribeGeneration int
+	DurationMS            int64
+	AttemptElapsedMS      int64
+	RetryMS               int64
+	Frame                 int64
+	MediaTimeMS           int64
+	SizeBytes             int64
+	ReadyState            int
+	ReconnectCount        int
+	FallbackCount         int
+	UsingFallback         bool
+	TerminalReason        string
+	MessageFingerprint    string
+	SuppressedCount       int64
+	WindowMS              int64
+	ErrorCode             string
+	Message               string
 }
 
 type Record struct {
-	Timestamp          string `json:"timestamp"`
-	Level              string `json:"level"`
-	Component          string `json:"component"`
-	Event              string `json:"event"`
-	CorrelationID      string `json:"correlationId,omitempty"`
-	SessionID          string `json:"sessionId,omitempty"`
-	ViewerID           string `json:"viewerId,omitempty"`
-	ClientIP           string `json:"clientIp,omitempty"`
-	CameraID           int64  `json:"cameraId,omitempty"`
-	StreamName         string `json:"streamName,omitempty"`
-	Filename           string `json:"filename,omitempty"`
-	Transport          string `json:"transport,omitempty"`
-	Phase              string `json:"phase,omitempty"`
-	State              string `json:"state,omitempty"`
-	Attempt            int    `json:"attempt,omitempty"`
-	DurationMS         int64  `json:"durationMs,omitempty"`
-	AttemptElapsedMS   int64  `json:"attemptElapsedMs,omitempty"`
-	RetryMS            int64  `json:"retryMs,omitempty"`
-	Frame              int64  `json:"frame,omitempty"`
-	MediaTimeMS        int64  `json:"mediaTimeMs,omitempty"`
-	SizeBytes          int64  `json:"sizeBytes,omitempty"`
-	ReadyState         int    `json:"readyState,omitempty"`
-	ReconnectCount     int    `json:"reconnectCount,omitempty"`
-	FallbackCount      int    `json:"fallbackCount,omitempty"`
-	UsingFallback      bool   `json:"usingFallback,omitempty"`
-	MessageFingerprint string `json:"messageFingerprint,omitempty"`
-	SuppressedCount    int64  `json:"suppressedCount,omitempty"`
-	WindowMS           int64  `json:"windowMs,omitempty"`
-	ErrorCode          string `json:"errorCode,omitempty"`
-	Message            string `json:"message,omitempty"`
+	Timestamp             string `json:"timestamp"`
+	Level                 string `json:"level"`
+	Component             string `json:"component"`
+	Event                 string `json:"event"`
+	CorrelationID         string `json:"correlationId,omitempty"`
+	SessionID             string `json:"sessionId,omitempty"`
+	DocumentID            string `json:"documentId,omitempty"`
+	ViewerID              string `json:"viewerId,omitempty"`
+	ClientIP              string `json:"clientIp,omitempty"`
+	CameraID              int64  `json:"cameraId,omitempty"`
+	StreamName            string `json:"streamName,omitempty"`
+	Surface               string `json:"surface,omitempty"`
+	CandidateRole         string `json:"candidateRole,omitempty"`
+	Filename              string `json:"filename,omitempty"`
+	Transport             string `json:"transport,omitempty"`
+	Phase                 string `json:"phase,omitempty"`
+	State                 string `json:"state,omitempty"`
+	Attempt               int    `json:"attempt,omitempty"`
+	AttemptGeneration     int    `json:"attemptGeneration,omitempty"`
+	ResubscribeGeneration int    `json:"resubscribeGeneration,omitempty"`
+	DurationMS            int64  `json:"durationMs,omitempty"`
+	AttemptElapsedMS      int64  `json:"attemptElapsedMs,omitempty"`
+	RetryMS               int64  `json:"retryMs,omitempty"`
+	Frame                 int64  `json:"frame,omitempty"`
+	MediaTimeMS           int64  `json:"mediaTimeMs,omitempty"`
+	SizeBytes             int64  `json:"sizeBytes,omitempty"`
+	ReadyState            int    `json:"readyState,omitempty"`
+	ReconnectCount        int    `json:"reconnectCount,omitempty"`
+	FallbackCount         int    `json:"fallbackCount,omitempty"`
+	UsingFallback         bool   `json:"usingFallback,omitempty"`
+	TerminalReason        string `json:"terminalReason,omitempty"`
+	MessageFingerprint    string `json:"messageFingerprint,omitempty"`
+	SuppressedCount       int64  `json:"suppressedCount,omitempty"`
+	WindowMS              int64  `json:"windowMs,omitempty"`
+	ErrorCode             string `json:"errorCode,omitempty"`
+	Message               string `json:"message,omitempty"`
 }
 
 type Logger struct {
@@ -271,36 +283,42 @@ func (logger *Logger) Log(level Level, component, event string, fields Fields) e
 	}
 	now := logger.now().UTC()
 	record := Record{
-		Timestamp:          now.Format(time.RFC3339Nano),
-		Level:              level.String(),
-		Component:          boundedText(component, 96),
-		Event:              boundedText(event, 96),
-		CorrelationID:      boundedSafeText(fields.CorrelationID, 128),
-		SessionID:          boundedSafeText(fields.SessionID, 128),
-		ViewerID:           boundedSafeText(fields.ViewerID, 128),
-		ClientIP:           boundedSafeText(fields.ClientIP, 64),
-		CameraID:           fields.CameraID,
-		StreamName:         boundedSafeText(fields.StreamName, 128),
-		Filename:           boundedSafeText(fields.Filename, 255),
-		Transport:          boundedSafeText(fields.Transport, 32),
-		Phase:              boundedSafeText(fields.Phase, 64),
-		State:              boundedSafeText(fields.State, 64),
-		Attempt:            fields.Attempt,
-		DurationMS:         fields.DurationMS,
-		AttemptElapsedMS:   fields.AttemptElapsedMS,
-		RetryMS:            fields.RetryMS,
-		Frame:              fields.Frame,
-		MediaTimeMS:        fields.MediaTimeMS,
-		SizeBytes:          fields.SizeBytes,
-		ReadyState:         fields.ReadyState,
-		ReconnectCount:     fields.ReconnectCount,
-		FallbackCount:      fields.FallbackCount,
-		UsingFallback:      fields.UsingFallback,
-		MessageFingerprint: boundedSafeText(fields.MessageFingerprint, 32),
-		SuppressedCount:    fields.SuppressedCount,
-		WindowMS:           fields.WindowMS,
-		ErrorCode:          boundedSafeText(fields.ErrorCode, 96),
-		Message:            boundedText(SanitizeMessage(fields.Message), 2048),
+		Timestamp:             now.Format(time.RFC3339Nano),
+		Level:                 level.String(),
+		Component:             boundedText(component, 96),
+		Event:                 boundedText(event, 96),
+		CorrelationID:         boundedSafeText(fields.CorrelationID, 128),
+		SessionID:             boundedSafeText(fields.SessionID, 128),
+		DocumentID:            boundedSafeText(fields.DocumentID, 128),
+		ViewerID:              boundedSafeText(fields.ViewerID, 128),
+		ClientIP:              boundedSafeText(fields.ClientIP, 64),
+		CameraID:              fields.CameraID,
+		StreamName:            boundedSafeText(fields.StreamName, 128),
+		Surface:               boundedSafeText(fields.Surface, 32),
+		CandidateRole:         boundedSafeText(fields.CandidateRole, 32),
+		Filename:              boundedSafeText(fields.Filename, 255),
+		Transport:             boundedSafeText(fields.Transport, 32),
+		Phase:                 boundedSafeText(fields.Phase, 64),
+		State:                 boundedSafeText(fields.State, 64),
+		Attempt:               fields.Attempt,
+		AttemptGeneration:     fields.AttemptGeneration,
+		ResubscribeGeneration: fields.ResubscribeGeneration,
+		DurationMS:            fields.DurationMS,
+		AttemptElapsedMS:      fields.AttemptElapsedMS,
+		RetryMS:               fields.RetryMS,
+		Frame:                 fields.Frame,
+		MediaTimeMS:           fields.MediaTimeMS,
+		SizeBytes:             fields.SizeBytes,
+		ReadyState:            fields.ReadyState,
+		ReconnectCount:        fields.ReconnectCount,
+		FallbackCount:         fields.FallbackCount,
+		UsingFallback:         fields.UsingFallback,
+		TerminalReason:        boundedSafeText(fields.TerminalReason, 64),
+		MessageFingerprint:    boundedSafeText(fields.MessageFingerprint, 32),
+		SuppressedCount:       fields.SuppressedCount,
+		WindowMS:              fields.WindowMS,
+		ErrorCode:             boundedSafeText(fields.ErrorCode, 96),
+		Message:               boundedText(SanitizeMessage(fields.Message), 2048),
 	}
 	if record.Component == "" || record.Event == "" {
 		return errors.New("log component and event are required")

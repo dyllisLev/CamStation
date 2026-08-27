@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   reportPlaybackDiagnostic,
   type PlaybackDiagnosticEvent,
+  type PlaybackCandidateRole,
+  type PlaybackSurface,
+  type PlaybackTerminalReason,
 } from "../../app/playbackDiagnosticsApi";
 import { openPlaybackConnection, probePlaybackProgress } from "./playbackConnection";
 import {
@@ -59,14 +62,26 @@ type AttemptOptions = {
   readonly phase: PlaybackPhase;
 };
 
+type PlaybackEffectInputs = {
+  readonly candidateKey: string;
+  readonly preferredTransport: PlaybackTransport;
+  readonly resubscribeGeneration: number;
+  readonly surface: PlaybackSurface;
+};
+
+const playbackDocumentId = newPlaybackDocumentId();
+
 export function useWebRtcMseStream(
   streamNames: string | readonly string[],
   resubscribeGeneration = 0,
   preferredTransport: PlaybackTransport = "webrtc",
+  surface: PlaybackSurface = "unknown",
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const input = typeof streamNames === "string" ? [streamNames] : streamNames;
   const candidateKey = input.filter(Boolean).join("\u001f");
+  const currentEffectInputs = useRef<PlaybackEffectInputs>({ candidateKey, preferredTransport, resubscribeGeneration, surface });
+  currentEffectInputs.current = { candidateKey, preferredTransport, resubscribeGeneration, surface };
   const [playback, setPlayback] = useState<PlaybackState>(() => initialPlayback(input[0] ?? "", preferredTransport));
 
   useEffect(() => {
@@ -74,6 +89,7 @@ export function useWebRtcMseStream(
     const videoElement = videoRef.current;
     if (!videoElement || candidates.length === 0) return;
     const video: HTMLVideoElement = videoElement;
+    const effectInputs: PlaybackEffectInputs = { candidateKey, preferredTransport, resubscribeGeneration, surface };
 
     const recovery = new PlaybackRecovery(candidates);
     const recoveryProbeScheduler = new PlaybackProbeScheduler();
@@ -111,20 +127,28 @@ export function useWebRtcMseStream(
         readonly transport?: PlaybackTransport;
         readonly attempt?: number;
         readonly usingFallback?: boolean;
+        readonly candidateRole?: PlaybackCandidateRole;
+        readonly terminalReason?: PlaybackTerminalReason;
       } = {},
     ) {
       const now = Date.now();
       const streamName = override.streamName ?? activeAttempt.streamName;
       reportPlaybackDiagnostic({
         sessionId,
+        documentId: playbackDocumentId,
+        surface,
         event,
         streamName,
+        candidateRole: override.candidateRole ?? (streamName === candidates[0] ? "primary" : "fallback"),
         transport: override.transport ?? activeAttempt.transport,
         phase: override.phase ?? diagnosticPhase,
         attempt: override.attempt ?? activeAttempt.attempt,
+        attemptGeneration: generation,
+        resubscribeGeneration,
         elapsedMs: now - sessionStartedAt,
         attemptElapsedMs: now - attemptStartedAt,
         errorCategory: override.errorCategory ?? "none",
+        ...(override.terminalReason ? { terminalReason: override.terminalReason } : {}),
         readyState: video.readyState,
         usingFallback: override.usingFallback ?? streamName !== candidates[0],
         reconnectCount: counts.reconnect,
@@ -184,6 +208,7 @@ export function useWebRtcMseStream(
       emitDiagnostic("episode_exhausted", {
         phase: "cooldown",
         errorCategory: "episode_exhausted",
+        terminalReason: "retry_budget_exhausted",
       });
       generation++;
       teardownAttempt();
@@ -237,9 +262,17 @@ export function useWebRtcMseStream(
       if (destroyed || token !== generation) return;
       const now = Date.now();
       const failurePhase = errorCategory === "media_stall" ? "stalled" : diagnosticPhase;
-      emitDiagnostic("attempt_failed", { phase: failurePhase, errorCategory });
+      emitDiagnostic("attempt_failed", {
+        phase: failurePhase,
+        errorCategory,
+        terminalReason: playbackFailureTerminalReason(errorCategory),
+      });
       if (errorCategory === "unsupported") {
-        emitDiagnostic("unsupported", { phase: "unsupported", errorCategory });
+        emitDiagnostic("unsupported", {
+          phase: "unsupported",
+          errorCategory,
+          terminalReason: "unsupported",
+        });
       }
       recovery.recordFailure(now);
       generation++;
@@ -266,6 +299,7 @@ export function useWebRtcMseStream(
             phase: "fallback",
             attempt: activeAttempt.attempt + 1,
             usingFallback: true,
+            candidateRole: "primary_probe",
           });
         },
         onProbeFailed: (transport) => {
@@ -275,6 +309,7 @@ export function useWebRtcMseStream(
             phase: "fallback",
             attempt: activeAttempt.attempt + 1,
             usingFallback: true,
+            candidateRole: "primary_probe",
           });
         },
         onRecovered: (transport) => {
@@ -285,6 +320,8 @@ export function useWebRtcMseStream(
             phase: "recovering",
             attempt: activeAttempt.attempt + 1,
             usingFallback: true,
+            candidateRole: "primary_probe",
+            terminalReason: "primary_restored",
           });
           counts.reconnect++;
           recovery.resetForPrimaryPromotion();
@@ -393,14 +430,16 @@ export function useWebRtcMseStream(
     video.addEventListener("timeupdate", handleTimeUpdate);
     beginAttempt(activeAttempt);
     return () => {
-      emitDiagnostic("session_closed");
+      emitDiagnostic("session_closed", {
+        terminalReason: playbackSessionCloseReason(effectInputs, currentEffectInputs.current),
+      });
       destroyed = true;
       generation++;
       stopPresentedFrameObservation();
       video.removeEventListener("timeupdate", handleTimeUpdate);
       teardownAttempt();
     };
-  }, [candidateKey, preferredTransport, resubscribeGeneration]);
+  }, [candidateKey, preferredTransport, resubscribeGeneration, surface]);
 
   return {
     videoRef,
@@ -438,4 +477,38 @@ function newPlaybackSessionId() {
     return `playback-${crypto.randomUUID()}`;
   }
   return `playback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function newPlaybackDocumentId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `document-${crypto.randomUUID()}`;
+  }
+  return `document-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function playbackFailureTerminalReason(errorCategory: PlaybackErrorCategory): PlaybackTerminalReason | undefined {
+  switch (errorCategory) {
+    case "setup_timeout":
+    case "media_stall":
+    case "socket":
+    case "signaling":
+    case "media":
+    case "unsupported":
+      return errorCategory;
+    case "episode_exhausted":
+      return "retry_budget_exhausted";
+    case "none":
+      return undefined;
+  }
+}
+
+function playbackSessionCloseReason(
+  started: PlaybackEffectInputs,
+  current: PlaybackEffectInputs,
+): PlaybackTerminalReason {
+  if (started.resubscribeGeneration !== current.resubscribeGeneration) return "resubscribe_requested";
+  if (started.candidateKey !== current.candidateKey) return "candidates_changed";
+  if (started.preferredTransport !== current.preferredTransport) return "transport_changed";
+  if (started.surface !== current.surface) return "surface_changed";
+  return "component_unmounted";
 }
