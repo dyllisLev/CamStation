@@ -1,32 +1,57 @@
 # Implementation Status
 
-Last updated: 2026-08-25
+Last updated: 2026-08-28
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
 ## Current Branch And Remote
 
 - Repository: `https://github.com/dyllisLev/CamStation.git`
-- Active branch used for this work: `main`; Viewer self-healing is `0f5a2de` and the clock-skew-aware
-  operational watcher is `a8b3eae`
+- Active branch used for this work: `main`; server↔Viewer playback attribution is `fe9cbfd`, Viewer
+  self-healing is `0f5a2de`, and the clock-skew-aware operational watcher is `a8b3eae`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 server/Viewer source revision: `0f5a2de5979e6a1dadf2ef7122b75a087fc52beb`
-- Current deployed image: `camstation:2.0.0-rc.20260825.21-viewer-self-healing`, image ID
-  `sha256:2db36aabe704b290dd904bd1ba251fa43b3e863d9b00c85f2df5504b69d60179`
+- Current deployed 2.0 server/Viewer source revision: `fe9cbfdab67e16751c6b6df25163b9ecdb45b382`
+- Current deployed image: `camstation:2.0.0-rc.20260828.22-playback-attribution`, image ID
+  `sha256:0bbcdefcc638824ebef4722a523e6389fa7c12b2446ba9a2977ef620e1e7116c`
 - Current deployed watcher source revision: `a8b3eae`; installed SHA-256
   `a1c62ea1e8f835eb9ea787ffb50f745e54ab1b80018eb1f4bd34004b8abceafa`
 - Current active nginx Viewer WebSocket policy: exact `/player/api/ws` read/send timeout `365d`, general
   proxy timeout unchanged at `3600s`; active runtime include SHA-256
   `3bf5ba6259569e2eb2f3381ee61ba01de43362ea28792137d29d208422325ae3`
-- Current monitoring PC Viewer: 2.0.28 built from `0f5a2de`; ProductCode
-  `{B9E81E3B-D3C7-4957-B851-C0FECCE955B8}`; Service Running/Auto; local logging `warn`, 5 MiB × 3;
+- Current monitoring PC Viewer: 2.0.29 built from `fe9cbfd`; ProductCode
+  `{947837A4-1BE1-40FC-B68F-48EBBDE928CB}`; Service Running/Auto; local logging `warn`, 5 MiB × 3;
   first visible window starts maximized
 - Management runtime URL: `http://10.0.0.26:18081/`
 - Monitoring-LAN runtime URL: `http://192.168.0.160:18081/`
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-08-28 server↔Viewer playback attribution and focused daily audit (deployed)
+
+- Playback diagnostics now carry a bounded anonymous document ID, surface, primary/fallback/probe role,
+  attempt generation, resubscribe generation and allowlisted terminal reason. The native bridge is the only
+  source of `official_viewer`; a browser opened with `?viewer=1` remains `viewer_browser`. Viewer Service local
+  JSONL correlates the active management lease only through a 16-hex SHA-256 prefix, never the raw lease ID.
+- The production Viewer was upgraded to unsigned internal MSI 2.0.29 with its configuration, client identity and
+  Service environment unchanged. The production server was then moved to immutable image `.22`; the container
+  became healthy in nine seconds with restart count zero. A fresh official Viewer document emitted all eight
+  `attempt_started` and `playback_started` chains with one document ID, `surface=official_viewer`, primary role and
+  generation 1; first media arrived in roughly one to two seconds per stream.
+- Final exact-window evidence shows all eight live tiles, while watcher samples report camera/live/recorder 8/8,
+  Viewer healthy 1/1 and receiving 8/8. The first five-minute watcher warning window contained only rollout
+  shutdown/recovery records and then cleared; no post-steady warn/error record was observed.
+- The GUI capture helper exposed a deployment-tool defect: `LaunchAndCapture` started Viewer with the one-shot
+  evidence directory as its inherited working directory, preventing verified cleanup. The helper now pins the
+  Viewer working directory to its installation directory; its regression test passes, the updated helper is synced,
+  and the exact remote evidence residue was removed.
+- Increasing Compose stop grace from 45 to 120 seconds prevented Docker from killing the daemon, but did not make
+  the pre-deploy partial files safe. The clean 49-second shutdown closed eight rows with present, size-matching
+  files, yet six fail `ffprobe`. Source review shows one stop request can signal the same FFmpeg process from both
+  `stopWorker` and `waitForProcess`; stop grace alone therefore cannot certify MP4 finalization. This is a rollout
+  transaction defect, not a `.22` steady-state regression: all eight segments created after `.22` startup closed at
+  08:00 KST with matching files, A/V tracks and successful `ffprobe`, and the next eight current files are growing.
 
 ### 2026-08-25 Viewer management self-healing, presented-frame hardening and clock-skew-safe watcher (deployed)
 

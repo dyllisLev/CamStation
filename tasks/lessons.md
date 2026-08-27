@@ -1,5 +1,17 @@
 # Lessons
 
+## 2026-08-28 — 배포 합격은 stop timeout이 아니라 subprocess와 파일의 실제 종료 계약으로 증명한다
+
+- Docker stop grace가 전체 종료 시간보다 길고 daemon이 exit 0이어도 녹화 파일이 정상이라는 뜻은 아니다.
+  종료로 닫힌 각 ready 파일의 존재·DB 크기뿐 아니라 `ffprobe`와 A/V track을 확인하고, 배포 전 partial과
+  새 revision이 자연 rollover한 파일을 분리해 transaction 결함과 steady-state 회귀를 구분한다.
+- 하나의 stop channel을 받은 경로에서 상위 `stopWorker`와 하위 `waitForProcess`가 같은 child process에
+  각각 signal을 보내지 않게 한다. signal 소유자는 한 계층으로 제한하고, 여러 worker는 stop 요청을 먼저
+  fan-out한 뒤 bounded wait해야 한다. container grace 증가는 이 중복 signal 결함의 해결책이 아니다.
+- interactive one-shot task에서 `Start-Process`는 task의 임시 working directory를 자식에게 상속한다.
+  장기 실행 Viewer는 설치 디렉터리를 명시적으로 `WorkingDirectory`로 고정해야 evidence directory cleanup을
+  막지 않는다. 화면 수집 합격에는 task 삭제뿐 아니라 exact remote run directory 제거도 포함한다.
+
 ## 2026-08-28 — 일일 안정화 감사는 제품 경계를 좁히고 결론을 먼저 쓴다
 
 - 사용자가 서버↔Viewer 재생 안정화를 매일 확인하려는 경우 전체 NVR 감사를 반복하지 않는다. 카메라

@@ -13,13 +13,13 @@
 
 ## 계획
 
-- [ ] Git diff·전체 시험·rollback image/MSI·운영 상태를 고정하고 배포 중단 기준을 확인한다.
-- [ ] exact clean commit에서 새 서버 image와 Viewer MSI를 만들고 revision/version/size/SHA-256을 고정한다.
-- [ ] Viewer Service를 공식 wrapper로 업그레이드하고 Service Running/Auto, 설정·identity 보존, 실제 화면과
+- [x] Git diff·전체 시험·rollback image/MSI·운영 상태를 고정하고 배포 중단 기준을 확인한다.
+- [x] exact clean commit에서 새 서버 image와 Viewer MSI를 만들고 revision/version/size/SHA-256을 고정한다.
+- [x] Viewer Service를 공식 wrapper로 업그레이드하고 Service Running/Auto, 설정·identity 보존, 실제 화면과
   Viewer 수신 8/8을 확인한다. 실패 시 기존 MSI로 원복한다.
-- [ ] 충분한 recorder 종료 예산을 증명한 뒤 서버 image만 전환하고 container/API/recorder/Viewer와 새
-  playback 진단 필드를 확인한다. 실패 시 기존 image/Compose로 원복한다.
-- [ ] 3회 연속 watcher 8/8, 새 segment 전진·파일 판독, Windows 잔여 작업 0을 확인하고 결과를 기록한다.
+- [x] recorder stop grace를 120초로 전환해 서버 image만 기동하고, 실제 종료 파일 무결성까지 포함해
+  container/API/recorder/Viewer와 새 playback 진단 필드를 확인한다.
+- [x] 3회 연속 watcher 8/8, 새 segment 전진·파일 판독, Windows 잔여 작업 0을 확인하고 결과를 기록한다.
 
 ## 합격/중단 기준
 
@@ -29,6 +29,32 @@
   7분 안에 camera/stream/recorder/Viewer 8/8과 새 ready/current segment 전진을 만족해야 한다.
 - 최종 합격은 watcher 3표본 연속 Viewer receiving 8/8, container restart 0, 새 로그의
   `surface=official_viewer`와 세션 귀속 필드 확인, Windows control/setup/capture/config 잔여 0이다.
+
+## Review
+
+- clean source `fe9cbfdab67e16751c6b6df25163b9ecdb45b382`에서 서버 image
+  `camstation:2.0.0-rc.20260828.22-playback-attribution`과 Viewer 2.0.29 MSI를 만들었다. image ID는
+  `sha256:0bbcdefcc638824ebef4722a523e6389fa7c12b2446ba9a2977ef620e1e7116c`, MSI ProductCode는
+  `{947837A4-1BE1-40FC-B68F-48EBBDE928CB}`, 크기 125,906,944 bytes, SHA-256은
+  `bfb61b49e102b0d1b7ab7aa5b5379700a709cd82c6bf022d27b455be6eb3dcfe`다. 이전 image와 2.0.28 MSI,
+  root-only Compose 백업을 rollback 자산으로 보존했다.
+- Viewer 첫 설치 시 종료 중 process path 정규화 race가 발생했으나 2.0.28 자동 rollback과 설정·identity
+  보존을 확인했다. exact-path 검사를 보정한 두 번째 transaction은 exit 0으로 2.0.29를 설치했고 Service는
+  Running/Auto다. `LaunchAndCapture`가 임시 working directory를 Viewer에 상속해 cleanup을 막은 별도
+  harness 결함은 설치 디렉터리 `WorkingDirectory` 고정과 회귀시험으로 수정·sync했다. exact residue는
+  제거됐고 최종 control/setup/capture/config task, driver TCP listener, firewall rule은 모두 0이다.
+- 서버는 2026-08-28 07:54:11 KST에 shutdown을 시작해 49초 뒤 clean exit했고, `.22` container는
+  07:55:00 KST 시작·07:55:09 KST healthy가 됐다. stop grace는 120초이며 restart 0이다. fresh official
+  Viewer document에서 8개 stream 모두 `surface=official_viewer`, 동일 anonymous `documentId`, primary,
+  generation 1로 기록됐고 0.89~2.20초 안에 first media/playback started로 수렴했다.
+- 종료 budget은 Docker 강제 종료를 막았지만 recorder 파일 합격에는 부족했다. pre-deploy 07:30 partial
+  8개는 모두 존재·DB 크기 일치지만 2개만 ffprobe 성공하고 6개가 실패했다. source상 `stopWorker`와
+  `waitForProcess`가 같은 stop에서 FFmpeg에 중복 terminate할 수 있어 단순 grace 증가로 해결되지 않는
+  배포 transaction 결함이다. 추가 restart는 하지 않았다. 반면 `.22`가 시작 후 만든 07:55~08:00 파일
+  8개는 전부 존재·크기 일치·A/V track·ffprobe 성공이고 08:00 current 8개는 모두 양수 크기로 증가한다.
+- 08:00:53·08:01:56·08:02:57 KST watcher는 세 번 연속 status ok, alert 0, camera/live/recorder 8/8,
+  Viewer healthy 1/1·receiving 8/8, logger error/warn 0이다. 08:01:32 KST exact-window에서도 실제 8개
+  영상이 확인됐다. 서버 임시 전송물 4개는 검증 후 제거했으며 local build archive로 복구 가능하다.
 
 # 2026-08-28 서버↔Viewer 재생 진단·일일 감사 축소
 

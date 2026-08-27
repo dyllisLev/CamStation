@@ -27,6 +27,7 @@ test("Windows GUI worker captures only the verified Viewer window and omits fiel
   const source = await readFile(workerURL, "utf8");
 
   assert.match(source, /C:\\Program Files\\CamStation Viewer\\CamStationViewer\.exe/u);
+  assert.match(source, /Start-Process\s+-FilePath\s+\$viewerPath\s+-WorkingDirectory\s+\(Split-Path\s+-Parent\s+\$viewerPath\)/u);
   assert.match(source, /SessionId\s*-ne\s*\$sessionId/u);
   assert.match(source, /GetWindowRect/u);
   assert.match(source, /IsIconic/u);

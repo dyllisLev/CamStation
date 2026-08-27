@@ -112,7 +112,7 @@ public static class CamStationGuiNative {
 
   $windowProcess = Find-ViewerWindowProcess -SessionId $sessionId
   if ($Operation -eq "LaunchAndCapture" -and $null -eq $windowProcess) {
-    $launched = Start-Process -FilePath $viewerPath -PassThru
+    $launched = Start-Process -FilePath $viewerPath -WorkingDirectory (Split-Path -Parent $viewerPath) -PassThru
     $launchedProcessId = $launched.Id
   }
 
