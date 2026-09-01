@@ -185,7 +185,9 @@ media snapshot이 검증·보호된 뒤 다음 one-time gate를 적용한다.
 segment와 첫 Actions 교체가 닫은 06:45 KST의 여덟 segment는 DB/file size가 일치하지만 `ffprobe`에
 실패한다. stdin `q` 진단 canary 한 구간도 당시 60초 FFmpeg scheduler wait 때문에 20초 fallback 후
 강제 종료됐다. 이는 image layer나 기존 recording volume의 교체가 아니라, 각 교체 순간 쓰던 partial
-MP4가 trailer/index를 쓰지 못한 알려진 cutover 손실이다.
+MP4가 trailer/index를 쓰지 못한 알려진 cutover 손실이다. 최종 07:12 KST hard cutover에서 열려 있던
+최대 여덟 구간도 운영자 지시에 따라 개별 `ffprobe`를 배포 차단 조건으로 검사하지 않았으며, 해당 전환
+구간은 보존 대상 녹화로 간주하지 않는다.
 
 최종 production release는 `sha-44fb80422d81190a303837b942322cff99d66e7a`이며 FFmpeg scheduler
 interval과 application log interval을 분리한다. 운영자가 hard cutover를 다시 명시하지 않은 일반 배포는

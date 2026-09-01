@@ -44,7 +44,9 @@ This document records the current implementation state so the next session can c
   recording interruption, recorder workers were stopped and the prebuilt Forgejo image was deployed through
   OpenShip. Three segments opened at 06:37 KST, eight segments closed by the first Actions replacement at 06:45 KST,
   and one shutdown diagnostic canary fail `ffprobe`. These are acknowledged partial-file losses at hard-cutover
-  boundaries; the persistent media bind mount itself was not replaced.
+  boundaries; the persistent media bind mount itself was not replaced. Up to eight active segments from the final
+  07:12 KST hard cutover were intentionally not used as a deployment gate and should also be treated as discarded
+  cutover-window data rather than verified recordings.
 - Bootstrap deployment `dep_mEfHp_BAona-cg55` reached `ready` with the exact commit image, two unchanged persistent
   mounts, Docker health `healthy`, restart count zero, SQLite `quick_check=ok`, camera/live/recorder 8/8 and Viewer
   healthy 1/1 receiving 8/8. Both physical LOC endpoints and the external `cctv2` TLS endpoint passed, while the
