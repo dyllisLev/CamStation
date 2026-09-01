@@ -3,6 +3,7 @@ package recorder
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"syscall"
 	"time"
@@ -14,6 +15,8 @@ const (
 	statusPaused               = "paused"
 	defaultDiskStopUsedPercent = 90.0
 	defaultDiskCheckInterval   = 15 * time.Second
+	recorderQuitTimeout        = 10 * time.Second
+	recorderTerminateTimeout   = 10 * time.Second
 )
 
 var ErrRecordingDiskFull = errors.New("recording disk usage limit reached")
@@ -108,23 +111,59 @@ func statfsDiskUsage(path string) (DiskUsage, error) {
 	}, nil
 }
 
-func (w *worker) waitForProcess(cmd *exec.Cmd, waitDone <-chan error) error {
+func (w *worker) waitForProcess(cmd *exec.Cmd, stdin io.WriteCloser, waitDone <-chan error) error {
+	if stdin != nil {
+		defer stdin.Close()
+	}
 	ticker := time.NewTicker(w.manager.diskGuard.checkInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-w.stop:
-			terminate(cmd, 10*time.Second)
-			<-waitDone
+			_ = stopRecorderProcess(cmd, stdin, waitDone)
 			return nil
 		case err := <-waitDone:
 			return err
 		case <-ticker.C:
 			if err := w.manager.checkDiskCapacity(); err != nil {
-				terminate(cmd, 10*time.Second)
-				<-waitDone
+				_ = stopRecorderProcess(cmd, stdin, waitDone)
 				return err
 			}
 		}
+	}
+}
+
+func stopRecorderProcess(cmd *exec.Cmd, stdin io.WriteCloser, waitDone <-chan error) error {
+	if stdin != nil {
+		_, writeErr := io.WriteString(stdin, "q\n")
+		_ = stdin.Close()
+		if writeErr == nil {
+			if err, exited := waitForProcessExit(waitDone, recorderQuitTimeout); exited {
+				return err
+			}
+		}
+	}
+
+	if cmd.Process != nil {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
+	if err, exited := waitForProcessExit(waitDone, recorderTerminateTimeout); exited {
+		return err
+	}
+
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	return <-waitDone
+}
+
+func waitForProcessExit(waitDone <-chan error, timeout time.Duration) (error, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-waitDone:
+		return err, true
+	case <-timer.C:
+		return nil, false
 	}
 }

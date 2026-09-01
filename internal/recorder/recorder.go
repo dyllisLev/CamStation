@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"camstation/internal/opslog"
@@ -413,9 +412,19 @@ func (w *worker) runOnce(attempt int) error {
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = stdout.Close()
 		return fmt.Errorf("open recorder stderr pipe: %w", err)
 	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return fmt.Errorf("open recorder stdin pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
 		return fmt.Errorf("start recorder ffmpeg: %w", err)
 	}
 	w.mu.Lock()
@@ -435,7 +444,7 @@ func (w *worker) runOnce(attempt int) error {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
-	if err = w.waitForProcess(cmd, waitDone); err != nil {
+	if err = w.waitForProcess(cmd, stdin, waitDone); err != nil {
 		if errors.Is(err, ErrRecordingDiskFull) {
 			w.setState(statusPaused, "", err.Error())
 		}
@@ -672,6 +681,7 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 	outputPattern := filepath.Join(outputDir, filenamePattern)
 	args := []string{
 		"ffmpeg", "-y", "-hide_banner", "-loglevel", "info",
+		"-stdin",
 		"-nostats",
 		"-stats_period", "60", "-progress", "pipe:1",
 		"-fflags", "+genpts",
@@ -709,7 +719,7 @@ func recorderErrorCode(err error) string {
 		return "disk_full"
 	case strings.Contains(message, "start recorder ffmpeg"):
 		return "process_start_failed"
-	case strings.Contains(message, "progress pipe") || strings.Contains(message, "stderr pipe"):
+	case strings.Contains(message, "progress pipe") || strings.Contains(message, "stderr pipe") || strings.Contains(message, "stdin pipe"):
 		return "process_pipe_failed"
 	default:
 		return "process_exited"
@@ -812,19 +822,6 @@ func fileSize(path string) *int64 {
 	}
 	size := info.Size()
 	return &size
-}
-
-func terminate(cmd *exec.Cmd, timeout time.Duration) {
-	if cmd.Process == nil || cmd.ProcessState != nil {
-		return
-	}
-	process := cmd.Process
-	_ = process.Signal(syscall.SIGTERM)
-	time.AfterFunc(timeout, func() {
-		if cmd.ProcessState == nil {
-			_ = process.Kill()
-		}
-	})
 }
 
 func kst() *time.Location {

@@ -28,6 +28,9 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	if !strings.Contains(joined, "-stats_period 60 -progress pipe:1") {
 		t.Fatalf("expected bounded ffmpeg progress output, got %s", joined)
 	}
+	if !strings.Contains(joined, "-stdin") || strings.Contains(joined, "-nostdin") {
+		t.Fatalf("expected explicit stdin control for graceful recorder shutdown, got %s", joined)
+	}
 }
 
 func TestBuildFFmpegArgsUsesWallclockPtsForStableSegmentation(t *testing.T) {

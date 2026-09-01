@@ -57,7 +57,7 @@ func TestRecorderTerminatesRunningProcess_whenDiskUsageCrossesLimit(t *testing.T
 	go func() { waitDone <- cmd.Wait() }()
 
 	// When: the worker monitors the process.
-	err := worker.waitForProcess(cmd, waitDone)
+	err := worker.waitForProcess(cmd, nil, waitDone)
 
 	// Then: the disk guard terminates the process and reports the disk-full sentinel.
 	if !errors.Is(err, ErrRecordingDiskFull) {
@@ -65,6 +65,39 @@ func TestRecorderTerminatesRunningProcess_whenDiskUsageCrossesLimit(t *testing.T
 	}
 	if err := cmd.Process.Signal(syscall.Signal(0)); err == nil {
 		t.Fatal("recorder process is still running, want terminated")
+	}
+}
+
+func TestRecorderQuitsRunningProcessThroughStdinBeforeSignals(t *testing.T) {
+	// Given: a recorder-like process ignores TERM but exits cleanly when it receives FFmpeg's q command.
+	root := t.TempDir()
+	manager := New(nil, root, root, 1)
+	worker := &worker{manager: manager, stop: make(chan struct{})}
+	cmd := exec.Command("sh", "-c", `trap '' TERM; IFS= read -r line; [ "$line" = q ]`)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("open command stdin: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start recorder-like command: %v", err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	close(worker.stop)
+
+	// When: the worker owns the shutdown request.
+	startedAt := time.Now()
+	err = worker.waitForProcess(cmd, stdin, waitDone)
+
+	// Then: q closes the process immediately and no signal timeout is consumed.
+	if err != nil {
+		t.Fatalf("waitForProcess() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("stdin shutdown took %s, want less than one second", elapsed)
+	}
+	if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
+		t.Fatalf("process state = %#v, want clean exit", cmd.ProcessState)
 	}
 }
 
