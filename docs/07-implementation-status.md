@@ -34,16 +34,17 @@ This document records the current implementation state so the next session can c
 - Recorder shutdown now broadcasts the stop request to every active worker before waiting for any one worker.
   Only `waitForProcess` owns termination of a running FFmpeg process; `stopWorker` no longer sends a second signal.
   Concurrent stop callers are idempotent. Focused recorder tests and the full `go test ./...` suite pass.
-- This removes the former `worker count × 10s` serial shutdown budget and targets completion inside OpenShip's
-  30-second previous-container teardown wait while retaining Docker `stopGracePeriod: 120s` as the outer safety
-  ceiling. Focused race tests pass; eight real FFmpeg segment processes stopped concurrently in under one second
-  and all eight MP4 files retained video/audio tracks and passed `ffprobe`. OpenShip-like empty runtime stop/remove
-  repetitions completed in 0.8–4.8 seconds.
+- This removes the former `worker count × 10s` serial shutdown budget while retaining Docker
+  `stopGracePeriod: 120s` as the outer safety ceiling. Production then exposed a second boundary: FFmpeg 8 can
+  wait on its scheduler for the configured 60-second progress period, so stdin `q` and TERM were not observed by
+  a 10-second shutdown gate. The final source uses a one-second FFmpeg progress interval while throttling
+  application progress logs independently to one minute. Full Go and focused recorder race tests pass.
 - The full media snapshot and SQLite/config rollback assets were verified before cutover. The legacy image did not
   finish all recorder FFmpeg processes within the bounded TERM gate; after the operator explicitly accepted a
   recording interruption, recorder workers were stopped and the prebuilt Forgejo image was deployed through
-  OpenShip. Three segments opened at 06:37 KST during that legacy handoff fail `ffprobe`; no recent DB row was marked
-  failed, and the loss is confined to that acknowledged cutover window.
+  OpenShip. Three segments opened at 06:37 KST, eight segments closed by the first Actions replacement at 06:45 KST,
+  and one shutdown diagnostic canary fail `ffprobe`. These are acknowledged partial-file losses at hard-cutover
+  boundaries; the persistent media bind mount itself was not replaced.
 - Bootstrap deployment `dep_mEfHp_BAona-cg55` reached `ready` with the exact commit image, two unchanged persistent
   mounts, Docker health `healthy`, restart count zero, SQLite `quick_check=ok`, camera/live/recorder 8/8 and Viewer
   healthy 1/1 receiving 8/8. Both physical LOC endpoints and the external `cctv2` TLS endpoint passed, while the
@@ -52,6 +53,14 @@ This document records the current implementation state so the next session can c
   unexposed, and project route strategy is `container-ip`; this avoids an unnecessary OpenResty takeover prompt
   while preserving the existing LOC proxy path. The operational watcher now targets the stable OpenShip container
   name `openship-camstation-camstation` and its enabled timer passed an immediate one-shot run.
+- Forgejo Actions run 15 deployed exact commit `44fb80422d81190a303837b942322cff99d66e7a`; OpenShip deployment
+  `dep_aNIW8dWPeZl-peY_` reached `ready`. The container is healthy with restart count zero, camera/live/recorder are
+  8/8, SQLite quick check is `ok` with zero foreign-key errors, both LOC endpoints and the external TLS endpoint
+  pass, and the operational watcher reports status `ok` with Viewer healthy 1/1 receiving 8/8. Exact Viewer-window
+  evidence also visibly shows all eight tiles after automatic reconnect; no Viewer restart was required.
+- The legacy GitHub release updater timer is disabled and inactive. Its pre-change units/state are preserved in
+  root-only backup `github-updater-disabled-20260902T071958+0900`. GitHub has no workflow files or Actions run for
+  the deployed SHA and remains the Forgejo one-way Push Mirror target.
 
 ### 2026-08-28 server↔Viewer playback attribution and focused daily audit (deployed)
 

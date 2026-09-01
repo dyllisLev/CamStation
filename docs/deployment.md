@@ -84,8 +84,14 @@ CamStation application 자체에는 별도 로그인 또는 HTTP authentication 
 OpenShip service의 `advanced.stopGracePeriod`는 `120s`다. 현재 OpenShip Docker 배포기는 고정 port
 서비스의 이전 container 정리를 30초까지만 기다리므로 CamStation daemon은 그보다 먼저 종료되어야 한다.
 Recorder 종료는 모든 worker에 stop을 먼저 fan-out한 후 대기하며, 실행 중 FFmpeg의 종료 신호는 각
-worker의 process wait 경로 한 곳에서만 보낸다. 새 release의 실제 재배포 합격에는 전체 daemon 종료가
-30초 안에 끝나고 종료 시 닫힌 모든 recording 파일이 `ffprobe`를 통과하는 것이 포함된다.
+worker의 process wait 경로 한 곳에서만 보낸다. FFmpeg stdin에는 먼저 `q`를 보내고 TERM/KILL은 bounded
+fallback으로만 사용한다. FFmpeg 8 main scheduler가 종료 요청을 오래 보류하지 않도록 progress interval은
+1초이며, application이 progress 운영 로그를 60초 간격으로 별도 제한한다.
+
+녹화 연속성이 필요한 일반 재배포는 종료 시 닫힌 파일의 `ffprobe` 판독까지 합격 조건으로 삼는다. 반면
+운영자가 진행 중 구간 손실을 명시적으로 허용한 hard cutover에서는 그 partial 구간을 배포 차단 조건으로
+사용하지 않는다. 이 경우에도 기존 media bind mount를 바꾸지 않고, 새 container에서 recorder 8/8과 새
+segment 8개가 다시 생성되는지는 반드시 확인한다.
 
 OpenShip 0.6.9는 Compose의 root filesystem `read_only`, `cap_drop`, `security_opt`를 service model에
 보존하지 않는다. 따라서 기존 Compose의 세 Docker-level hardening flag는 OpenShip container에 직접
@@ -175,13 +181,16 @@ media snapshot이 검증·보호된 뒤 다음 one-time gate를 적용한다.
    container를 반복 재시작하지 말고 보존한 기존 image/config로 복구한다.
 
 2026-09-02 실제 전환에서는 legacy FFmpeg 일부가 TERM을 30초 안에 처리하지 못했다. 사용자가 실시간
-녹화 중단을 명시적으로 허용한 뒤 recorder worker를 0으로 정지하고 전환을 진행했다. 06:37 KST에 열린
-segment 세 개는 size가 DB와 일치하지만 `ffprobe`에 실패한다. 이후 exact Forgejo image는 recorder 8/8,
-새 active segment 8/8 증가와 최근 DB `failed` 0으로 수렴했다. 이 세 파일은 legacy handoff 구간의 알려진
-데이터 손실이며 정상 운영 segment로 간주하지 않는다.
+녹화 중단을 명시적으로 허용한 뒤 recorder worker를 0으로 정지하고 전환을 진행했다. 06:37 KST의 세
+segment와 첫 Actions 교체가 닫은 06:45 KST의 여덟 segment는 DB/file size가 일치하지만 `ffprobe`에
+실패한다. stdin `q` 진단 canary 한 구간도 당시 60초 FFmpeg scheduler wait 때문에 20초 fallback 후
+강제 종료됐다. 이는 image layer나 기존 recording volume의 교체가 아니라, 각 교체 순간 쓰던 partial
+MP4가 trailer/index를 쓰지 못한 알려진 cutover 손실이다.
 
-새 Forgejo image에는 fan-out/single-signal 수정이 포함되므로 이 절차는 최초 legacy handoff에만 쓴다.
-이후 배포는 Forgejo workflow와 아래 검증 절차만 사용한다.
+최종 production release는 `sha-44fb80422d81190a303837b942322cff99d66e7a`이며 FFmpeg scheduler
+interval과 application log interval을 분리한다. 운영자가 hard cutover를 다시 명시하지 않은 일반 배포는
+아래 종료 무결성 gate를 적용한다. 명시적으로 허용된 hard cutover는 기존 partial을 반복 검사하며 교체를
+지연하지 않고, 새 container의 recorder/Viewer/health 복구를 기준으로 마감한다.
 
 최초 전환에서는 recorder handoff 시각을 Actions build 완료 시각에 맞춰 추측하지 않는다. 준비 commit을
 먼저 Forgejo `main`에 게시하되 workflow 파일은 그 다음 commit에서 활성화하고, 보호된 bootstrap
@@ -193,6 +202,9 @@ push한다. 그 push의 Actions 배포가 같은 persistent data로 다시 `read
 최초 bootstrap image `sha-2d83b8f8c9388e70dbd3a2f934cc5c372fb2ec55`의 OpenShip deployment는
 `dep_mEfHp_BAona-cg55`이며 `ready`로 검증됐다. 실제 container의 안정 이름은
 `openship-camstation-camstation`이다. Host operational watcher는 이 이름을 사용한다.
+
+최종 hard-cutover deployment는 `dep_aNIW8dWPeZl-peY_`이며 `ready`다. 실제 container는 exact
+`sha-44fb80422d81190a303837b942322cff99d66e7a`, Docker health `healthy`, restart count 0으로 확인됐다.
 
 ## 배포 흐름
 
@@ -231,7 +243,17 @@ Forgejo/OpenShip 성공 표시는 application 합격의 일부일 뿐이다. 매
    유지되는지 확인한다.
 9. 재배포 직전 열려 있던 각 recording이 ready 상태로 닫혔고 실제 파일 크기가 DB와 일치하며, 영상·음성
    track과 `ffprobe` 무결성을 통과하는지 확인한다. OpenShip log에서 이전 container 정리 timeout이나
-   host-port 충돌이 없어야 한다.
+   host-port 충돌이 없어야 한다. 단, 운영자가 진행 중 녹화 구간 손실을 명시적으로 허용한 hard cutover는
+   해당 partial을 예외로 기록하고 새 container가 만든 8개 recording의 생성·증가를 대신 확인한다.
+
+## GitHub mirror와 legacy updater
+
+GitHub 저장소에는 production workflow가 없으며 Forgejo의 단방향 Push Mirror 대상으로만 유지한다.
+운영 host의 기존 GitHub release updater인 `camstation-updater.timer`는 최종 OpenShip health 확인 뒤
+2026-09-02 07:19:58 KST에 disabled/inactive로 전환했다. 변경 전 unit과 systemd state는 root 전용
+`/root/camstation-backups/github-updater-disabled-20260902T071958+0900`에 보존했다. 긴급히 기존 updater를
+복구해야 할 때는 먼저 OpenShip 배포를 중단한 뒤 `systemctl enable --now camstation-updater.timer`로
+되돌리고, Forgejo와 GitHub가 동시에 production을 변경하지 않는지 확인한다.
 
 ## 장애 확인 순서
 
