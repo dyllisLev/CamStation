@@ -18,6 +18,7 @@ The goal is a single-program NVR:
 - `docs/04-cctv2-test-plan.md` — real-camera testing plan for cctv2
 - `docs/05-next-decisions.md` — decisions to make before coding
 - `docs/07-implementation-status.md` — current implemented/not-implemented task status and handoff notes
+- `docs/deployment.md` — Forgejo Registry and OpenShip production deployment, verification, backup, and rollback runbook
 - `docs/2026-08-09_cctv-1x-to-2x-production-cutover-strategy.md` — same-host 1.x-to-2.0 production replacement, validation, and rollback strategy
 - `docs/2026-08-09_cctv-2x-cutover-readiness-report.md` — implemented preparation, current Go/No-Go matrix, and exact next actions
 - `docs/2026-08-09_camstation2-docker-canary-operations.md` — running home-camera Docker canary, `/viewer` URL, verification, maintenance, and rollback

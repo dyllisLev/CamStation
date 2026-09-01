@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
 
 FROM ghcr.io/alexxit/go2rtc:1.9.14@sha256:675c318b23c06fd862a61d262240c9a63436b4050d177ffc68a32710d9e05bae AS go2rtc-binary
 
-FROM alpine:3.23.2@sha256:865b95f46d98cf867a156fe4a135ad3fe50d2056aa3f25ed31662dff6da4eb62
+FROM alpine:3.23.2@sha256:865b95f46d98cf867a156fe4a135ad3fe50d2056aa3f25ed31662dff6da4eb62 AS runtime
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
@@ -36,8 +36,8 @@ LABEL org.opencontainers.image.title="CamStation" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.source="https://github.com/dyllisLev/CamStation" \
-      org.opencontainers.image.url="https://github.com/dyllisLev/CamStation" \
+      org.opencontainers.image.source="https://git.loc.hmini.me/dyllislev/CamStation" \
+      org.opencontainers.image.url="https://git.loc.hmini.me/dyllislev/CamStation" \
       org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.base.name="alpine:3.23.2@sha256:865b95f46d98cf867a156fe4a135ad3fe50d2056aa3f25ed31662dff6da4eb62" \
       io.camstation.go2rtc.image="ghcr.io/alexxit/go2rtc:1.9.14@sha256:675c318b23c06fd862a61d262240c9a63436b4050d177ffc68a32710d9e05bae" \
@@ -51,8 +51,8 @@ RUN apk add --no-cache \
       tzdata=2026c-r0 && \
     addgroup -S -g 10001 camstation && \
     adduser -S -D -H -u 10001 -G camstation camstation && \
+    install -d -o root -g root -m 0755 /var/lib/camstation && \
     install -d -o camstation -g camstation -m 0750 \
-      /var/lib/camstation \
       /var/lib/camstation/data \
       /var/lib/camstation/media \
       /var/lib/camstation/media/recordings \

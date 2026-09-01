@@ -2,7 +2,9 @@ package recorder
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"camstation/internal/store"
 )
@@ -70,6 +72,96 @@ func TestSuspendActiveReturnsOnlyRunningWorkers(t *testing.T) {
 	}
 	if len(manager.workers) != 0 {
 		t.Fatalf("workers still active: %+v", manager.workers)
+	}
+}
+
+func TestSuspendActiveRequestsEveryWorkerStopBeforeWaiting(t *testing.T) {
+	manager := New(nil, t.TempDir(), t.TempDir(), 5)
+	firstStop := make(chan struct{})
+	secondStop := make(chan struct{})
+	firstDone := make(chan struct{})
+	secondDone := make(chan struct{})
+	var closeFirst, closeSecond sync.Once
+	t.Cleanup(func() {
+		closeFirst.Do(func() { close(firstDone) })
+		closeSecond.Do(func() { close(secondDone) })
+	})
+
+	first := &worker{
+		camera: store.Camera{ID: 1, StreamName: "first"}, stop: firstStop, done: firstDone,
+	}
+	second := &worker{
+		camera: store.Camera{ID: 2, StreamName: "second"}, stop: secondStop, done: secondDone,
+	}
+	manager.workers[first.camera.StreamName] = first
+	manager.workers[second.camera.StreamName] = second
+
+	returned := make(chan []store.Camera, 1)
+	go func() {
+		returned <- manager.SuspendActive()
+	}()
+
+	deadline := time.After(time.Second)
+	firstRequested := false
+	secondRequested := false
+	for !firstRequested || !secondRequested {
+		select {
+		case <-firstStop:
+			firstRequested = true
+		default:
+		}
+		select {
+		case <-secondStop:
+			secondRequested = true
+		default:
+		}
+		if firstRequested && secondRequested {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("SuspendActive waited for one worker before requesting every worker to stop")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	closeFirst.Do(func() { close(firstDone) })
+	closeSecond.Do(func() { close(secondDone) })
+	select {
+	case active := <-returned:
+		if len(active) != 2 {
+			t.Fatalf("active = %+v, want both workers", active)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SuspendActive did not return after every worker stopped")
+	}
+}
+
+func TestStopWorkerAllowsConcurrentStopRequests(t *testing.T) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	w := &worker{stop: stop, done: done}
+	returned := make(chan struct{}, 2)
+
+	for range 2 {
+		go func() {
+			w.stopWorker()
+			returned <- struct{}{}
+		}()
+	}
+
+	select {
+	case <-stop:
+	case <-time.After(time.Second):
+		t.Fatal("stop was not requested")
+	}
+	close(done)
+	for range 2 {
+		select {
+		case <-returned:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent stop request did not return")
+		}
 	}
 }
 

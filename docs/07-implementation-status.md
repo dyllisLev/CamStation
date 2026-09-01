@@ -1,12 +1,12 @@
 # Implementation Status
 
-Last updated: 2026-08-28
+Last updated: 2026-09-01
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
 ## Current Branch And Remote
 
-- Repository: `https://github.com/dyllisLev/CamStation.git`
+- Primary repository: `https://git.loc.hmini.me/dyllislev/CamStation`; GitHub is the one-way Push Mirror target
 - Active branch used for this work: `main`; server↔Viewer playback attribution is `fe9cbfd`, Viewer
   self-healing is `0f5a2de`, and the clock-skew-aware operational watcher is `a8b3eae`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
@@ -27,6 +27,21 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-09-01 bounded recorder shutdown and Forgejo/OpenShip release path (source verified; rollout pending)
+
+- Recorder shutdown now broadcasts the stop request to every active worker before waiting for any one worker.
+  Only `waitForProcess` owns termination of a running FFmpeg process; `stopWorker` no longer sends a second signal.
+  Concurrent stop callers are idempotent. Focused recorder tests and the full `go test ./...` suite pass.
+- This removes the former `worker count × 10s` serial shutdown budget and targets completion inside OpenShip's
+  30-second previous-container teardown wait while retaining Docker `stopGracePeriod: 120s` as the outer safety
+  ceiling. Focused race tests pass; eight real FFmpeg segment processes stopped concurrently in under one second
+  and all eight MP4 files retained video/audio tracks and passed `ffprobe`. OpenShip-like empty runtime stop/remove
+  repetitions completed in 0.8–4.8 seconds. Production rollout is still gated on the full media backup and a
+  controlled first handoff.
+- Rollout acceptance must measure the actual eight-worker daemon stop, confirm there is no OpenShip teardown
+  timeout or fixed-port collision, and verify every shutdown-closed recording with DB size matching and
+  `ffprobe`. Until those checks pass, this item remains source-verified rather than deployed.
 
 ### 2026-08-28 server↔Viewer playback attribution and focused daily audit (deployed)
 

@@ -69,6 +69,7 @@ type worker struct {
 	current        string
 	lastErr        string
 	stop           chan struct{}
+	stopOnce       sync.Once
 	done           chan struct{}
 	proc           *exec.Cmd
 	currentSegment *segmentRef
@@ -134,9 +135,7 @@ func (m *Manager) Reconcile(cameras []store.Camera) {
 	}
 	m.mu.Unlock()
 
-	for _, worker := range stale {
-		worker.stopWorker()
-	}
+	stopWorkers(stale)
 }
 
 func (m *Manager) Start(camera store.Camera) error {
@@ -241,10 +240,17 @@ func (m *Manager) SuspendActive() []store.Camera {
 		cameras = append(cameras, worker.camera)
 	}
 	m.mu.Unlock()
-	for _, worker := range workers {
-		worker.stopWorker()
-	}
+	stopWorkers(workers)
 	return cameras
+}
+
+func stopWorkers(workers []*worker) {
+	for _, worker := range workers {
+		worker.requestStop()
+	}
+	for _, worker := range workers {
+		worker.waitStopped()
+	}
 }
 
 func (m *Manager) RestoreActive(cameras []store.Camera) error {
@@ -610,13 +616,17 @@ func (w *worker) currentRef() *segmentRef {
 }
 
 func (w *worker) stopWorker() {
-	close(w.stop)
-	w.mu.Lock()
-	cmd := w.proc
-	w.mu.Unlock()
-	if cmd != nil {
-		terminate(cmd, 10*time.Second)
-	}
+	w.requestStop()
+	w.waitStopped()
+}
+
+func (w *worker) requestStop() {
+	w.stopOnce.Do(func() {
+		close(w.stop)
+	})
+}
+
+func (w *worker) waitStopped() {
 	<-w.done
 }
 
