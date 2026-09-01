@@ -25,8 +25,8 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	if !strings.Contains(joined, "%Y-%m-%d_%H-%M.mp4") {
 		t.Fatalf("expected dated strftime output pattern, got %s", joined)
 	}
-	if !strings.Contains(joined, "-stats_period 60 -progress pipe:1") {
-		t.Fatalf("expected bounded ffmpeg progress output, got %s", joined)
+	if !strings.Contains(joined, "-stats_period 1 -progress pipe:1") {
+		t.Fatalf("expected shutdown-responsive ffmpeg progress interval, got %s", joined)
 	}
 	if !strings.Contains(joined, "-stdin") || strings.Contains(joined, "-nostdin") {
 		t.Fatalf("expected explicit stdin control for graceful recorder shutdown, got %s", joined)
@@ -52,7 +52,7 @@ func TestRecorderProgressLogsFirstMediaThenDebugProgress(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = logger.Close() })
 	worker := &worker{camera: store.Camera{ID: 7, StreamName: "gate-recording"}, manager: &Manager{logger: logger}}
-	progress := strings.NewReader("frame=30\nout_time_us=2000000\nprogress=continue\nframe=900\nout_time_us=60000000\nprogress=continue\n")
+	progress := strings.NewReader("frame=30\nout_time_us=2000000\nprogress=continue\nframe=300\nout_time_us=10000000\nprogress=continue\nframe=930\nout_time_us=62000000\nprogress=continue\n")
 	if err := worker.watchProgress(progress, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRecorderProgressLogsFirstMediaThenDebugProgress(t *testing.T) {
 	if len(records) != 2 || records[0].Event != "media_started" || records[0].Level != "info" ||
 		records[0].CameraID != 7 || records[0].StreamName != "gate-recording" || records[0].Attempt != 2 ||
 		records[0].Frame != 30 || records[0].MediaTimeMS != 2000 ||
-		records[1].Event != "media_progress" || records[1].Level != "debug" || records[1].Frame != 900 {
+		records[1].Event != "media_progress" || records[1].Level != "debug" || records[1].Frame != 930 {
 		t.Fatalf("records=%+v", records)
 	}
 }

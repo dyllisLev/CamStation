@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	statusRunning           = "running"
-	statusStopped           = "stopped"
-	ffmpegRepeatLogInterval = time.Minute
+	statusRunning             = "running"
+	statusStopped             = "stopped"
+	ffmpegRepeatLogInterval   = time.Minute
+	ffmpegProgressLogInterval = time.Minute
 )
 
 type Manager struct {
@@ -494,7 +495,7 @@ func (w *worker) watchStderr(stderr io.Reader, attempt int) error {
 func (w *worker) watchProgress(progress io.Reader, attempt int) error {
 	scanner := bufio.NewScanner(progress)
 	scanner.Buffer(make([]byte, 1024), 64<<10)
-	var frame, mediaTimeUS int64
+	var frame, mediaTimeUS, lastLoggedMediaTimeUS int64
 	started := false
 	for scanner.Scan() {
 		key, value, ok := strings.Cut(scanner.Text(), "=")
@@ -514,7 +515,10 @@ func (w *worker) watchProgress(progress io.Reader, attempt int) error {
 			if !started {
 				started = true
 				event, level = "media_started", opslog.Info
+			} else if mediaTimeUS >= lastLoggedMediaTimeUS && mediaTimeUS-lastLoggedMediaTimeUS < ffmpegProgressLogInterval.Microseconds() {
+				continue
 			}
+			lastLoggedMediaTimeUS = mediaTimeUS
 			w.manager.logFFmpeg(level, event, opslog.Fields{
 				CameraID: w.camera.ID, StreamName: w.camera.StreamName, Attempt: attempt,
 				Frame: frame, MediaTimeMS: mediaTimeUS / 1000,
@@ -683,7 +687,7 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		"ffmpeg", "-y", "-hide_banner", "-loglevel", "info",
 		"-stdin",
 		"-nostats",
-		"-stats_period", "60", "-progress", "pipe:1",
+		"-stats_period", "1", "-progress", "pipe:1",
 		"-fflags", "+genpts",
 		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
