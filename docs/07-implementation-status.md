@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -11,9 +11,10 @@ This document records the current implementation state so the next session can c
   self-healing is `0f5a2de`, and the clock-skew-aware operational watcher is `a8b3eae`
 - Latest Windows Viewer implementation commit before publication: `ff0dca0 fix(viewer-app): hold updater ownership during recovery`
 - Latest Viewer registry fix: `00005dd fix(viewers): remove synthetic heartbeat registration`
-- Current deployed 2.0 server/Viewer source revision: `fe9cbfdab67e16751c6b6df25163b9ecdb45b382`
-- Current deployed image: `camstation:2.0.0-rc.20260828.22-playback-attribution`, image ID
-  `sha256:0bbcdefcc638824ebef4722a523e6389fa7c12b2446ba9a2977ef620e1e7116c`
+- Initial Forgejo/OpenShip bootstrap release: commit `2d83b8f8c9388e70dbd3a2f934cc5c372fb2ec55`, image
+  `git.loc.hmini.me/dyllislev/camstation:sha-2d83b8f8c9388e70dbd3a2f934cc5c372fb2ec55`.
+  Production thereafter follows the latest successful Forgejo `main` Actions deployment; the live exact SHA is
+  verified from the image label and OpenShip deployment rather than hard-coded here.
 - Current deployed watcher source revision: `a8b3eae`; installed SHA-256
   `a1c62ea1e8f835eb9ea787ffb50f745e54ab1b80018eb1f4bd34004b8abceafa`
 - Current active nginx Viewer WebSocket policy: exact `/player/api/ws` read/send timeout `365d`, general
@@ -28,7 +29,7 @@ This document records the current implementation state so the next session can c
 
 ## Implemented
 
-### 2026-09-01 bounded recorder shutdown and Forgejo/OpenShip release path (source verified; rollout pending)
+### 2026-09-02 bounded recorder shutdown and Forgejo/OpenShip release path (deployed)
 
 - Recorder shutdown now broadcasts the stop request to every active worker before waiting for any one worker.
   Only `waitForProcess` owns termination of a running FFmpeg process; `stopWorker` no longer sends a second signal.
@@ -37,11 +38,20 @@ This document records the current implementation state so the next session can c
   30-second previous-container teardown wait while retaining Docker `stopGracePeriod: 120s` as the outer safety
   ceiling. Focused race tests pass; eight real FFmpeg segment processes stopped concurrently in under one second
   and all eight MP4 files retained video/audio tracks and passed `ffprobe`. OpenShip-like empty runtime stop/remove
-  repetitions completed in 0.8–4.8 seconds. Production rollout is still gated on the full media backup and a
-  controlled first handoff.
-- Rollout acceptance must measure the actual eight-worker daemon stop, confirm there is no OpenShip teardown
-  timeout or fixed-port collision, and verify every shutdown-closed recording with DB size matching and
-  `ffprobe`. Until those checks pass, this item remains source-verified rather than deployed.
+  repetitions completed in 0.8–4.8 seconds.
+- The full media snapshot and SQLite/config rollback assets were verified before cutover. The legacy image did not
+  finish all recorder FFmpeg processes within the bounded TERM gate; after the operator explicitly accepted a
+  recording interruption, recorder workers were stopped and the prebuilt Forgejo image was deployed through
+  OpenShip. Three segments opened at 06:37 KST during that legacy handoff fail `ffprobe`; no recent DB row was marked
+  failed, and the loss is confined to that acknowledged cutover window.
+- Bootstrap deployment `dep_mEfHp_BAona-cg55` reached `ready` with the exact commit image, two unchanged persistent
+  mounts, Docker health `healthy`, restart count zero, SQLite `quick_check=ok`, camera/live/recorder 8/8 and Viewer
+  healthy 1/1 receiving 8/8. Both physical LOC endpoints and the external `cctv2` TLS endpoint passed, while the
+  legacy `cctv` domain remained HTTP 200.
+- The target's existing nginx remains authoritative. OpenShip managed routes are unused, every service is
+  unexposed, and project route strategy is `container-ip`; this avoids an unnecessary OpenResty takeover prompt
+  while preserving the existing LOC proxy path. The operational watcher now targets the stable OpenShip container
+  name `openship-camstation-camstation` and its enabled timer passed an immediate one-shot run.
 
 ### 2026-08-28 server↔Viewer playback attribution and focused daily audit (deployed)
 

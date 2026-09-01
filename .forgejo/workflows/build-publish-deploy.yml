@@ -1,0 +1,353 @@
+name: Build, publish, and deploy production
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: camstation-production
+  cancel-in-progress: false
+
+jobs:
+  publish-and-deploy:
+    name: Build, publish, and deploy production
+    runs-on: self-hosted
+    timeout-minutes: 180
+    env:
+      REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+      IMAGE_REPOSITORY: ${{ vars.IMAGE_REPOSITORY }}
+      IMAGE_REF: ${{ vars.IMAGE_REPOSITORY }}:sha-${{ forgejo.sha }}
+      DEPLOY_SHA: ${{ forgejo.sha }}
+      OPENSHIP_API_URL: ${{ vars.OPENSHIP_API_URL }}
+      OPENSHIP_PROJECT_ID: ${{ vars.OPENSHIP_PROJECT_ID }}
+      OPENSHIP_SERVICE_IDS: ${{ vars.OPENSHIP_SERVICE_IDS }}
+      OPENSHIP_MAX_POLL_ATTEMPTS: 180
+      OPENSHIP_POLL_INTERVAL_SECONDS: 5
+      OPENSHIP_POLL_TIMEOUT_SECONDS: 900
+      OPENSHIP_REQUEST_TIMEOUT_SECONDS: 30
+      BUILD_LOCK: /var/lock/openship-ci-build.lock
+
+    steps:
+      - name: Check out code
+        uses: https://data.forgejo.org/actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build and upload production image
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for required_name in REGISTRY_HOST IMAGE_REPOSITORY REGISTRY_USERNAME REGISTRY_TOKEN DEPLOY_SHA; do
+            if [ -z "${!required_name:-}" ]; then
+              printf 'Required Forgejo configuration is empty: %s\n' "$required_name" >&2
+              exit 1
+            fi
+          done
+          if [[ ! $DEPLOY_SHA =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'DEPLOY_SHA must be a full lowercase commit SHA\n' >&2
+            exit 1
+          fi
+          expected_image_ref="${IMAGE_REPOSITORY}:sha-${DEPLOY_SHA}"
+          if [ "$IMAGE_REF" != "$expected_image_ref" ]; then
+            printf 'IMAGE_REF does not match the immutable SHA tag contract\n' >&2
+            exit 1
+          fi
+
+          export -n REGISTRY_USERNAME REGISTRY_TOKEN
+          build_date=$(git show -s --format=%cI "$DEPLOY_SHA")
+          exec 9>"$BUILD_LOCK"
+          flock --timeout 7200 9
+
+          export DOCKER_CONFIG
+          docker_config_parent=${RUNNER_TEMP:?RUNNER_TEMP is required}
+          docker_config_parent=${docker_config_parent%/}
+          case "$docker_config_parent" in
+            ""|/) printf 'RUNNER_TEMP must be a scoped directory\n' >&2; exit 1 ;;
+          esac
+          DOCKER_CONFIG=$(mktemp -d "$docker_config_parent/camstation-docker-config.XXXXXX")
+          cleanup_docker_config() {
+            docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true
+            case "$DOCKER_CONFIG" in
+              "$docker_config_parent"/camstation-docker-config.*) rm -rf -- "$DOCKER_CONFIG" ;;
+              *) printf 'Refusing to remove unexpected Docker config path\n' >&2 ;;
+            esac
+          }
+          trap cleanup_docker_config EXIT
+
+          exec {registry_token_fd}<<<"$REGISTRY_TOKEN"
+          unset REGISTRY_TOKEN
+          docker login "$REGISTRY_HOST" --username "$REGISTRY_USERNAME" \
+            --password-stdin <&"$registry_token_fd"
+          exec {registry_token_fd}<&-
+          unset REGISTRY_USERNAME
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --target runtime \
+            --build-arg "VERSION=sha-${DEPLOY_SHA}" \
+            --build-arg "VCS_REF=${DEPLOY_SHA}" \
+            --build-arg "BUILD_DATE=${build_date}" \
+            --tag "$IMAGE_REF" \
+            --push \
+            .
+          docker buildx imagetools inspect "$IMAGE_REF" >/dev/null
+
+      - name: Deploy image with OpenShip
+        env:
+          OPENSHIP_TOKEN: ${{ secrets.OPENSHIP_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          for required_name in IMAGE_REF DEPLOY_SHA OPENSHIP_API_URL OPENSHIP_PROJECT_ID OPENSHIP_SERVICE_IDS OPENSHIP_TOKEN; do
+            if [ -z "${!required_name:-}" ]; then
+              printf 'Required Forgejo configuration is empty: %s\n' "$required_name" >&2
+              exit 1
+            fi
+          done
+          export -n OPENSHIP_TOKEN
+          if [[ ! $DEPLOY_SHA =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'DEPLOY_SHA must be a full lowercase commit SHA\n' >&2
+            exit 1
+          fi
+          if [[ ! $OPENSHIP_PROJECT_ID =~ ^proj_[A-Za-z0-9_-]+$ ]]; then
+            printf 'OPENSHIP_PROJECT_ID has an invalid format\n' >&2
+            exit 1
+          fi
+
+          api=${OPENSHIP_API_URL%/}
+          case "$api" in
+            https://*/api/proxy/api) ;;
+            *)
+              printf 'OPENSHIP_API_URL must use HTTPS and end with /api/proxy/api\n' >&2
+              exit 1
+              ;;
+          esac
+
+          service_ids=$(printf '%s' "$OPENSHIP_SERVICE_IDS" | jq -Re '
+            split(",")
+            | map(gsub("^\\s+|\\s+$"; ""))
+            | if length >= 1
+                and (unique | length) == length
+                and all(.[]; test("^svc_[A-Za-z0-9_-]+$"))
+              then .
+              else error("OPENSHIP_SERVICE_IDS must contain unique valid service IDs")
+              end')
+          mapfile -t service_id_list < <(printf '%s' "$service_ids" | jq -r '.[]')
+
+          curl_common=(
+            --fail-with-body
+            --silent
+            --show-error
+            --connect-timeout 10
+          )
+
+          api_request() {
+            local method=$1
+            local url=$2
+            local auth_fd
+            local request_rc
+            shift 2
+            exec {auth_fd}<<<"Authorization: Bearer ${OPENSHIP_TOKEN}"
+            set +e
+            curl "${curl_common[@]}" \
+              --request "$method" \
+              --header "@/dev/fd/${auth_fd}" \
+              "$@" \
+              "$url"
+            request_rc=$?
+            set -e
+            exec {auth_fd}<&-
+            return "$request_rc"
+          }
+
+          redact_output() {
+            sed -E \
+              -e 's#(https?|rtsp)://[^/@[:space:]]+:[^/@[:space:]]+@#\1://[REDACTED]@#g' \
+              -e 's#rtsp://[^[:space:]",}]+#rtsp://[REDACTED]#g' \
+              -e 's#(authorization[=:][[:space:]]*(bearer|basic)[[:space:]]+)[^[:space:]",}]+#\1[REDACTED]#Ig' \
+              -e 's#opsh_pat_[A-Za-z0-9._-]+#[REDACTED]#g' \
+              -e 's#("[^"]*(authorization|token|password|secret|api[_-]?key)[^"]*"[[:space:]]*:[[:space:]]*")[^"]*"#\1[REDACTED]"#Ig' \
+              -e 's#((authorization|token|password|secret|api[_-]?key)[=:][[:space:]]*)[^[:space:]",}]+#\1[REDACTED]#Ig' \
+              -e 's#/(root|var|mnt|opt|etc)/[^[:space:]",}]+#[PATH]#g'
+          }
+
+          print_error_fields() {
+            local payload=$1
+            local fallback_status=$2
+            if [ -n "$payload" ] && printf '%s' "$payload" | jq -e '.data | type == "object"' >/dev/null 2>&1; then
+              printf '%s' "$payload" | jq -r --arg fallback_status "$fallback_status" '
+                .data |
+                "OpenShip deployment \(.id // "unknown") status: \(.status // $fallback_status)",
+                "errorCode: \(.errorCode // "none")",
+                "errorMessage: \(.errorMessage // "none")",
+                "errorDetails: \(.errorDetails // "none")"' | redact_output
+            else
+              printf 'OpenShip deployment %s status: %s\n' "$deployment_id" "$fallback_status"
+              printf 'errorCode: unavailable\n'
+              printf 'errorMessage: deployment status response unavailable\n'
+              printf 'errorDetails: unavailable\n'
+            fi
+          }
+
+          print_recent_logs() {
+            local logs
+            printf 'OpenShip deployment logs:\n'
+            if logs=$(api_request GET "$api/deployments/$deployment_id/logs?tail=200" \
+              --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS"); then
+              printf '%s' "$logs" |
+                jq -r '.data[]? | "[\(.timestamp)] [\(.level)] \(.message)"' |
+                tail -n 200 |
+                redact_output
+            else
+              printf 'OpenShip deployment logs unavailable\n' >&2
+            fi
+          }
+
+          snapshot_parent=${RUNNER_TEMP:?RUNNER_TEMP is required}
+          snapshot_parent=${snapshot_parent%/}
+          case "$snapshot_parent" in
+            ""|/) printf 'RUNNER_TEMP must be a scoped directory\n' >&2; exit 1 ;;
+          esac
+          service_snapshot_dir=$(mktemp -d "$snapshot_parent/camstation-openship-services.XXXXXX")
+          declare -a patched_service_ids=()
+          deployment_started=false
+
+          cleanup_deploy_state() {
+            local exit_code=$?
+            local index
+            local restore_id
+            trap - EXIT
+
+            if [ "$deployment_started" != true ] && ((${#patched_service_ids[@]} > 0)); then
+              printf 'OpenShip deployment was not created; restoring prior service image settings\n' >&2
+              for ((index = ${#patched_service_ids[@]} - 1; index >= 0; index--)); do
+                restore_id=${patched_service_ids[$index]}
+                if ! api_request PATCH "$api/projects/$OPENSHIP_PROJECT_ID/services/$restore_id" \
+                  --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS" \
+                  --header 'Content-Type: application/json' \
+                  --data-binary "@$service_snapshot_dir/$restore_id.json" >/dev/null; then
+                  printf 'Failed to restore OpenShip service settings: %s\n' "$restore_id" >&2
+                fi
+              done
+            fi
+
+            case "$service_snapshot_dir" in
+              "$snapshot_parent"/camstation-openship-services.*) rm -rf -- "$service_snapshot_dir" ;;
+              *) printf 'Refusing to remove unexpected OpenShip snapshot path\n' >&2 ;;
+            esac
+            exit "$exit_code"
+          }
+          trap cleanup_deploy_state EXIT
+
+          for service_id in "${service_id_list[@]}"; do
+            api_request GET "$api/projects/$OPENSHIP_PROJECT_ID/services/$service_id" \
+              --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS" |
+              jq -e '{
+                image: (.service.image // error("service image is missing")),
+                build: (.service.build // ""),
+                dockerfile: (.service.dockerfile // "")
+              }' >"$service_snapshot_dir/$service_id.json"
+
+            jq -nc --arg image "$IMAGE_REF" '{image:$image,build:"",dockerfile:""}' |
+              api_request PATCH "$api/projects/$OPENSHIP_PROJECT_ID/services/$service_id" \
+                --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS" \
+                --header 'Content-Type: application/json' \
+                --data-binary @- >/dev/null
+            patched_service_ids+=("$service_id")
+          done
+
+          deployment_response=$(jq -nc \
+            --arg projectId "$OPENSHIP_PROJECT_ID" \
+            --arg commitSha "$DEPLOY_SHA" \
+            --argjson serviceIds "$service_ids" \
+            '{projectId:$projectId,commitSha:$commitSha,environment:"production",serviceIds:$serviceIds}' |
+            api_request POST "$api/deployments" \
+              --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS" \
+              --header 'Content-Type: application/json' \
+              --data-binary @-)
+          deployment_started=true
+
+          deployment_id=$(printf '%s' "$deployment_response" | jq -er '.data.deployment.id // .data.id // .deployment_id // .id')
+          printf 'OpenShip deployment: %s\n' "$deployment_id"
+
+          poll_deadline=$((SECONDS + OPENSHIP_POLL_TIMEOUT_SECONDS))
+          poll_failure_reason=
+          deployment=
+
+          for attempt in $(seq 1 "$OPENSHIP_MAX_POLL_ATTEMPTS"); do
+            remaining=$((poll_deadline - SECONDS))
+            if (( remaining <= 0 )); then
+              poll_failure_reason='polling timed out after 15 minutes'
+              break
+            fi
+
+            request_timeout=$OPENSHIP_REQUEST_TIMEOUT_SECONDS
+            if (( request_timeout > remaining )); then
+              request_timeout=$remaining
+            fi
+
+            if ! deployment=$(api_request GET "$api/deployments/$deployment_id" --max-time "$request_timeout"); then
+              poll_failure_reason="status request failed on attempt $attempt"
+              break
+            fi
+            if ! status=$(printf '%s' "$deployment" | jq -er '.data.status // .status'); then
+              poll_failure_reason="invalid status response on attempt $attempt"
+              break
+            fi
+            printf 'OpenShip status (%s/%s): %s\n' "$attempt" "$OPENSHIP_MAX_POLL_ATTEMPTS" "$status"
+
+            case "$status" in
+              ready)
+                printf 'OpenShip deployment is ready\n'
+                exit 0
+                ;;
+              failed|cancelled|action_required|partial_failure|rejected|no_changes)
+                print_error_fields "$deployment" "$status"
+                print_recent_logs
+                if [ "$status" = action_required ]; then
+                  printf 'OpenShip pending actions:\n'
+                  if pending=$(api_request GET "$api/deployments/$deployment_id/pending" \
+                    --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS"); then
+                    printf '%s' "$pending" |
+                      jq '{data:[
+                        (if (.data | type) == "array" then .data else (.data.actions // []) end)[]?
+                        | {id,type,status,message,createdAt}
+                      ]}' |
+                      redact_output
+                  else
+                    printf 'OpenShip pending actions unavailable\n' >&2
+                  fi
+                fi
+                exit 1
+                ;;
+            esac
+
+            remaining=$((poll_deadline - SECONDS))
+            if (( remaining <= 0 )); then
+              poll_failure_reason='polling timed out after 15 minutes'
+              break
+            fi
+            sleep_seconds=$OPENSHIP_POLL_INTERVAL_SECONDS
+            if (( sleep_seconds > remaining )); then
+              sleep_seconds=$remaining
+            fi
+            sleep "$sleep_seconds"
+          done
+
+          if [ -z "$poll_failure_reason" ]; then
+            poll_failure_reason="did not reach a terminal state within $OPENSHIP_MAX_POLL_ATTEMPTS attempts"
+          fi
+          printf 'OpenShip deployment polling failed: %s: %s\n' "$poll_failure_reason" "$deployment_id" >&2
+
+          diagnostic_deployment=
+          if ! diagnostic_deployment=$(api_request GET "$api/deployments/$deployment_id" \
+            --max-time "$OPENSHIP_REQUEST_TIMEOUT_SECONDS"); then
+            diagnostic_deployment=$deployment
+          fi
+          print_error_fields "$diagnostic_deployment" "$poll_failure_reason"
+          print_recent_logs
+          exit 1

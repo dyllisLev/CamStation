@@ -42,6 +42,7 @@ label 또는 image layer에 넣지 않는다.
 | Git source | 없음 |
 | webhook / Auto Deploy | Off / Off |
 | sleep mode | `always_on` |
+| route strategy | `container-ip` (OpenShip managed route 없음) |
 
 OpenShip 0.6.9는 project에 credential ID를 저장하지 않고 image registry hostname과 조직 범위
 credential selector를 대조해 pull 인증을 적용한다. 따라서 위 이름의 credential은
@@ -67,6 +68,11 @@ inventory에 공개 또는 Tailscale/overlay interface가 없음을 확인한 �
 외부 공개 대상은 HTTP/WebRTC뿐이며 SQLite, worker, scheduler나 내부 go2rtc 관리 listener를 proxy에
 공개하지 않는다. 기존 도메인과 host port를 유지하므로 이번 전환에서는 Zoraxy 설정을 변경하지 않는다.
 배포 후에는 기존 두 물리 LOC endpoint와 외부 도메인을 각각 실제 요청으로 검증한다.
+
+대상 host의 기존 nginx가 LOC 도메인을 계속 소유한다. OpenShip service/project domain row는 만들지 않고
+service는 `exposed=false`를 유지한다. Project route strategy는 `container-ip`다. 이는 비노출 service의
+배포에서 OpenShip이 loopback route inventory를 이유로 80/443 OpenResty takeover를 요구하지 않게 하며,
+기존 nginx 또는 Zoraxy 설정을 변경하지 않는다.
 
 서비스 간 `dependsOn`은 없고, 단일 `camstation` 서비스만 OpenShip project network에 연결된다. go2rtc와
 recorder의 통신은 같은 container 내부 loopback을 사용한다. 두 persistent bind mount는 모두 application
@@ -145,6 +151,8 @@ OpenShip 전환이 volume을 새로 만들거나 기존 bind mount를 교체해�
   `camstation-forgejo-cutover-20260901T192623+0900`
 - OpenShip CT PBS snapshot: `ct/110/2026-09-01T13:34:55Z`
 - media PBS snapshot: `host/camstation-media/2026-09-01T13:33:45Z` (`protected=true`)
+- watcher target 변경 전 root-only backup:
+  `forgejo-openship-watcher-20260902T064800+0900`
 
 SQLite는 실행 중 data directory를 복사하지 않는다. Python SQLite online backup API로 일관된 사본을
 만들고 `PRAGMA quick_check`, foreign-key 검사와 checksum을 확인한다. Media는 짧은 filesystem freeze로
@@ -166,6 +174,12 @@ media snapshot이 검증·보호된 뒤 다음 one-time gate를 적용한다.
 5. 이 gate를 통과한 상태에서만 exact Forgejo image로 첫 OpenShip deployment를 만든다. 실패하면 새
    container를 반복 재시작하지 말고 보존한 기존 image/config로 복구한다.
 
+2026-09-02 실제 전환에서는 legacy FFmpeg 일부가 TERM을 30초 안에 처리하지 못했다. 사용자가 실시간
+녹화 중단을 명시적으로 허용한 뒤 recorder worker를 0으로 정지하고 전환을 진행했다. 06:37 KST에 열린
+segment 세 개는 size가 DB와 일치하지만 `ffprobe`에 실패한다. 이후 exact Forgejo image는 recorder 8/8,
+새 active segment 8/8 증가와 최근 DB `failed` 0으로 수렴했다. 이 세 파일은 legacy handoff 구간의 알려진
+데이터 손실이며 정상 운영 segment로 간주하지 않는다.
+
 새 Forgejo image에는 fan-out/single-signal 수정이 포함되므로 이 절차는 최초 legacy handoff에만 쓴다.
 이후 배포는 Forgejo workflow와 아래 검증 절차만 사용한다.
 
@@ -175,6 +189,10 @@ credential로 준비 commit의 exact SHA image를 한 번 수동 build/push한 �
 수행한다. 이 배포의 application 검증이 끝난 뒤 workflow와 최종 상태 문서를 다음 `main` commit으로
 push한다. 그 push의 Actions 배포가 같은 persistent data로 다시 `ready`가 되는 것이 자동화와 데이터
 지속성의 최종 합격이다. 공용 owner credential은 이 one-time bootstrap 외 CI에서 사용하지 않는다.
+
+최초 bootstrap image `sha-2d83b8f8c9388e70dbd3a2f934cc5c372fb2ec55`의 OpenShip deployment는
+`dep_mEfHp_BAona-cg55`이며 `ready`로 검증됐다. 실제 container의 안정 이름은
+`openship-camstation-camstation`이다. Host operational watcher는 이 이름을 사용한다.
 
 ## 배포 흐름
 
