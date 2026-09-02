@@ -1,5 +1,79 @@
 # Lessons
 
+## 2026-09-02 — 운영 FFmpeg 종료는 signal 추정이 아니라 stdin quit과 파일 판독으로 증명한다
+
+- FFmpeg가 `SIGINT`/`SIGTERM`을 받았다는 사실이나 process state가 interruptible이라는 사실만으로 MP4가
+  정상 마감됐다고 판단하지 않는다. recorder가 소유한 stdin으로 `q`를 먼저 전달해 trailer/index를 쓰게
+  하고, bounded timeout 뒤에만 TERM과 KILL을 순차 fallback으로 사용한다.
+- FFmpeg 8의 scheduler는 `-stats_period` 동안 futex wait에 머물 수 있고 이 구간에는 stdin quit과 signal
+  flag 확인도 늦어진다. 종료 timeout보다 짧은 progress interval로 main loop를 깨우고, 로그량 제한은
+  application의 progress reader에서 별도로 적용한다. progress 로그를 줄이려고 shutdown latency까지
+  60초로 늘리지 않는다.
+- OpenShip deployment `ready`, container healthy, DB status/size 일치는 녹화 종료 무결성의 대체 증거가
+  아니다. 실제 재배포가 닫은 모든 segment를 `ffprobe`로 읽고 필요한 A/V track까지 확인해야 production
+  전환을 합격시킨다.
+- CamStation 녹화물은 container image가 아니라 운영 host bind mount에 있다. 이미지 교체 판단과 media
+  백업·무결성 판단을 섞지 말고, 사용자가 중단을 허용하면 불필요한 이미지 내용 검사로 교체를 지연하지 않는다.
+- 사용자가 진행 중 녹화 구간 손실을 명시적으로 허용하고 즉시 hard cutover를 요청하면 partial MP4
+  무결성을 교체 차단 조건으로 다시 끌어오지 않는다. 기존 volume 보존과 새 container의 녹화·Viewer·health
+  복구를 확인하고, 허용된 cutover 손실은 사실대로 기록한다.
+
+## 2026-09-02 — 백업 catalog 검증은 stdout과 stderr를 모두 비공개 sink에 가둔다
+
+- `proxmox-backup-client catalog dump`처럼 목록을 stderr로 쓰는 도구가 있으므로 `>file`만으로는
+  runtime 경로가 terminal에 노출될 수 있다. 실제 운영 archive 검증은 stdout과 stderr를 모두 root 전용
+  임시 파일로 리디렉션하고 command exit status를 먼저 확인한 뒤, entry 수·checksum·필수 marker 존재
+  여부 같은 축약 증거만 별도 출력한다.
+- 원격 shell 안에 `awk '$1'` 같은 프로그램을 중첩할 때는 shell positional parameter 확장과 충돌하지
+  않게 검증된 script 또는 `cut`처럼 인용이 단순한 도구를 쓴다. 경로 목록이 필요한지부터 판단하고,
+  필요하지 않으면 catalog 원문은 대화·로그·문서로 내보내지 않는다.
+
+## 2026-09-01 — 자격증명을 요청하기 전에 최신 전역 운영 문서와 선행 프로젝트를 다시 확인한다
+
+- 사용자가 전역 문서를 갱신했거나 유사 프로젝트에 등록 정보가 있다고 알려 주면, 먼저 최신 전역
+  `AGENTS.md`와 해당 프로젝트의 실제 workflow·등록 상태를 확인한다. 보호된 API wrapper, 승인된 host
+  경로와 bootstrap credential이 문서에 있으면 그것을 사용하고, 확인 가능한 정보를 사용자에게 다시
+  요구하지 않는다.
+- 유사 프로젝트는 API payload와 Variable/Secret 이름을 확인하는 기준으로만 사용한다. project-scoped
+  deploy token이나 application secret을 다른 프로젝트에 재사용하지 않고, 새 프로젝트에는 최소권한
+  credential을 별도로 발급한다.
+- Forgejo Registry 권한은 발급 metadata나 OCI token payload 모양만 보고 실패로 단정하지 않는다.
+  `write:package` PAT으로 빈 blob upload를 시작한 뒤 즉시 취소하는 무산출물 시험으로 실제 push 권한을
+  확인하고, 진단 PAT과 임시 관리자 계정은 공식 CLI/API로 같은 transaction에서 폐기한다.
+- 운영 wrapper가 API base를 붙이는 환경에서는 generic 경로를 추측하지 말고 설치된 버전의 route와
+  request schema를 먼저 확인한다. `systemctl show ... EnvironmentFiles --value`는 경로 뒤에
+  `(ignore_errors=...)` 메타데이터가 붙을 수 있으므로 전체 문자열을 source하지 말고 첫 경로 토큰만
+  검증해서 사용한다.
+- OpenShip service의 `ports`가 같은 container port/protocol을 host IP만 바꿔 반복할 때는 저장 row만
+  보고 안전하다고 가정하지 않는다. 설치 버전의 Docker adapter가 배열을 누적하는지 덮어쓰는지 확인하고,
+  덮어쓰는 버전에서 wildcard로 정규화해야 한다면 host에 public/overlay interface가 없는지 배포 직전에
+  다시 검사한 뒤 모든 기존 물리 endpoint를 실제 요청으로 검증한다.
+
+## 2026-09-01 — 보호된 운영 자격증명이 유효하지 않으면 복구 권한을 추정하지 않는다
+
+- 배포 등록에 필요한 보호 자격증명이 현재 인스턴스에서 인증되지 않으면, 로컬 내부 토큰이나 관리자
+  비밀번호 재설정 경로를 발견했더라도 사용자의 운영 계정 복구 승인으로 확대 해석하지 않는다.
+- 기존 상태와 백업까지만 안전하게 확인한 뒤, 필요한 인스턴스·권한 범위를 명시하고 유효한 PAT 또는
+  보호 자격증명 위치를 요청한다. 비밀번호 값은 대화에 붙이지 말고 root-only 파일이나 승인된 비밀
+  저장소로 전달받는다.
+
+## 2026-09-01 — 장비 식별자가 Proxmox CT를 뜻하면 관리 웹보다 hypervisor 상태를 먼저 본다
+
+- 사용자가 `106 CT Omada`처럼 CT ID와 서비스를 함께 말하면 브라우저 관리 화면부터 준비하지 않는다.
+  먼저 지정된 Proxmox node에서 exact CT status, 내부 database와 application unit을 분리해 확인한다.
+- 사용자가 “서버만 올라가면 된다”고 범위를 좁히면 UI·CCTV 복귀 조사를 즉시 중단한다. 이미 준비했지만
+  사용하지 않은 도구는 제거하고, failed인 exact unit만 시작한 뒤 active state, listener, HTTP 응답으로
+  서버 기동을 증명한다.
+
+## 2026-09-01 — “CCTV 화면” 진단은 대상 PC를 확정하고 서버 입력과 교차한다
+
+- 사용자가 CCTV 화면만 지칭하면 Windows target을 추정하지 않고 `test-pc`와 `monitoring-pc` 중 대상을
+  먼저 확정한다. exact Viewer 창을 시간 간격을 두고 직접 판독해 전체 Viewer 정지와 일부 타일 장애를
+  구분한다.
+- 일부 타일만 검으면 Viewer 재시작부터 하지 않는다. 정상 타일의 프레임 전진, Viewer/renderer freshness,
+  서버 camera/stream/recorder 수와 마지막 media progress를 같은 시각대로 맞춰 source 공통 장애인지
+  playback 장애인지 먼저 분리한다.
+
 ## 2026-08-28 — 배포 합격은 stop timeout이 아니라 subprocess와 파일의 실제 종료 계약으로 증명한다
 
 - Docker stop grace가 전체 종료 시간보다 길고 daemon이 exit 0이어도 녹화 파일이 정상이라는 뜻은 아니다.
@@ -8,6 +82,9 @@
 - 하나의 stop channel을 받은 경로에서 상위 `stopWorker`와 하위 `waitForProcess`가 같은 child process에
   각각 signal을 보내지 않게 한다. signal 소유자는 한 계층으로 제한하고, 여러 worker는 stop 요청을 먼저
   fan-out한 뒤 bounded wait해야 한다. container grace 증가는 이 중복 signal 결함의 해결책이 아니다.
+- Tini를 ENTRYPOINT로 쓰는 container의 Docker `.State.Pid`는 application daemon이 아니라 Tini다. 운영
+  child-process 분류는 Tini의 정확한 `camstationd` 자식이 하나인지 먼저 확인하고, 그 daemon의 직접 자식과
+  go2rtc 자식을 분리해야 한다. 이 gate가 맞지 않으면 signal 작업을 시작하지 않는다.
 - interactive one-shot task에서 `Start-Process`는 task의 임시 working directory를 자식에게 상속한다.
   장기 실행 Viewer는 설치 디렉터리를 명시적으로 `WorkingDirectory`로 고정해야 evidence directory cleanup을
   막지 않는다. 화면 수집 합격에는 task 삭제뿐 아니라 exact remote run directory 제거도 포함한다.
@@ -1371,3 +1448,13 @@
 - 새 image의 시작 상태가 정상이어도 이전 container 종료 중 생성된 partial segment는 별도 손실이다.
   DB status, 실제 파일, size 일치와 ffprobe를 배포 전후 구간에서 확인하고, 깨진 ready와 recovery failed를
   새 image rollback으로 복구할 수 없으면 추가 재시작을 피한 채 결함으로 기록한다.
+
+## 2026-09-02 — 컨테이너 image와 bind-mounted 녹화 데이터를 명확히 분리한다
+
+- CamStation 녹화물은 image layer가 아니라 운영 host의 persistent bind mount에 있다. image build/push나
+  사전 적재를 설명할 때 녹화물 검사와 섞어 Docker image에 데이터가 포함되는 듯한 인상을 주지 않는다.
+- container 교체 전 media 검증의 범위는 기존 mount identity가 유지되는지와, container 내부 FFmpeg가
+  그 mount에 쓰던 활성 segment를 종료할 때 DB row·파일 크기·A/V 무결성이 보존되는지다. 전체 media를
+  다시 복사하거나 image에 넣지 않는다.
+- 장시간 안전 작업은 시작 전에 목적과 예상 소요를 먼저 알린다. 전체 영구 데이터 백업은 복구 자산 확보
+  단계이고, 짧은 recorder handoff 검증은 container lifecycle 단계라는 차이를 진행 보고에서 분리한다.

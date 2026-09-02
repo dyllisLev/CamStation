@@ -4249,3 +4249,164 @@
   닫은 뒤 viewer 0, warm-only 8/8, container healthy 상태로 인계한다.
 
 ---
+# 2026-09-01 106 CT Omada 및 소방서 CCTV 연결 복구
+
+## 복구 사양과 안전 경계
+
+- 사용자 추가 지시에 따라 `proxmox-nuc`의 CT 106과 내부 Omada 서버 기동만 범위로 한다.
+- CT와 서비스 상태를 먼저 확인하고, 정확히 내려간 Omada unit만 시작한다.
+- CCTV 복귀 확인은 사용자가 수행한다. CamStation 서버/Viewer, 카메라 설정, 다른 VM/CT는 변경하지 않는다.
+- 관리 credential, session token, camera URL, 장비 주소 세부값은 출력·문서화하지 않는다.
+
+## 계획
+
+- [x] `proxmox-nuc`에서 CT 106과 내부 Omada/MongoDB service 상태를 확인한다.
+- [x] failed 상태인 정확한 Omada unit만 시작한다.
+- [x] CT running, Omada/MongoDB active와 관리/discovery port listen, HTTPS 응답을 확인한다.
+- [x] 사용자 지시에 따라 CCTV/Viewer 추가 조작 없이 종료하고 임시 브라우저 도구를 정리한다.
+
+## Review
+
+- CT 106(`omada`)은 이미 running/onboot였고 `mongod.service`도 active였다. Omada 본체인
+  `tpeap.service`만 failed였으며 관련 관리 포트가 열리지 않은 상태였다.
+- `systemctl start tpeap.service`로 해당 unit만 시작했다. 결과는 `Result=success`, `ActiveState=active`,
+  `SubState=running`, main status 0이다.
+- 최종 확인에서 CT 106 running, MongoDB/Omada active, Omada 관리·discovery 포트 listen과 로컬 HTTPS
+  200 응답을 확인했다. 다른 VM/CT, CamStation, Viewer, 카메라 설정은 변경하지 않았다.
+- 웹 조작으로 전환하기 전에 사용자가 scope를 좁혀 browser session은 열지 않았다. 스킬 bootstrap으로
+  잠시 설치했던 `agent-browser`는 미사용 상태에서 즉시 제거했다. CCTV 영상 복귀 확인은 사용자에게 남겼다.
+
+# 2026-09-01 monitoring-pc CCTV 화면 미출력 진단
+
+## 진단 사양과 안전 경계
+
+- 대상은 승인된 `monitoring-pc`의 현재 CamStation Viewer와 운영 CamStation 서버다.
+- 먼저 읽기 전용 상태와 exact Viewer 창을 확인한다. 화면이 실제로 멈췄는지, Viewer 계측만 stale인지,
+  서버 ingest/stream 자체가 불량인지 분리한다.
+- 카메라 설정, Viewer 설정, 서비스·프로세스, 서버 container는 사용자의 별도 수정 승인 없이 변경하지 않는다.
+- URL·credential·process 전체 argument·clipboard·UI edit value는 수집하거나 출력하지 않는다.
+
+## 계획
+
+- [x] Windows target preflight에서 machine/user/session, driver, task/listener/firewall, script parity를 확인한다.
+- [x] Viewer exact-window 캡처를 직접 판독해 창 존재 여부와 각 영상 타일의 실제 렌더링 상태를 확인한다.
+- [x] 운영 서버의 camera/stream/recorder/Viewer 상태를 읽기 전용으로 교차 검증한다.
+- [x] 원인 범위, 현재 영향, 안전한 다음 조치와 control residue 0을 Review에 기록한다.
+
+## Review
+
+- `monitoring-pc` NUC session 1은 Active, Viewer Service Running이며 driver telemetry off, TCP/firewall 0,
+  control/setup/capture/config task 0, canonical script parity 전부 true였다.
+- 2026-09-01 14:27·14:30 KST exact Viewer 창에서 `집-마당`, `집-창고1`, `집-창고2`는 실제 프레임과
+  카메라 시각이 전진했다. `소방서1`, `소방서3`, `소방서4`, `소방서5`, `염소장`은 검은 타일과
+  자동 복구 한도 도달 상태였고 두 캡처 사이에도 복구되지 않았다.
+- 서버 watcher 14:30:53 KST는 container healthy/restart 0, Viewer healthy 1/1과 heartbeat fresh를
+  유지하면서 camera/stream/Viewer media가 3/8이라고 기록했다. 장애 5대의 마지막 media progress는
+  약 13:58 KST이고 이후 live-warm 및 recorder가 timeout/종료 후 재시도를 반복한다.
+- 서버·Viewer 공통 장애나 Viewer 정지가 아니라 같은 시각에 끊긴 원격 카메라 입력 5대의 공통
+  전원/현장 네트워크/상위 회선 문제 가능성이 가장 높다. 인증 실패 증거는 없었다. 읽기 전용 진단만
+  수행했으며 최종 Windows control residue는 0이다.
+
+---
+
+# 2026-09-01 Forgejo + OpenShip production 배포 전환
+
+## 사양과 안전 경계
+
+- Forgejo `dyllislev/CamStation`을 단일 주 저장소로 사용하고 GitHub는 Forgejo에서 나가는 단방향
+  Push Mirror로만 유지한다. GitHub에서 운영 build/deploy가 실행되는 경로는 최종 검증 뒤 제거한다.
+- OpenShip은 Git source build, webhook, auto deploy를 사용하지 않는다. Forgejo Registry의
+  `sha-<40자리 commit>` immutable image만 실행하고, Actions가 service image PATCH 후 deployment를
+  명시적으로 생성한다.
+- 기존 운영 container, root-owned Compose/environment, SQLite와 영구 media는 전환 전에 일관된 백업과
+  exact rollback image/config를 확보한다. OpenShip 관리 Compose/DB, Forgejo DB, Zoraxy DB는 직접
+  편집하지 않는다.
+- credential 값은 shell 출력, Actions log, diff, 문서, commit에 남기지 않는다. 완료 증거에는 secret
+  이름, API 권한 확인 결과와 존재 여부만 기록한다.
+- 기존 LOC 접근 경로·운영 도메인·영구 데이터 경로를 유지한다. 실제 운영 host architecture와 volume
+  ownership을 확인하기 전에는 OpenShip service를 생성하거나 기존 production container를 교체하지 않는다.
+
+## 실행 계획
+
+- [x] GitHub 원본, default branch, 전체 refs/LFS/submodule, 기존 workflow와 build/runtime/health/secret-name
+      계약을 source와 Forgejo API에서 확인한다.
+- [x] 현재 운영 host의 architecture, image/revision, container/port/domain/health, root-owned deployment
+      config, SQLite/volume와 rollback 경로를 읽기 전용으로 고정한다.
+- [x] SQLite online backup과 영구 파일/config backup을 타임스탬프·권한·hash가 있는 복구 자산으로 만들고
+      백업 자체의 integrity를 확인한다.
+- [x] recorder worker stop을 먼저 전체 fan-out하고 FFmpeg 종료 소유자를 한 곳으로 제한했다. stdin `q`와
+      1초 scheduler wake를 추가하고 full/race test를 통과했다. 운영자는 이번 전환의 active partial 손실을
+      명시적으로 허용했으므로 종료 파일 무결성을 hard-cutover 차단 조건에서 제외하고 새 녹화 8/8 복구를 확인했다.
+- [x] production Dockerfile을 OpenShip runtime 계약에 맞게 검토·최소 수정하고 로컬 multi-stage build,
+      image metadata, non-root/health/entrypoint를 검증한다.
+- [x] `.forgejo/workflows/build-publish-deploy.yml`을 기본 branch push 전용, self-hosted, build lock,
+      buildx, temporary Docker config, immutable tag, OpenShip PATCH/deploy/poll/log 계약으로 작성한다.
+- [x] Forgejo repository/refs/default branch 상태를 공식 API로 검증하고 필요한 source·branch·tag를
+      non-force push한다. 로컬 `origin`은 Forgejo, 별도 `github` remote는 원본 GitHub로 유지한다.
+- [x] GitHub 운영 workflow 중복 가능성을 제거한 뒤 Forgejo → GitHub Push Mirror를 공식 API로 등록하고
+      `last_error` 없음과 main/branch/tag 반영을 검증한다.
+- [x] OpenShip API 외부 URL·agent·architecture·registry credential을 확인하고 production project와
+      long-running service, env/secret, port/health/restart/volume/network를 공식 API로 등록한다.
+- [x] Forgejo Actions Variables와 최소 권한 Secrets를 등록하고 이름/존재 여부만 재조회해 검증한다.
+- [x] workflow와 deployment 문서를 commit/push하고 Runner 수신, Registry push, service image PATCH,
+      deployment `ready`를 15분 gate 안에서 확인한다.
+- [x] container image SHA/restart/log/internal health/external domain/SQLite/volume/worker·scheduler 동작과
+      재배포 후 데이터 지속성을 검증한다.
+- [x] GitHub가 mirror-only이고 배포 Actions가 실행되지 않음을 최종 확인하며 `docs/deployment.md`, 이 Review,
+      `tasks/lessons.md`를 비밀값 없이 갱신한다.
+
+## 합격/롤백 기준
+
+- source/build gate 실패는 운영 변경 없이 중단한다. backup 또는 restore 검증 실패 시 OpenShip 전환을
+  시작하지 않는다.
+- OpenShip 배포가 15분 안에 `ready`가 아니거나 실제 health/recording/Viewer 계약이 회복되지 않으면
+  보존한 exact image와 root-owned config로 기존 LOC deployment를 복구하고 GitHub 배포는 중단하지 않는다.
+- GitHub 배포 제거는 Forgejo workflow 성공, Registry image 존재, OpenShip `ready`, 실제 내부·외부 health,
+  SQLite/volume 지속성까지 모두 통과한 뒤에만 수행한다.
+
+## Review
+
+- Forgejo `dyllislev/CamStation` main의 exact `44fb80422d81190a303837b942322cff99d66e7a`를 Actions run 15가
+  linux/amd64 image로 publish했고 OpenShip deployment `dep_aNIW8dWPeZl-peY_`가 `ready`가 됐다. 실제
+  container는 exact image, healthy, restart 0이며 service build/dockerfile은 빈 값이고 두 bind mount와
+  세 port publish를 유지한다.
+- 최종 watcher는 status ok/alert 0, camera/live/recorder 8/8, Viewer healthy 1/1·receiving 8/8이다.
+  SQLite quick check ok, FK 오류 0, current recording 8, 최근 failed 0이며 두 LOC endpoint와 외부 cctv2
+  health, legacy cctv domain이 정상이다. 공식 monitoring PC exact-window에도 영상 8개가 보였고 Viewer를
+  재시작하지 않았다.
+- legacy와 초기 Actions 종료 구간은 운영자가 허용한 hard-cutover partial 손실이다. 녹화물은 image가 아니라
+  그대로 보존된 media bind mount에 있으며 새 container는 곧바로 새 segment 8개를 만들었다. FFmpeg 8의
+  60초 scheduler wait가 q/TERM 처리를 늦춘 원인을 1초 progress interval과 60초 application log throttle로
+  분리했으며 full Go test와 recorder race test가 통과했다. 최종 hard cutover의 active 최대 8구간은 사용자
+  지시에 따라 개별 ffprobe를 합격 gate로 검사하지 않았고 전환 구간 손실로 분류한다.
+- Forgejo→GitHub mirror는 main과 119 refs가 일치하고 last_error가 비어 있다. GitHub workflow와 배포 SHA
+  Actions run은 0이다. 기존 `camstation-updater.timer`는 disabled/inactive이며 root-only 사전 상태 backup
+  `github-updater-disabled-20260902T071958+0900`으로 복구할 수 있다.
+- 조사 기준선: Forgejo `dyllislev/CamStation`은 public/default `main`이고 로컬 `origin`은 Forgejo,
+  별도 `github` remote는 원본 GitHub다. Forgejo → GitHub push mirror는 활성 상태이며 마지막 오류가
+  비어 있다. 저장소 Actions와 전역 self-hosted runner가 활성 상태다.
+- 운영 기준선: `cctv`는 `linux/amd64`, 기존 `camstation2` container는 healthy/restart 0이고 공개
+  `https://cctv2.nuc.hmini.me/api/health`가 HTTP 200이다. exact image/revision, root-owned Compose,
+  SQLite와 두 persistent bind mount를 rollback 기준으로 보존한다.
+- OpenShip 외부 API는 `https://openship.loc.hmini.me/api/proxy/api`이며 LOC OpenShip control plane의
+  restricted 사전 backup set과 dump checksum을 검증했다. CT rootfs PBS backup도 새로 생성·검증·보호했다. 보호된 전역 API
+  경로를 확인한 뒤 registry pull credential을 지정된 이름으로 정규화하고, strict host-key 검증과
+  SSH agent를 사용하는 `cctv-production` OpenShip server를 등록·검증했다. project/service adoption은
+  전체 media backup 완료 뒤 수행한다.
+- JAV Gallery의 Forgejo workflow, Variables/Secrets 이름과 최근 성공 run을 대조하되 project-scoped
+  credential은 재사용하지 않았다. CamStation에는 Registry/API URL 관련 Variable 3개와 실제 OCI
+  upload 권한을 확인한 최소 `write:package` Registry Secret 2개를 등록했다. 나머지 project/service ID
+  Variable과 project-scoped OpenShip Secret은 OpenShip adoption 뒤 등록한다.
+- 고정 Go builder image에서 `gofmt` 무변경과 `go test ./...` 전체 통과를 재확인했고,
+  `go test -race ./internal/recorder`도 통과했다. OpenShip registry pull credential은 공식 verify API에서
+  `active`/`lastError` 없음으로 확인했으며, 같은-server migration preview는 blocked service와 이동할
+  volume 없이 `registry` image 재사용 대상으로 판정됐다.
+- OpenShip 0.6.9의 port parser가 같은 container port/protocol의 host-IP별 binding을 마지막 값으로
+  덮어쓰는 것을 설치 source에서 확인했다. 현재 운영 host에는 두 private 물리 LOC interface와 local
+  Docker bridge/loopback만 있고 public·overlay IPv4가 없으므로, HTTP 1개와 WebRTC TCP/UDP 각 1개의
+  explicit `0.0.0.0` publish로 정규화하고 배포 전후 두 기존 LOC endpoint를 모두 검증한다. 배포 직전
+  interface inventory가 바뀌면 service sync를 중단한다.
+- 최초 legacy recorder handoff 시각을 Actions build에 맞춰 추측하지 않는다. workflow를 제외한 준비
+  commit A를 먼저 Forgejo에 게시해 그 exact SHA image를 보호된 bootstrap credential로 수동 build/push하고,
+  recorder one-time gate와 첫 OpenShip 배포를 검증한다. 그 뒤 workflow·최종 문서 commit B를 push해 실제
+  Actions 재배포와 persistent data 지속성을 증명한다. 공용 owner credential은 CI에 넣지 않는다.
