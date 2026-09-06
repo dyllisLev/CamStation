@@ -2203,20 +2203,59 @@ iframe {
 }
 
 .new-camera-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 10px;
+  display: flex;
   min-height: 40px;
-  padding: 8px 10px;
+  overflow: hidden;
   border: 1px solid #1d303d;
   border-radius: 7px;
   color: var(--new-muted);
   background: #08131b;
-  text-align: left;
   font-size: 12px;
-  cursor: pointer;
   transition: border-color .12s, background-color .12s, color .12s;
+}
+
+.new-camera-select {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.new-camera-select > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-camera-reconnect {
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid var(--new-border);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.new-camera-reconnect:hover {
+  color: var(--new-accent);
+  background: color-mix(in oklch, var(--new-accent), transparent 90%);
+}
+
+.new-camera-select:focus-visible,
+.new-camera-reconnect:focus-visible {
+  outline: 2px solid var(--new-accent);
+  outline-offset: -2px;
 }
 
 .new-active-row {

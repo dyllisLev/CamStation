@@ -1,4 +1,4 @@
-import { Camera as CameraIcon, ChevronLeft, Expand, Eye, LayoutDashboard, PanelRightClose, PanelRightOpen, Save, SaveAll, Trash2 } from "lucide-react";
+import { Camera as CameraIcon, ChevronLeft, Expand, Eye, LayoutDashboard, PanelRightClose, PanelRightOpen, RefreshCw, Save, SaveAll, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode, WheelEvent } from "react";
 import GridLayout from "react-grid-layout/legacy";
@@ -52,6 +52,7 @@ export function LiveWorkspace() {
   const [layout, setLayout] = useState<MonitorLayoutItem[]>([]);
   const [currentId, setCurrentId] = useState<string>("");
   const [selectedStream, setSelectedStream] = useState("");
+  const [reconnectGenerations, setReconnectGenerations] = useState<Record<string, number>>({});
   const [dirty, setDirty] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [sideHidden, setSideHidden] = useState(false);
@@ -357,6 +358,7 @@ export function LiveWorkspace() {
           {layout.length > 0 ? (
             <CameraGrid
               cameras={rows}
+              reconnectGenerations={reconnectGenerations}
               layout={layout}
               selectedStream={selectedCamera?.streamName ?? ""}
               onLayoutChange={handleLayoutChange}
@@ -441,19 +443,35 @@ export function LiveWorkspace() {
                   </div>
                   <div className="new-camera-list">
                     {rows.map((camera) => (
-                      <button
+                      <div
                         key={camera.streamName}
                         className={cn(
                           "new-camera-row",
                           camera.streamName === selectedCamera?.streamName && "new-active-row",
                         )}
-                        type="button"
-                        onClick={() => setSelectedStream(camera.streamName)}
                       >
-                        <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
-                        <span>{camera.name}</span>
-                        <em>{camera.state === "streaming" ? "live" : camera.state}</em>
-                      </button>
+                        <button
+                          className="new-camera-select"
+                          type="button"
+                          onClick={() => setSelectedStream(camera.streamName)}
+                        >
+                          <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
+                          <span>{camera.name}</span>
+                          <em>{camera.state === "streaming" ? "live" : camera.state}</em>
+                        </button>
+                        <button
+                          className="new-camera-reconnect"
+                          type="button"
+                          aria-label={`${camera.name} 다시 연결`}
+                          title="다시 연결"
+                          onClick={() => setReconnectGenerations((current) => ({
+                            ...current,
+                            [camera.streamName]: (current[camera.streamName] ?? 0) + 1,
+                          }))}
+                        >
+                          <RefreshCw size={14} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -497,6 +515,7 @@ function MonitorHeader({ children, viewerMode }: { readonly children: ReactNode;
 
 function CameraGrid({
   cameras,
+  reconnectGenerations,
   layout,
   selectedStream,
   onLayoutChange,
@@ -506,6 +525,7 @@ function CameraGrid({
   onVideoViewportChange,
 }: {
   cameras: Camera[];
+  reconnectGenerations: Record<string, number>;
   layout: MonitorLayoutItem[];
   selectedStream: string;
   onLayoutChange: (layout: MonitorLayoutItem[]) => void;
@@ -562,6 +582,7 @@ function CameraGrid({
               <div key={item.i} className={cn("new-grid-item", `new-grid-item-${presentation}`)}>
                 <CameraTile
                   camera={camera}
+                  reconnectGeneration={reconnectGenerations[camera.streamName] ?? 0}
                   selected={camera.streamName === selectedStream}
                   zoomed={presentation === "focused"}
                   onSelect={() => onSelectCamera(camera)}
@@ -580,6 +601,7 @@ function CameraGrid({
 
 function CameraTile({
   camera,
+  reconnectGeneration,
   selected,
   zoomed = false,
   onSelect,
@@ -588,6 +610,7 @@ function CameraTile({
   onVideoViewportChange,
 }: {
   camera: Camera;
+  reconnectGeneration: number;
   selected: boolean;
   zoomed?: boolean;
   onSelect: () => void;
@@ -612,6 +635,7 @@ function CameraTile({
       }}
     >
       <LiveVideo
+        reconnectGeneration={reconnectGeneration}
         streamNames={playbackStreamCandidates(camera)}
         viewport={videoViewport}
         onViewportChange={onVideoViewportChange}
@@ -639,11 +663,13 @@ function CameraTile({
 
 function LiveVideo({
   streamNames,
+  reconnectGeneration,
   viewport,
   onViewportChange,
   onPlaybackChange,
 }: {
   streamNames: readonly string[];
+  reconnectGeneration: number;
   viewport?: VideoViewport;
   onViewportChange: (viewport: VideoViewport) => void;
   onPlaybackChange: (playback: { phase: PlaybackPhase; usingFallback: boolean }) => void;
@@ -666,7 +692,7 @@ function LiveVideo({
     fallbackCount,
     resubscribeCount,
     errorCategory,
-  } = useWebRtcMseStream(streamNames, resubscribeGeneration, "webrtc", surface);
+  } = useWebRtcMseStream(streamNames, resubscribeGeneration + reconnectGeneration, "webrtc", surface);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
