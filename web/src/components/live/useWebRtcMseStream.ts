@@ -9,6 +9,7 @@ import {
 import { openPlaybackConnection, probePlaybackProgress } from "./playbackConnection";
 import {
   PLAYBACK_SETUP_MS,
+  PLAYBACK_RETRY_INTERVAL_MS,
   PLAYBACK_STALL_MS,
   PlaybackPrimaryPromoter,
   PlaybackProbeScheduler,
@@ -176,8 +177,9 @@ export function useWebRtcMseStream(
 
     function teardownAttempt() {
       clearTimers();
-      closeConnection?.();
+      const close = closeConnection;
       closeConnection = null;
+      close?.();
       lastVideoTime = video.currentTime;
     }
 
@@ -237,7 +239,7 @@ export function useWebRtcMseStream(
           return;
         }
         counts.resubscribe++;
-        beginAttempt({
+        scheduleRetry({
           transport: preferredTransport,
           streamName: candidates[0],
           attempt: step.attempt,
@@ -252,10 +254,17 @@ export function useWebRtcMseStream(
       );
       if (presentation.usingFallback) counts.fallback++;
       else counts.reconnect++;
-      beginAttempt({
+      scheduleRetry({
         ...step,
         phase: presentation.phase,
       }, errorCategory);
+    }
+
+    function scheduleRetry(options: AttemptOptions, errorCategory: PlaybackErrorCategory) {
+      // Immediate connection refusals must not spin through every transport in
+      // one event loop. Setup/stall time already counts toward this interval.
+      const until = Math.max(Date.now(), attemptStartedAt + PLAYBACK_RETRY_INTERVAL_MS);
+      recoveryProbeScheduler.arm(until, () => beginAttempt(options, errorCategory));
     }
 
     function failAttempt(token: number, errorCategory: PlaybackErrorCategory) {
@@ -336,7 +345,7 @@ export function useWebRtcMseStream(
     }
 
     function markProgress(token: number) {
-      if (destroyed || token !== generation) return;
+      if (destroyed || token !== generation || !closeConnection || diagnosticPhase === "cooldown") return;
       const now = Date.now();
       if (setupTimer) clearTimeout(setupTimer);
       setupTimer = null;

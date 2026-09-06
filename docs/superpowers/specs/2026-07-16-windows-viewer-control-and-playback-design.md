@@ -416,14 +416,13 @@ Each WebRTC or MSE connection attempt has a five-second setup/progress deadline.
 The complete active recovery episode, including transport changes and the one
 isolated resubscribe, is capped at 30 seconds from stall detection. When that
 deadline expires, the stream reports a terminal episode result and enters its
-cooldown. It does not continuously cycle candidates in the background. The
-first exhausted episode in a stability epoch receives one 15-second fast
-cooldown, then starts one fresh 30-second per-stream episode that revisits the
-primary transports, the approved fallback, and the isolated resubscribe step.
-If that episode also fails, later wake-ups use the five-minute low-frequency
-cooldown until media progress returns or the tile is unmounted. Only five
-minutes of continuous media progress or a verified primary promotion rearms
-the one fast cooldown.
+cooldown. Every exhausted episode waits five seconds, then starts a fresh
+30-second per-stream episode that revisits the primary transports, the approved
+fallback, and the isolated resubscribe step. Immediately failing attempts are
+spaced at least three seconds apart. Repeated exhaustion does not lengthen the wait
+to minutes. Five seconds of continuous media progress or a verified primary
+promotion resets the episode; one buffered frame does not. See the
+[2026-09-07 recovery contract](2026-09-07-live-recovery-latency-design.md).
 
 An approved fallback output is temporary, not a terminal healthy route. While
 the fallback has genuine media progress, the visible fallback connection stays
@@ -458,14 +457,13 @@ Escalation rules:
 
 - stale stream: attempt the initial WebRTC connection and one WebRTC reconnect,
   then try MSE primary and one approved MSE fallback candidate once each;
-- exhausted stream attempts: perform one isolated resubscribe, then use one
-  15-second per-stream fast cooldown; its expiry starts one fresh bounded
+- exhausted stream attempts: perform one isolated resubscribe, then use a
+  five-second per-stream cooldown; its expiry starts one fresh bounded
   recovery episode across the primary transports, approved fallback, and
-  isolated resubscribe. Another failure schedules five-minute cooldowns instead
-  of cycling quickly or stopping;
-- stable playback for five minutes or a verified primary promotion resets that
-  stream recovery episode and rearms its one fast cooldown; brief progress does
-  neither;
+  isolated resubscribe. Further failures keep the same five-second wait and
+  three-second minimum attempt spacing;
+- stable playback for five seconds or a verified primary promotion resets that
+  stream recovery episode; a single frame does not;
 - fallback playback: keep the fallback visible while probing the primary once
   per minute; promote only after real video-clock progress and repeat after a
   failed WebRTC/MSE probe sequence;

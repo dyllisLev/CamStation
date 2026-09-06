@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-09-02
+Last updated: 2026-09-07
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -28,6 +28,30 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-09-07 live recovery latency (source only; rollout pending)
+
+- Recovered playback now resets its finite retry episode after five seconds of
+  continuous progress. Previously, a cooldown retry that played for 183/225 seconds
+  retained an expired 30-second deadline and skipped MSE/fallback on its next stall.
+- Every exhausted episode waits five seconds, including after a prolonged outage.
+  Immediate connection failures are spaced at least three seconds apart; setup attempts
+  and complete active recovery episodes retain their five/30-second deadlines.
+- Cleared retry callbacks are generation-guarded, and closed-connection/cooldown
+  media events cannot report healthy progress or arm another stall timer.
+- All 88 web tests, lint, production web build and daemon build pass. The actual
+  hook is exercised with controlled connections and virtual timers for healthy-to-
+  offline-to-healthy transitions (one second and 15 minutes), setup blackholes,
+  repeated failures and stale events; modeled source-return recovery is within
+  15 seconds. This is not a measured production recovery-time guarantee.
+- `go test ./...` passed all packages except two short-deadline Viewer-agent tests
+  on the local ZFS temporary directory. Both passed three repeated runs with a
+  memory-backed test temp directory; the complete Viewer-agent package also passed
+  with `TMPDIR=/dev/shm GOTMPDIR=/tmp`. No test deadlines or Go source were changed.
+- Design and verification contract: [live recovery latency](superpowers/specs/2026-09-07-live-recovery-latency-design.md).
+  Production rollout, real-camera return timing and any live-resolution change remain
+  pending. This section supersedes the older per-stream fast/five-minute cooldown policy,
+  not management/control reconnect policies.
 
 ### 2026-09-02 bounded recorder shutdown and Forgejo/OpenShip release path (deployed)
 

@@ -1,9 +1,12 @@
 export const PLAYBACK_SETUP_MS = 5_000;
+export const PLAYBACK_RETRY_INTERVAL_MS = 3_000;
 export const PLAYBACK_STALL_MS = 10_000;
 export const PLAYBACK_EPISODE_MS = 30_000;
-export const PLAYBACK_STABLE_RESET_MS = 5 * 60_000;
-export const PLAYBACK_FAST_COOLDOWN_MS = 15_000;
-export const PLAYBACK_COOLDOWN_MS = 5 * 60_000;
+// A recovered stream must not spend its next failure's budget while playing.
+// Require sustained progress, so one buffered frame cannot reset a failed episode.
+export const PLAYBACK_STABLE_RESET_MS = 5_000;
+// Keep checking even after a long camera outage; never park a tile for minutes.
+export const PLAYBACK_COOLDOWN_MS = 5_000;
 export const PLAYBACK_PRIMARY_PROBE_INTERVAL_MS = 60_000;
 
 export type PlaybackProbeClock = {
@@ -14,6 +17,7 @@ export type PlaybackProbeClock = {
 
 export class PlaybackProbeScheduler {
   private timerId: number | null = null;
+  private generation = 0;
   private readonly clock: PlaybackProbeClock;
 
   constructor(clock: PlaybackProbeClock = browserPlaybackProbeClock()) {
@@ -22,13 +26,17 @@ export class PlaybackProbeScheduler {
 
   arm(until: number, probe: () => void): void {
     this.clear();
+    const generation = this.generation;
     this.timerId = this.clock.set(() => {
+      if (generation !== this.generation) return;
       this.timerId = null;
+      this.generation++;
       probe();
     }, Math.max(0, until - this.clock.now()));
   }
 
   clear(): void {
+    this.generation++;
     if (this.timerId === null) return;
     this.clock.clear(this.timerId);
     this.timerId = null;
@@ -158,7 +166,6 @@ export class PlaybackRecovery {
   private stableSince: number | null = null;
   private lastProgressAt: number | null = null;
   private stallStartedAt: number | null = null;
-  private fastCooldownAvailable = true;
 
   constructor(streamNames: readonly string[]) {
     this.streamNames = streamNames.filter((name, index) => Boolean(name) && streamNames.indexOf(name) === index);
@@ -192,7 +199,6 @@ export class PlaybackRecovery {
     this.episodeStartedAt = null;
     this.step = 0;
     this.stableSince = now;
-    this.fastCooldownAvailable = true;
     return true;
   }
 
@@ -229,13 +235,10 @@ export class PlaybackRecovery {
     this.stableSince = null;
     this.lastProgressAt = null;
     this.stallStartedAt = null;
-    this.fastCooldownAvailable = true;
   }
 
   private cooldown(now: number): PlaybackRecoveryStep {
-    const delayMs = this.fastCooldownAvailable ? PLAYBACK_FAST_COOLDOWN_MS : PLAYBACK_COOLDOWN_MS;
-    this.fastCooldownAvailable = false;
-    return { action: "cooldown", until: now + delayMs };
+    return { action: "cooldown", until: now + PLAYBACK_COOLDOWN_MS };
   }
 }
 

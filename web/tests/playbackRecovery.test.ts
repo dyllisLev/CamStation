@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  PLAYBACK_COOLDOWN_MS,
   PLAYBACK_PRIMARY_PROBE_INTERVAL_MS,
+  PLAYBACK_STALL_MS,
+  PLAYBACK_STABLE_RESET_MS,
   PlaybackPrimaryPromoter,
   PlaybackProbeScheduler,
   PlaybackRecovery,
@@ -30,9 +33,7 @@ test("a healthy fallback keeps probing both primary transports until one recover
         timerCallback = callback;
         return 1;
       },
-      clear: () => {
-        timerCallback = null;
-      },
+      clear: () => { timerCallback = null; },
     },
   );
 
@@ -43,7 +44,6 @@ test("a healthy fallback keeps probing both primary transports until one recover
   });
   assert.equal(promoter.active, true);
   assert.ok(timerCallback);
-
   fireTimer();
   await Promise.resolve();
   await Promise.resolve();
@@ -55,7 +55,7 @@ test("a healthy fallback keeps probing both primary transports until one recover
     "failed:mse",
   ]);
   assert.equal(promoter.active, true);
-  assert.ok(timerCallback, "both failures must schedule another cycle without disturbing fallback");
+  assert.ok(timerCallback, "both failures schedule another probe cycle without disturbing fallback");
 
   now += PLAYBACK_PRIMARY_PROBE_INTERVAL_MS;
   fireTimer();
@@ -70,27 +70,14 @@ test("a healthy fallback keeps probing both primary transports until one recover
 test("stopping primary promotion aborts an in-flight probe and prevents rescheduling", async () => {
   let timerCallback: (() => void) | null = null;
   let aborted = false;
-  const fireTimer = () => {
-    const callback = timerCallback;
-    timerCallback = null;
-    callback?.();
-  };
   const promoter = new PlaybackPrimaryPromoter(
     (_transport, signal) => new Promise<boolean>((resolve) => {
-      signal.addEventListener("abort", () => {
-        aborted = true;
-        resolve(false);
-      }, { once: true });
+      signal.addEventListener("abort", () => { aborted = true; resolve(false); }, { once: true });
     }),
     {
       now: () => 1_000,
-      set: (callback) => {
-        timerCallback = callback;
-        return 1;
-      },
-      clear: () => {
-        timerCallback = null;
-      },
+      set: (callback) => { timerCallback = callback; return 1; },
+      clear: () => { timerCallback = null; },
     },
   );
 
@@ -99,7 +86,9 @@ test("stopping primary promotion aborts an in-flight probe and prevents reschedu
     onProbeFailed: () => undefined,
     onRecovered: () => assert.fail("a stopped probe cannot promote"),
   });
-  fireTimer();
+  const callback = timerCallback;
+  timerCallback = null;
+  callback?.();
   await Promise.resolve();
   promoter.stop();
   await Promise.resolve();
@@ -109,329 +98,208 @@ test("stopping primary promotion aborts an in-flight probe and prevents reschedu
   assert.equal(timerCallback, null);
 });
 
-test("a verified primary promotion receives a fresh bounded recovery episode", () => {
-  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
-  episode.recordFailure(1_000);
-  assert.equal(episode.remainingMs(31_001), 0);
-
-  episode.resetForPrimaryPromotion();
-
-  assert.equal(episode.remainingMs(31_001), 30_000);
-  assert.deepEqual(episode.nextFailure(31_001), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
-  });
-});
-
-test("the first exhausted episode gets one fast retry before the steady cooldown", () => {
-  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
-
-  episode.recordFailure(1_000);
-  episode.nextFailure(1_000);
-  episode.recordFailure(6_000);
-  episode.nextFailure(6_000);
-  episode.recordFailure(11_000);
-  episode.nextFailure(11_000);
-  episode.recordFailure(21_000);
-  episode.nextFailure(21_000);
-  episode.recordFailure(31_000);
-
-  assert.deepEqual(episode.nextFailure(31_000), { action: "cooldown", until: 46_000 });
-
-  episode.restartEpisode(46_000);
-  episode.recordFailure(46_000);
-  episode.nextFailure(46_000);
-  episode.recordFailure(51_000);
-  episode.nextFailure(51_000);
-  episode.recordFailure(56_000);
-  episode.nextFailure(56_000);
-  episode.recordFailure(66_000);
-  episode.nextFailure(66_000);
-  episode.recordFailure(76_000);
-
-  assert.deepEqual(episode.nextFailure(76_000), { action: "cooldown", until: 376_000 });
-});
-
-test("each cooldown probe starts a fresh bounded episode that revisits fallback", () => {
-  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
-
-  episode.recordFailure(1_000);
-  episode.nextFailure(1_000);
-  episode.nextFailure(5_000);
-  episode.nextFailure(10_000);
-  episode.nextFailure(20_000);
-  assert.deepEqual(episode.nextFailure(31_001), { action: "cooldown", until: 46_001 });
-
-  episode.restartEpisode(46_001);
-
-  assert.equal(episode.remainingMs(46_001), 30_000);
-  assert.equal(episode.stalledForMs(46_001), 45_001);
-  assert.deepEqual(episode.nextFailure(46_001), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
-  });
-  assert.deepEqual(episode.nextFailure(51_000), {
-    transport: "mse",
-    streamName: "yard-live",
-    attempt: 3,
-  });
-  assert.deepEqual(episode.nextFailure(56_000), {
-    transport: "mse",
-    streamName: "yard-focus",
-    attempt: 4,
-  });
-  assert.deepEqual(episode.nextFailure(66_000), { action: "resubscribe", attempt: 5 });
-  assert.deepEqual(episode.nextFailure(76_002), { action: "cooldown", until: 376_002 });
-});
-
-test("the low-frequency probe scheduler can re-arm after every failed probe", () => {
+test("clearing or rearming a probe scheduler makes stale callbacks harmless", () => {
   let now = 1_000;
   let nextTimer = 0;
-  let pending: { readonly id: number; readonly callback: () => void; readonly delayMs: number } | null = null;
+  const callbacks = new Map<number, () => void>();
+  const cleared: number[] = [];
   const delays: number[] = [];
   const scheduler = new PlaybackProbeScheduler({
     now: () => now,
     set: (callback, delayMs) => {
-      const timer = { id: ++nextTimer, callback, delayMs };
-      pending = timer;
+      const id = ++nextTimer;
+      callbacks.set(id, callback);
       delays.push(delayMs);
-      return timer.id;
+      return id;
     },
-    clear: (timerId) => {
-      if (pending?.id === timerId) pending = null;
-    },
+    // Retain callbacks: one already queued when clearTimeout runs must be harmless.
+    clear: (id) => cleared.push(id),
   });
   let probes = 0;
 
-  scheduler.arm(now + 300_000, () => probes++);
-  assert.equal(pending?.delayMs, 300_000);
-  pending?.callback();
+  scheduler.arm(now + 5_000, () => probes++);
+  const staleAfterRearm = callbacks.get(1);
+  now += 1_000;
+  scheduler.arm(now + 5_000, () => probes++);
+  staleAfterRearm?.();
+  assert.equal(probes, 0);
+  callbacks.get(2)?.();
+  callbacks.get(2)?.();
   assert.equal(probes, 1);
 
-  now += 305_000;
-  scheduler.arm(now + 300_000, () => probes++);
-  assert.equal(pending?.delayMs, 300_000);
-  pending?.callback();
-
-  assert.equal(probes, 2);
-  assert.deepEqual(delays, [300_000, 300_000]);
+  scheduler.arm(now + 5_000, () => probes++);
+  const staleAfterClear = callbacks.get(3);
+  scheduler.clear();
+  staleAfterClear?.();
+  assert.equal(probes, 1);
+  assert.deepEqual(cleared, [1, 3]);
+  assert.deepEqual(delays, [5_000, 5_000, 5_000]);
 });
 
-test("one episode stops after WebRTC, reconnect, MSE primary, fallback, and resubscribe", () => {
+test("a verified primary promotion receives a fresh bounded recovery episode", () => {
   const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
-
-  assert.deepEqual(episode.nextFailure(1_000), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
+  episode.recordFailure(1_000);
+  assert.equal(episode.remainingMs(31_001), 0);
+  episode.resetForPrimaryPromotion();
+  assert.equal(episode.remainingMs(31_001), 30_000);
+  assert.deepEqual(episode.nextFailure(31_001), {
+    transport: "webrtc", streamName: "yard-live", attempt: 2,
   });
-  assert.deepEqual(episode.nextFailure(5_000), {
-    transport: "mse",
-    streamName: "yard-live",
-    attempt: 3,
-  });
-  assert.deepEqual(episode.nextFailure(10_000), {
-    transport: "mse",
-    streamName: "yard-focus",
-    attempt: 4,
-  });
-  assert.deepEqual(episode.nextFailure(20_000), { action: "resubscribe", attempt: 5 });
-  assert.deepEqual(episode.nextFailure(31_001), { action: "cooldown", until: 46_001 });
 });
 
-test("the first stall after sixty healthy seconds gets a fresh finite recovery episode", () => {
+test("every exhausted episode cools down for exactly five seconds", () => {
+  assert.equal(PLAYBACK_COOLDOWN_MS, 5_000);
   const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+  const cooldowns: number[] = [];
 
-  assert.equal(episode.recordProgress(1_000), false);
-  assert.equal(episode.recordProgress(60_000), false);
-  episode.recordFailure(70_001);
-
-  assert.deepEqual(episode.nextFailure(70_001), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
-  });
-  assert.deepEqual(episode.nextFailure(75_000), {
-    transport: "mse",
-    streamName: "yard-live",
-    attempt: 3,
-  });
-  assert.deepEqual(episode.nextFailure(80_000), {
-    transport: "mse",
-    streamName: "yard-focus",
-    attempt: 4,
-  });
-  assert.deepEqual(episode.nextFailure(90_000), { action: "resubscribe", attempt: 5 });
-  assert.deepEqual(episode.nextFailure(100_002), { action: "cooldown", until: 115_002 });
+  for (let cycle = 0, now = 1_000; cycle < 8; cycle++) {
+    if (cycle > 0) episode.restartEpisode(now);
+    const attempts = [
+      episode.nextFailure(now),
+      episode.nextFailure(now + 5_000),
+      episode.nextFailure(now + 10_000),
+      episode.nextFailure(now + 20_000),
+    ];
+    assert.deepEqual(attempts.map((step) => step.attempt), [2, 3, 4, 5]);
+    const cooldown = episode.nextFailure(now + 30_000);
+    assert.deepEqual(cooldown, { action: "cooldown", until: now + 35_000 });
+    cooldowns.push(cooldown.until - (now + 30_000));
+    now = cooldown.until;
+  }
+  assert.deepEqual(cooldowns, Array(8).fill(5_000));
 });
 
-test("a single-candidate episode skips the missing fallback and still terminates", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-
-  assert.equal(episode.nextFailure(1_000).attempt, 2);
-  assert.equal(episode.nextFailure(2_000).attempt, 3);
-  assert.deepEqual(episode.nextFailure(3_000), { action: "resubscribe", attempt: 4 });
-  assert.deepEqual(episode.nextFailure(4_000), { action: "cooldown", until: 19_000 });
-});
-
-test("only five minutes of continuous progress resets the finite episode", () => {
+test("a recovered cooldown retry that runs for 183 seconds gets fresh WebRTC, MSE, fallback steps", () => {
   const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+  episode.recordFailure(1_000);
+  episode.nextFailure(1_000);
+  episode.nextFailure(6_000);
+  episode.nextFailure(11_000);
+  episode.nextFailure(21_000);
+  assert.deepEqual(episode.nextFailure(31_000), { action: "cooldown", until: 36_000 });
+
+  episode.restartEpisode(36_000);
+  for (let now = 36_100; now <= 219_100; now += 1_000) episode.recordProgress(now);
+  assert.equal(episode.remainingMs(219_100), 30_000, "sustained media progress clears the prior deadline");
+
+  episode.recordFailure(220_100);
+  assert.deepEqual(episode.nextFailure(220_100), { transport: "webrtc", streamName: "yard-live", attempt: 2 });
+  assert.deepEqual(episode.nextFailure(225_100), { transport: "mse", streamName: "yard-live", attempt: 3 });
+  assert.deepEqual(episode.nextFailure(230_100), { transport: "mse", streamName: "yard-focus", attempt: 4 });
+});
+
+test("five seconds of continuous genuine progress clears the deadline and retry step", () => {
+  assert.equal(PLAYBACK_STABLE_RESET_MS, 5_000);
+  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+  episode.recordFailure(1_000);
   episode.nextFailure(1_000);
   episode.nextFailure(2_000);
 
   assert.equal(episode.recordProgress(3_000), false);
-  for (let now = 12_000; now < 303_000; now += 9_000) {
-    assert.equal(episode.recordProgress(now), false);
-  }
-  assert.equal(episode.recordProgress(303_000), true);
-  assert.equal(episode.remainingMs(304_000), 30_000);
-  assert.deepEqual(episode.nextFailure(304_000), {
-    transport: "webrtc",
-    streamName: "yard-live",
-    attempt: 2,
-  });
+  assert.equal(episode.recordProgress(8_000), true);
+  assert.equal(episode.remainingMs(8_001), 30_000);
+  episode.recordFailure(9_000);
+  assert.deepEqual(episode.nextFailure(9_000), { transport: "webrtc", streamName: "yard-live", attempt: 2 });
 });
 
-test("five minutes of continuous progress rearms the one fast cooldown", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-
-  episode.recordFailure(1_000);
-  episode.nextFailure(1_000);
-  episode.nextFailure(2_000);
-  episode.nextFailure(3_000);
-  assert.deepEqual(episode.nextFailure(4_000), { action: "cooldown", until: 19_000 });
-
-  episode.restartEpisode(19_000);
-  assert.equal(episode.recordProgress(20_000), false);
-  for (let now = 29_000; now < 320_000; now += 9_000) {
-    assert.equal(episode.recordProgress(now), false);
-  }
-  assert.equal(episode.recordProgress(320_000), true);
-
-  episode.recordFailure(321_000);
-  episode.nextFailure(321_000);
-  episode.nextFailure(322_000);
-  episode.nextFailure(323_000);
-  assert.deepEqual(episode.nextFailure(324_000), { action: "cooldown", until: 339_000 });
-});
-
-test("a verified primary promotion rearms the one fast cooldown", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-
-  episode.recordFailure(1_000);
-  episode.nextFailure(1_000);
-  episode.nextFailure(2_000);
-  episode.nextFailure(3_000);
-  assert.deepEqual(episode.nextFailure(4_000), { action: "cooldown", until: 19_000 });
-
-  episode.restartEpisode(19_000);
-  episode.nextFailure(19_000);
-  episode.nextFailure(20_000);
-  episode.nextFailure(21_000);
-  assert.deepEqual(episode.nextFailure(22_000), { action: "cooldown", until: 322_000 });
-
-  episode.resetForPrimaryPromotion();
-  episode.nextFailure(23_000);
-  episode.nextFailure(24_000);
-  episode.nextFailure(25_000);
-  assert.deepEqual(episode.nextFailure(26_000), { action: "cooldown", until: 41_000 });
-});
-
-test("brief progress does not rearm a consumed fast cooldown", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-
-  episode.recordFailure(1_000);
-  episode.nextFailure(1_000);
-  episode.nextFailure(2_000);
-  episode.nextFailure(3_000);
-  assert.deepEqual(episode.nextFailure(4_000), { action: "cooldown", until: 19_000 });
-
-  episode.restartEpisode(19_000);
-  assert.equal(episode.recordProgress(20_000), false);
-  episode.recordFailure(21_000);
-  episode.nextFailure(21_000);
-  episode.nextFailure(22_000);
-  episode.nextFailure(23_000);
-
-  assert.deepEqual(episode.nextFailure(24_000), { action: "cooldown", until: 324_000 });
-});
-
-test("a media stall breaks the stable-progress reset interval", () => {
+test("a reported failure breaks the continuous five-second stable-progress interval", () => {
   const episode = new PlaybackRecovery(["yard-live"]);
 
   assert.equal(episode.recordProgress(1_000), false);
-  assert.equal(episode.recordProgress(12_001), false);
-  for (let now = 21_000; now < 312_001; now += 9_000) {
-    assert.equal(episode.recordProgress(now), false);
-  }
-  assert.equal(episode.recordProgress(312_001), true);
+  assert.equal(episode.recordProgress(4_000), false);
+  episode.recordFailure(5_000);
+  assert.equal(episode.recordProgress(6_000), false);
+  assert.equal(episode.recordProgress(10_999), false);
+  assert.equal(episode.recordProgress(11_000), true);
 });
 
-test("a reported failure resets the continuous stable-progress interval", () => {
+test("a progress gap longer than the stall threshold restarts the stable interval", () => {
   const episode = new PlaybackRecovery(["yard-live"]);
 
   assert.equal(episode.recordProgress(1_000), false);
-  for (let now = 10_000; now <= 280_000; now += 9_000) {
-    assert.equal(episode.recordProgress(now), false);
-  }
-  episode.recordFailure(281_000);
-  assert.equal(episode.recordProgress(282_000), false);
-  for (let now = 291_000; now < 582_000; now += 9_000) {
-    assert.equal(episode.recordProgress(now), false);
-  }
-  assert.equal(episode.recordProgress(582_000), true);
+  assert.equal(episode.recordProgress(1_000 + PLAYBACK_STALL_MS), true);
+  assert.equal(episode.recordProgress(1_001 + PLAYBACK_STALL_MS * 2), false);
+  assert.equal(episode.recordProgress(6_000 + PLAYBACK_STALL_MS * 2), false);
+  assert.equal(episode.recordProgress(6_001 + PLAYBACK_STALL_MS * 2), true);
 });
 
-test("brief progress cannot rearm the original 30-second episode", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-  assert.equal(episode.nextFailure(1_000).attempt, 2);
-  episode.recordProgress(20_000);
-
-  assert.deepEqual(episode.nextFailure(31_001), { action: "cooldown", until: 46_001 });
-});
-
-test("late attempts are bounded by the original remaining deadline", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
-  episode.recordFailure(0);
-
-  assert.equal(episode.remainingMs(28_000), 2_000);
-  assert.equal(episode.boundedDelayMs(28_000, 5_000), 2_000);
-  assert.equal(episode.remainingMs(30_000), 0);
-  assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 45_000 });
-});
-
-test("stall duration spans retry transitions and terminal cooldown", () => {
+test("cooldown restart preserves stalled telemetry until real media progress", () => {
   const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
-
   episode.recordFailure(1_000);
   assert.equal(episode.stalledForMs(1_000), 0);
   assert.equal(episode.nextFailure(1_000).attempt, 2);
+  assert.equal(episode.stalledForMs(6_000), 5_000);
+  assert.equal(episode.nextFailure(6_000).attempt, 3);
+  assert.equal(episode.nextFailure(11_000).attempt, 4);
+  assert.equal(episode.nextFailure(21_000).attempt, 5);
+  assert.deepEqual(episode.nextFailure(31_000), { action: "cooldown", until: 36_000 });
+  assert.equal(episode.stalledForMs(31_000), 30_000);
 
-  episode.recordFailure(5_000);
-  assert.equal(episode.stalledForMs(5_000), 4_000);
-  assert.equal(episode.nextFailure(5_000).attempt, 3);
-
-  episode.recordFailure(10_000);
-  assert.equal(episode.nextFailure(10_000).attempt, 4);
-  episode.recordFailure(20_000);
-  assert.equal(episode.nextFailure(20_000).attempt, 5);
-  episode.recordFailure(30_000);
-
-  assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 45_000 });
-  assert.equal(episode.stalledForMs(30_000), 29_000);
+  episode.restartEpisode(36_000);
+  assert.equal(episode.stalledForMs(36_000), 35_000);
+  assert.equal(episode.nextFailure(36_000).attempt, 2);
+  assert.equal(episode.stalledForMs(40_000), 39_000);
+  assert.equal(episode.recordProgress(41_000), false);
+  assert.equal(episode.stalledForMs(41_001), 0);
 });
 
-test("genuine media progress clears stall telemetry without rearming the episode", () => {
-  const episode = new PlaybackRecovery(["yard-live"]);
+test("every cooldown restart revisits the exact transport, fallback, and deadline schedule", () => {
+  const episode = new PlaybackRecovery(["yard-live", "yard-focus"]);
+  const assertEpisode = (startedAt: number) => {
+    assert.deepEqual(episode.nextFailure(startedAt), {
+      transport: "webrtc", streamName: "yard-live", attempt: 2,
+    });
+    assert.deepEqual(episode.nextFailure(startedAt + 5_000), {
+      transport: "mse", streamName: "yard-live", attempt: 3,
+    });
+    assert.deepEqual(episode.nextFailure(startedAt + 10_000), {
+      transport: "mse", streamName: "yard-focus", attempt: 4,
+    });
+    assert.deepEqual(episode.nextFailure(startedAt + 20_000), { action: "resubscribe", attempt: 5 });
+    assert.equal(episode.remainingMs(startedAt + 29_999), 1);
+    assert.deepEqual(episode.nextFailure(startedAt + 30_000), {
+      action: "cooldown", until: startedAt + 35_000,
+    });
+  };
 
+  episode.recordFailure(1_000);
+  assertEpisode(1_000);
+  episode.restartEpisode(36_000);
+  assertEpisode(36_000);
+});
+
+test("one-frame intermittency cannot reset the finite recovery budget", () => {
+  const episode = new PlaybackRecovery(["yard-live"]);
+  episode.recordFailure(1_000);
+  assert.equal(episode.nextFailure(1_000).attempt, 2);
+  assert.equal(episode.recordProgress(20_000), false, "one decoded frame only starts the stable interval");
+  episode.recordFailure(21_000);
+  assert.equal(episode.remainingMs(30_999), 1);
+  assert.deepEqual(episode.nextFailure(31_000), { action: "cooldown", until: 36_000 });
+});
+
+test("a single-candidate episode is bounded and uses the same cooldown", () => {
+  const episode = new PlaybackRecovery(["yard-live"]);
+  assert.equal(episode.nextFailure(1_000).attempt, 2);
+  assert.equal(episode.nextFailure(2_000).attempt, 3);
+  assert.deepEqual(episode.nextFailure(3_000), { action: "resubscribe", attempt: 4 });
+  assert.deepEqual(episode.nextFailure(31_000), { action: "cooldown", until: 36_000 });
+});
+
+test("late retry delay stays bounded by the original 30-second episode deadline", () => {
+  const episode = new PlaybackRecovery(["yard-live"]);
+  episode.recordFailure(0);
+  assert.equal(episode.remainingMs(28_000), 2_000);
+  assert.equal(episode.boundedDelayMs(28_000, 5_000), 2_000);
+  assert.equal(episode.remainingMs(30_000), 0);
+  assert.deepEqual(episode.nextFailure(30_000), { action: "cooldown", until: 35_000 });
+});
+
+test("genuine media progress clears stall telemetry before it has been stable long enough to reset", () => {
+  const episode = new PlaybackRecovery(["yard-live"]);
   episode.recordFailure(1_000);
   assert.equal(episode.stalledForMs(4_000), 3_000);
   assert.equal(episode.recordProgress(5_000), false);
-
   assert.equal(episode.stalledForMs(6_000), 0);
   assert.equal(episode.remainingMs(6_000), 25_000);
-  episode.recordFailure(8_000);
-  assert.equal(episode.stalledForMs(10_000), 2_000);
 });
