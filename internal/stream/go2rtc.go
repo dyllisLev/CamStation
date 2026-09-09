@@ -30,6 +30,7 @@ type Go2RTC struct {
 
 	mu            sync.Mutex
 	cmd           *exec.Cmd
+	cmdDone       <-chan struct{}
 	expectedExits map[*exec.Cmd]struct{}
 	applyMu       sync.Mutex
 }
@@ -190,24 +191,27 @@ func (g *Go2RTC) startupConfig(cameras []store.Camera) ([]byte, bool, error) {
 func (g *Go2RTC) Start(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.startLocked(ctx)
+}
 
+func (g *Go2RTC) startLocked(ctx context.Context) error {
 	if _, err := exec.LookPath(g.binary); err != nil {
 		g.log(opslog.Error, "binary_unavailable", opslog.Fields{ErrorCode: "binary_unavailable", Message: err.Error()})
 		return err
 	}
-	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
+	if g.processRunningLocked() {
 		if healthy(ctx, g.apiURL) {
 			return nil
 		}
 		g.log(opslog.Warn, "unhealthy_process_stopped", opslog.Fields{State: "unhealthy"})
-		g.expectExitLocked(g.cmd)
-		_ = g.cmd.Process.Kill()
-		g.cmd = nil
+		g.stopProcessLocked()
 	}
 
 	startedAt := time.Now()
 	g.log(opslog.Debug, "process_starting", opslog.Fields{State: "starting"})
 	cmd := exec.Command(g.binary, "-config", g.configPath)
+	// Descendants must not indefinitely retain the old process's log pipes.
+	cmd.WaitDelay = 2 * time.Second
 	if g.logger != nil {
 		cmd.Stdout = newOperationalLineWriter(g.logger, "stream.go2rtc", opslog.Info)
 		cmd.Stderr = newOperationalLineWriter(g.logger, "stream.go2rtc", opslog.Warn)
@@ -220,8 +224,12 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 		return err
 	}
 	g.cmd = cmd
+	done := make(chan struct{})
+	g.cmdDone = done
 	go func() {
 		err := cmd.Wait()
+		// Release lifecycle waiters before acquiring g.mu to classify/log exit.
+		close(done)
 		expected := g.takeExpectedExit(cmd)
 		fields := opslog.Fields{State: "stopped", DurationMS: time.Since(startedAt).Milliseconds()}
 		level := opslog.Info
@@ -243,10 +251,8 @@ func (g *Go2RTC) Start(ctx context.Context) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if g.cmd == cmd && cmd.Process != nil && cmd.ProcessState == nil {
-		g.expectExitLocked(cmd)
-		_ = cmd.Process.Kill()
-		g.cmd = nil
+	if g.cmd == cmd {
+		g.stopProcessLocked()
 	}
 	g.log(opslog.Error, "startup_timeout", opslog.Fields{
 		State: "unhealthy", DurationMS: time.Since(startedAt).Milliseconds(), ErrorCode: "startup_timeout",
@@ -298,15 +304,39 @@ func (g *Go2RTC) StopLiveWarmers() {
 	}
 }
 
-func (g *Go2RTC) restartProcess(ctx context.Context) error {
-	g.mu.Lock()
-	if g.cmd != nil && g.cmd.Process != nil && g.cmd.ProcessState == nil {
+// processRunningLocked observes only the completion channel, never Cmd.ProcessState,
+// which exec.Cmd.Wait writes asynchronously.
+func (g *Go2RTC) processRunningLocked() bool {
+	if g.cmd == nil {
+		return false
+	}
+	select {
+	case <-g.cmdDone:
+		return false
+	default:
+		return true
+	}
+}
+
+// stopProcessLocked keeps ownership until Wait has reaped the child. A Kill
+// request alone does not guarantee that its listening sockets have closed.
+func (g *Go2RTC) stopProcessLocked() {
+	if g.cmd == nil {
+		return
+	}
+	if g.processRunningLocked() {
 		g.expectExitLocked(g.cmd)
 		_ = g.cmd.Process.Kill()
-		g.cmd = nil
 	}
-	g.mu.Unlock()
-	return g.Start(ctx)
+	<-g.cmdDone
+	g.cmd, g.cmdDone = nil, nil
+}
+
+func (g *Go2RTC) restartProcess(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stopProcessLocked()
+	return g.startLocked(ctx)
 }
 
 func (g *Go2RTC) Status(ctx context.Context) Status {
