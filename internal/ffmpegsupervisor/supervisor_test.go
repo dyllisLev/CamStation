@@ -478,3 +478,29 @@ exit 0
 		t.Fatal("new producer did not use CPU", got)
 	}
 }
+
+func TestCQ23ProbeAndCPUFallbackPreserveMedia(t *testing.T) {
+	c := fakeFFmpeg(t, `case "$*" in *lavfi*) exit 0;; *h264_nvenc*) echo '[h264_nvenc] EncodePicture failed: NV_ENC_ERR_GENERIC' >&2; exit 1;; esac
+exit 0
+`)
+	args := []string{"-camstation-output", "cam_cq23", "-c:v", "h264_nvenc", "-preset:v", "llhp", "-tune:v", "ll", "-rc", "vbr", "-cq", "23", "-b:v", "0", "-vf", "scale=640:360,fps=10", "-c:a", "aac", "-b:a", "32k", "-f", "null", "-"}
+	if Run(context.Background(), c, args) != 0 {
+		t.Fatal("CPU fallback failed")
+	}
+	got := calls(t, c)
+	if len(got) != 3 {
+		t.Fatal(got)
+	}
+	if !strings.Contains(got[0], "-c:v h264_nvenc -preset:v llhp -tune:v ll -pix_fmt:v yuv420p -g 20 -bf 0 -zerolatency 1 -rc vbr -cq 23 -b:v 0 -f null -") {
+		t.Fatal("probe did not use production CQ23 preset", got[0])
+	}
+	cpu := got[2]
+	for _, forbidden := range []string{"-rc ", "-cq ", "-b:v 0", "h264_nvenc"} {
+		if strings.Contains(cpu, forbidden) {
+			t.Fatal("GPU rate control leaked to CPU", cpu)
+		}
+	}
+	if !strings.Contains(cpu, "-c:v libx264 -preset:v veryfast -tune:v zerolatency -vf scale=640:360,fps=10 -c:a aac -b:a 32k") {
+		t.Fatal("CPU media policy changed", cpu)
+	}
+}

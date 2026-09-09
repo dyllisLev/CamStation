@@ -252,7 +252,7 @@ func renderPolicyConfigWithEncoder(cameras []store.Camera, applied bool, candida
 		// go2rtc closes its RTSP producer before recreating it. Give the supervisor
 		// SIGTERM so it can drain the child diagnostic and preserve a GPU fallback latch.
 		buf.WriteString("  output: \"-user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}#killsignal=15#killtimeout=2\"\n")
-		buf.WriteString("  h264/nvenc: \"-codec:v h264_nvenc -preset:v llhp -tune:v ll -pix_fmt:v yuv420p -g 20 -bf 0 -zerolatency 1\"\n")
+		buf.WriteString("  h264/nvenc: \"-codec:v h264_nvenc -preset:v llhp -tune:v ll -pix_fmt:v yuv420p -g 20 -bf 0 -zerolatency 1 -rc vbr -cq 23 -b:v 0\"\n")
 	}
 	buf.WriteString("  h264: \"-codec:v libx264 -preset:v veryfast -tune:v zerolatency -pix_fmt:v yuv420p -g 20 -keyint_min 20 -sc_threshold 0\"\n")
 	preload := false

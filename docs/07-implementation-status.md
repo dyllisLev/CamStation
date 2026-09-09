@@ -39,6 +39,9 @@ This document records the current implementation state so the next session can c
   and remain on CPU until the go2rtc generation changes; source failures are separate.
 - The glibc image pins FFmpeg 5.1.7, NVIDIA 470.256.02 libraries and matching codec
   headers. Runtime setup supports the existing GTX 660 Ti without replacing host drivers.
+- NVENC uses VBR CQ23 without a fixed target bitrate after a same-source 4K sample
+  exposed substantial quality loss with the default 2 Mbps target. The selected
+  setting matched CPU SSIM/PSNR in that sample, with approximately 12.5% more bitrate.
 - Unit/race checks and UID 10001 image smoke checks pass. Development real-camera,
   failure-recovery and production LXC/CPU comparison evidence is being collected;
   this entry does not yet claim production deployment.

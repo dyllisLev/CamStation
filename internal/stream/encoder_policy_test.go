@@ -65,6 +65,9 @@ func TestNVENCAllocationIsStableAndIncludesOnDemand(t *testing.T) {
 	if !strings.HasSuffix(cfg.FFmpeg["output"], "{output}#killsignal=15#killtimeout=2") {
 		t.Fatal("supervisor must drain GPU diagnostics on go2rtc producer close")
 	}
+	if !strings.Contains(cfg.FFmpeg["h264/nvenc"], "-rc vbr -cq 23 -b:v 0") {
+		t.Fatal("NVENC must preserve validated quality instead of implicit low bitrate")
+	}
 	if strings.Contains(cfg.FFmpeg["h264/nvenc"], "cuda") {
 		t.Fatal("encoding must not enable CUDA decode")
 	}

@@ -34,7 +34,7 @@ docker run --rm --network none "${devices[@]}" --entrypoint /bin/sh "$image" -ec
     nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
     ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=30 \
       -t 3 -c:v h264_nvenc -preset:v llhp -tune:v ll -pix_fmt:v yuv420p \
-      -g 20 -bf 0 -zerolatency 1 /tmp/gpu.mp4
+      -g 20 -bf 0 -zerolatency 1 -rc vbr -cq 23 -b:v 0 /tmp/gpu.mp4
     ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of json /tmp/gpu.mp4
   fi
 ' sh "$mode"

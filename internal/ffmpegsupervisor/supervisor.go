@@ -136,7 +136,7 @@ func Run(ctx context.Context, cfg Config, args []string) int {
 			}
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout)
-			probe := []string{"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30", "-frames:v", "3", "-an", "-c:v", "h264_nvenc", "-preset:v", "llhp", "-tune:v", "ll", "-pix_fmt:v", "yuv420p", "-g", "20", "-bf", "0", "-zerolatency", "1", "-f", "null", "-"}
+			probe := []string{"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30", "-frames:v", "3", "-an", "-c:v", "h264_nvenc", "-preset:v", "llhp", "-tune:v", "ll", "-pix_fmt:v", "yuv420p", "-g", "20", "-bf", "0", "-zerolatency", "1", "-rc", "vbr", "-cq", "23", "-b:v", "0", "-f", "null", "-"}
 			code, detail := execute(probeCtx, cfg, probe, true, true)
 			timedOut := probeCtx.Err() == context.DeadlineExceeded
 			cancel()
@@ -227,6 +227,12 @@ func cpuArgs(args []string) []string {
 			}
 			if arg == "-tune" || arg == "-tune:v" {
 				out = append(out, arg, "zerolatency")
+				i++
+				continue
+			}
+			// The NVENC CQ preset disables its bitrate target with -b:v 0.
+			// Removing that sentinel restores libx264's default CRF mode.
+			if (arg == "-b:v" || arg == "-b") && args[i+1] == "0" {
 				i++
 				continue
 			}
