@@ -147,3 +147,54 @@ loop:
 		t.Fatalf("finalization lost packet time: %+v", final)
 	}
 }
+
+func TestFinalizedAudioOnlyAttemptIsPreservedWithoutPlaybackCoverage(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := filepath.Join(root, "temp")
+	if err = os.MkdirAll(tempDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tempDir, "Attempt_2026-09-09_13-00-00_deadbeef.mp4")
+	out, err := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "0.1", "-c:a", "aac", "-movflags", "+frag_keyframe+empty_moov+default_base_moof", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("audio-only fixture: %v %s", err, out)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := New(db, filepath.Join(root, "archive"), tempDir, 5)
+	w := &worker{camera: store.Camera{ID: 1, Name: "Attempt", StreamName: "attempt"}, manager: manager}
+	if err = w.openSegment(path); err != nil {
+		t.Fatal(err)
+	}
+	id := w.currentRef().id
+	w.closeCurrent(time.Now().Unix())
+	segment, err := db.GetRecordingSegmentByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segment.Status != "failed" || segment.Error != "no complete playable video fragment" || segment.FinalPath == "" || segment.FileSize == nil || *segment.FileSize != int64(len(original)) || segment.BackupState != "pending" {
+		t.Fatalf("failed input promoted or lost: %+v", segment)
+	}
+	archived, err := os.ReadFile(segment.FinalPath)
+	if err != nil || !bytes.Equal(archived, original) {
+		t.Fatalf("failed attempt bytes lost: %v", err)
+	}
+	spans, err := db.PlaybackSpans(t.Context(), 1, 0, time.Now().Add(time.Hour).UnixMilli())
+	if err != nil || len(spans) != 0 {
+		t.Fatalf("failed attempt advertised as video: %+v %v", spans, err)
+	}
+}

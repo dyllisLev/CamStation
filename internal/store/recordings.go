@@ -58,15 +58,27 @@ func (d *DB) openRecordingSegment(ctx context.Context, segment RecordingSegment,
 }
 
 func (d *DB) CloseRecordingSegment(ctx context.Context, streamName, filename string, tsEnd float64, finalPath string, fileSize *int64) error {
+	return d.closeRecordingSegment(ctx, streamName, filename, tsEnd, finalPath, fileSize, "ready", "")
+}
+
+// CloseFailedRecordingSegment preserves a closed file without advertising it as
+// playable or making it eligible for ready-file backup and cleanup jobs.
+func (d *DB) CloseFailedRecordingSegment(ctx context.Context, streamName, filename string, tsEnd float64, finalPath string, fileSize *int64, message string) error {
+	return d.closeRecordingSegment(ctx, streamName, filename, tsEnd, finalPath, fileSize, "failed", message)
+}
+
+func (d *DB) closeRecordingSegment(ctx context.Context, streamName, filename string, tsEnd float64, finalPath string, fileSize *int64, status, message string) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE recording_segments
-			 SET ts_end = ?, final_path = ?, file_size = ?, status = 'ready',
+			 SET ts_end = ?, final_path = ?, file_size = ?, status = ?,
 			     backup_state = 'pending', backed_up_at = NULL, backup_job_id = 0,
-			     error = '', updated_at = ?
+			     error = ?, updated_at = ?
 			 WHERE stream_name = ? AND filename = ? AND status IN ('recording', 'finalizing', 'failed')`,
 		tsEnd,
 		nullString(finalPath),
 		fileSize,
+		status,
+		message,
 		time.Now().Unix(),
 		streamName,
 		filename,

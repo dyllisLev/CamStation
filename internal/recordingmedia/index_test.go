@@ -2,6 +2,7 @@ package recordingmedia
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -130,6 +131,55 @@ func TestFFmpegFragmentPreservesAudioLead(t *testing.T) {
 			if idx.Fragments[1].MediaStartMs-first.MediaStartMs != 1000 {
 				t.Fatalf("unstable normalized clock: %+v", idx.Fragments)
 			}
+		}
+	}
+}
+
+// These unmodified moof boxes came from consecutive FFmpeg 5.1 AAC/H264
+// fragments. At the boundary two AAC packets have the same DTS: the first
+// sample in fragment 47 has duration 0 and a real 466-byte payload. No camera
+// addresses, media payload, or stream labels are part of this fixture.
+func TestReadRunsAcceptsAACPacketWithRepeatedDTS(t *testing.T) {
+	encoded := []string{
+		"AAACHG1vb2YAAAAQbWZoZAAAAAAAAAAvAAABQHRyYWYAAAAcdGZoZAACADgAAAABAAAdEQACeM4BAQAAAAAAFHRmZHQBAAAAAAAY/dNuw84AAAEIdHJ1bgAAAwUAAAAeAAACJAIAAAAAAB0RAAJ4zgAAAAsAABPlAAAAGAAAFM4AAAnMAAAUywAAAAEAABWwAAAEUwAAFgkAAAACAAAWawAACf0AABaBAAAAAgAAFoIAAAACAAAV5AAAAAEAABbyAAAAAgAAFxYAAAABAAAXcwAAAl8AABcvAAAEYQAAF5QAAAPQAAAXJAAABAAAABdUAAAEIAAAFyYAAAU6AAAVpwAAApwAABajAAAD/wAAFhwAAAetAAAWmgAAAD8AABYyAAAJZgAAFogAAAACAAAWGQAAAs4AABV0AAAD0gAAFhYAAAQ9AAAV/gAABIQAABXaAAADiQAAFb8AAADEdHJhZgAAABx0ZmhkAAIAOAAAAAIAAAAAAAAB0gIAAAAAAAAUdGZkdAEAAAAAAA0EM3RdSQAAAIx0cnVuAAADAQAAAA8ABQBLAAAAAAAAAdIAAAEzAAABxAAAAAwAAAHSAAAEfwAAAcUAAAT/AAAB1QAAAnUAAAHgAAAFGgAAAcwAAAJPAAAB3wAACqoAAAHQAAACEgAAAdgAAAQpAAAB6AAABCoAAAHXAAACOwAAAeEAAAQIAAAB2AAABAAAAAHO",
+		"AAACHG1vb2YAAAAQbWZoZAAAAAAAAAAwAAABQHRyYWYAAAAcdGZoZAACADgAAAABAAAGNgACeT4BAQAAAAAAFHRmZHQBAAAAAAAY/dNvO+wAAAEIdHJ1bgAAAwUAAAAeAAACJAIAAAAAAAY2AAJ5PgAAA5cAABROAAAOswAAFbUAAAACAAAUlAAACWUAABV2AAAABAAAFoYAAATgAAAWqwAAAAIAABdQAAAJrQAAF6EAAAADAAAXxwAAAAIAABcPAAAAAgAAFycAAAW1AAAXbwAAAccAABcNAAAD2QAAFt8AAAP7AAAVewAAA/4AABYHAAAD7AAAF5oAAARhAAAWpAAAA/sAABauAAADqwAAFgoAAAbSAAAWlgAAAT4AABaFAAAERQAAFq0AAAO0AAAXbQAABCIAABXkAAAGgQAAFvMAAAN2AAAVngAAAtgAABY3AAADZAAAFt8AAADEdHJhZgAAABx0ZmhkAAIAOAAAAAIAAAy3AAAB0QIAAAAAAAAUdGZkdAEAAAAAAA0EM3SRNgAAAIx0cnVuAAADAQAAAA8ABQghAAAMtwAAAdEAAAAMAAAB2AAAABAAAAHOAAAB8wAAAdcAAARNAAAB0wAAAlsAAAHVAAAE6gAAAdwAAAJxAAAB1AAADzMAAAHXAAAEQAAAAdAAAAIRAAABwgAABDkAAAHaAAAEIQAAAcYAAAQYAAAB2AAABAAAAAHZ",
+	}
+	tracks := map[uint32]track{1: {id: 1, scale: 15360, video: true, codec: "avc1"}, 2: {id: 2, scale: 8000, codec: "mp4a"}}
+	var previousEnd int64
+	for i, fixture := range encoded {
+		data, err := base64.StdEncoding.DecodeString(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs, seq, err := readRuns(data[8:], tracks, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seq != int64(47+i) || len(runs) != 2 {
+			t.Fatalf("seq=%d runs=%+v", seq, runs)
+		}
+		audio := runs[1]
+		if i == 0 && (audio.first != 14311694294345 || audio.decodeEnd != 14311694307638) {
+			t.Fatalf("unexpected audio interval: %+v", audio)
+		}
+		if i > 0 && audio.first != previousEnd {
+			t.Fatalf("AAC decode clock lost continuity: %+v", audio)
+		}
+		previousEnd = audio.decodeEnd
+		if i != 0 {
+			continue
+		}
+		// An actual zero-byte sample remains invalid even with a repeated DTS.
+		bad := append([]byte(nil), data...)
+		trun := bytes.LastIndex(bad, []byte("trun"))
+		binary.BigEndian.PutUint32(bad[trun+20:trun+24], 0)
+		if _, _, err := readRuns(bad[8:], tracks, 1000); err == nil {
+			t.Fatal("accepted zero-size AAC sample")
+		}
+		// The exception is specific to the observed AAC boundary, not video.
+		changed := map[uint32]track{1: tracks[1], 2: {id: 2, scale: 8000, video: true, codec: "avc1"}}
+		if _, _, err := readRuns(data[8:], changed, 1000); err == nil {
+			t.Fatal("accepted zero-duration video sample")
 		}
 	}
 }

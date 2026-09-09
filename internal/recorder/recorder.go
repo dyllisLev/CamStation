@@ -601,11 +601,13 @@ func (w *worker) closeCurrent(tsEnd int64) {
 }
 
 func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
-	if idx, err := w.publishSegment(segment); err == nil && len(idx.Fragments) > 0 {
+	idx, indexErr := w.publishSegment(segment)
+	hasVideo := len(idx.Fragments) > 0
+	if indexErr == nil && hasVideo {
 		segment.tsStart = float64(idx.Fragments[0].StartMs) / 1000
 		tsEnd = float64(idx.Fragments[len(idx.Fragments)-1].EndMs) / 1000
-	} else if err != nil {
-		w.logMediaIndexError(segment, err)
+	} else if indexErr != nil {
+		w.logMediaIndexError(segment, indexErr)
 	}
 	var finalPath string
 	var size *int64
@@ -614,6 +616,11 @@ func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
 		finalPath, size, err = MoveToRecordings(segment.path, w.camera.Name, w.camera.StreamName, w.manager.recordingsDir)
 		if err != nil {
 			return err
+		}
+		// A failed input setup can still write MP4 headers and audio packets.
+		// Preserve that file, but never promote it into legacy video coverage.
+		if !hasVideo {
+			return w.manager.db.CloseFailedRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size, "no complete playable video fragment")
 		}
 		return w.manager.db.CloseRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size)
 	})
@@ -633,6 +640,11 @@ func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
 	}
 	if size != nil {
 		fields.SizeBytes = *size
+	}
+	if !hasVideo {
+		fields.ErrorCode = "no_playable_video"
+		w.manager.log(opslog.Warn, "segment_failed", fields)
+		return
 	}
 	w.manager.log(opslog.Info, "segment_closed", fields)
 	w.manager.notifySegmentClosed()

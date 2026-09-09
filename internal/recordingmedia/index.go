@@ -544,7 +544,9 @@ func readRuns(data []byte, tracks map[uint32]track, moofOffset int64) ([]run, in
 							cts = int64(int32(raw))
 						}
 					}
-					if duration == 0 || size == 0 {
+					// AAC packets can share a DTS at a fragment boundary. A zero
+					// duration then describes their timing, not an empty payload.
+					if size == 0 || (duration == 0 && (t.video || t.codec != "mp4a")) {
 						return errors.New("empty sample")
 					}
 					if decode > math.MaxInt64-int64(duration) || dataEnd > math.MaxInt64-int64(size) || cts > math.MaxInt64-decode {
