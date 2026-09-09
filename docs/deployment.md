@@ -280,9 +280,12 @@ GitHub 저장소에는 production workflow가 없으며 Forgejo의 단방향 Pus
    config로 기존 `camstation` 서비스 하나만 복구한다. OpenShip 관리 compose는 직접 편집하지 않는다.
 4. 내부/external health, SQLite quick check, mount identity, recorder 8/8과 새 segment 전진을 다시 확인한다.
 
-현재 배포 commit과 직전 운영 commit 사이에는 SQLite schema 변경이 없으므로 일반 코드 rollback은 기존
-DB를 그대로 사용한다. 데이터가 손상된 경우에만 서비스를 안전하게 중지하고 검증된 SQLite online
-backup을 원자적으로 복원한다. Media 복구는 PBS snapshot에서 별도 위치로 우선 복원·검증한 뒤 필요한
+2026-09-09 녹화 재생 배포는 `recording_segments.camera_name`과 `recording_media`,
+`recording_fragments`를 추가한다. 직전 이미지로 되돌릴 때 DB를 자동 복원하지 않는다. 구버전은
+새 재생 인덱스의 외래 키를 처리하지 못하므로 인덱스가 있는 녹화의 삭제·정리를 그대로 호환한다고
+가정하지 않는다. 복구 시 해당 작업을 보류하고 새 인덱스와 기존 녹화의 관계를 검증한다.
+데이터가 손상된 경우에만 서비스를 안전하게 중지하고 검증된 SQLite online backup을 복원하며,
+백업 이후 생성된 녹화 행을 잃지 않도록 별도 보존·대조한다. Media 복구는 PBS snapshot에서 별도 위치로 우선 복원·검증한 뒤 필요한
 파일만 되돌린다. 기존 volume을 백업 없이 초기화하거나 교체하지 않는다.
 
 
