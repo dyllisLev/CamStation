@@ -79,6 +79,7 @@ func ReadIndex(r io.ReaderAt, size int64) (Index, error) {
 	var runs []run
 	previousDecode := map[uint32]int64{}
 	var previousSequence int64
+	var mediaOriginMs int64
 	for pos := int64(0); pos < size; {
 		b, err := readBox(r, pos, size)
 		if errors.Is(err, io.ErrUnexpectedEOF) {
@@ -162,13 +163,23 @@ func ReadIndex(r io.ReaderAt, size int64) (Index, error) {
 			if video == nil || !video.key {
 				return idx, errors.New("fragment does not start with a video keyframe")
 			}
+			// hls.js places the first fragment at the earliest track decode
+			// time. Preserve A/V offsets, including audio before the first video
+			// keyframe, and expose that same normalized clock to the API.
+			if len(idx.Fragments) == 0 {
+				mediaOriginMs = math.MaxInt64
+				for _, rr := range runs {
+					mediaOriginMs = min(mediaOriginMs, ticksMs(rr.first, tracks[rr.track].scale))
+				}
+			}
 			scale := tracks[video.track].scale
 			start, end := ticksMs(video.start, scale), ticksMs(video.end, scale)
-			// PRFT from this muxer identifies the first sample's PTS, whereas tfdt is
-			// normalized to the file. B frames may present before the first sample.
+			// PRFT from this muxer identifies the first sample's PTS. The tfdt
+			// either retains the common input clock or is local in older files.
+			// B frames may present before the first sample.
 			anchor := ticksMs(video.firstPTS, scale)
 			frag := Fragment{Sequence: previousSequence, Offset: pendingOffset, Length: pos + b.size - pendingOffset,
-				MediaStartMs: start, MediaEndMs: end, StartMs: ref.epochMs + start - anchor, EndMs: ref.epochMs + end - anchor}
+				MediaStartMs: start - mediaOriginMs, MediaEndMs: end - mediaOriginMs, StartMs: ref.epochMs + start - anchor, EndMs: ref.epochMs + end - anchor}
 			if frag.EndMs <= frag.StartMs {
 				return idx, errors.New("empty presentation interval")
 			}

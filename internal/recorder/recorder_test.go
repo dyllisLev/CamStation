@@ -36,8 +36,8 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 func TestBuildFFmpegArgsUsesWallclockPtsForStableSegmentation(t *testing.T) {
 	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 30)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-fflags +genpts") {
-		t.Fatalf("expected generated PTS for stable MP4 playback, got %s", joined)
+	if !strings.Contains(joined, "-fflags +genpts+nobuffer") {
+		t.Fatalf("expected generated PTS and post-probe input for stable epoch MP4 playback, got %s", joined)
 	}
 	if !strings.Contains(joined, "-use_wallclock_as_timestamps 1 -rtsp_transport tcp -i") {
 		t.Fatalf("expected wallclock input timestamps before RTSP input, got %s", joined)
@@ -123,7 +123,7 @@ func decodeRecorderOperationalLines(t *testing.T, value string) []opslog.Record 
 func TestBuildFFmpegArgsPreservesPacketEpochForFragmentPlayback(t *testing.T) {
 	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 5)
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"-copyts", "-reset_timestamps 0", "write_prft=pts", "use_editlist=1", "+frag_keyframe+empty_moov+default_base_moof", "-avoid_negative_ts disabled"} {
+	for _, required := range []string{"-copyts", "-reset_timestamps 0", "write_prft=pts", "use_editlist=0", "avoid_negative_ts=disabled", "+frag_discont", "+frag_keyframe+empty_moov+default_base_moof", "-avoid_negative_ts disabled"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing epoch-preserving fragment option %q: %s", required, joined)
 		}

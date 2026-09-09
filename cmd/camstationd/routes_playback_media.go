@@ -41,13 +41,24 @@ func (d routeDeps) handlePlaybackManifest(w http.ResponseWriter, r *http.Request
 		return
 	}
 	target := 1.0
-	for _, f := range idx.Fragments {
-		target = math.Max(target, math.Ceil(float64(f.MediaEndMs-f.MediaStartMs)/1000))
+	for i, f := range idx.Fragments {
+		durationMs := f.MediaEndMs - f.MediaStartMs
+		if i == 0 {
+			durationMs = f.MediaEndMs
+		}
+		target = math.Max(target, math.Ceil(float64(durationMs)/1000))
 	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:%.0f\n#EXT-X-MEDIA-SEQUENCE:%d\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"init\"\n", target, idx.Fragments[0].Sequence)
-	for _, f := range idx.Fragments {
-		fmt.Fprintf(&body, "#EXT-X-PROGRAM-DATE-TIME:%s\n#EXTINF:%.3f,\nfragments/%d\n", time.UnixMilli(f.StartMs).UTC().Format("2006-01-02T15:04:05.000Z"), float64(f.MediaEndMs-f.MediaStartMs)/1000, f.Sequence)
+	for i, f := range idx.Fragments {
+		startMs, durationMs := f.StartMs, f.MediaEndMs-f.MediaStartMs
+		if i == 0 {
+			// Include audio preroll in the HLS timeline without advertising it
+			// as video coverage. Later seek offsets use this same origin.
+			startMs -= f.MediaStartMs
+			durationMs = f.MediaEndMs
+		}
+		fmt.Fprintf(&body, "#EXT-X-PROGRAM-DATE-TIME:%s\n#EXTINF:%.3f,\nfragments/%d\n", time.UnixMilli(startMs).UTC().Format("2006-01-02T15:04:05.000Z"), float64(durationMs)/1000, f.Sequence)
 	}
 	if segment.Status != "recording" && segment.Status != "finalizing" {
 		body.WriteString("#EXT-X-ENDLIST\n")

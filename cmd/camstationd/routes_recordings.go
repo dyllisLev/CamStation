@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"camstation/internal/recordingmedia"
 	"camstation/internal/store"
 )
 
@@ -63,7 +64,12 @@ func (d routeDeps) handleRecordingSegmentDownload(w http.ResponseWriter, r *http
 	if strings.EqualFold(filepath.Ext(segment.Filename), ".mp4") {
 		w.Header().Set("Content-Type", "video/mp4")
 	}
-	http.ServeContent(w, r, segment.Filename, info.ModTime(), file)
+	content, err := recordingmedia.NormalizedMP4(file, info.Size())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("recording media cannot be prepared"))
+		return
+	}
+	http.ServeContent(w, r, segment.Filename, info.ModTime(), content)
 }
 
 func (d routeDeps) handleRecordingSegmentPlay(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +86,12 @@ func (d routeDeps) handleRecordingSegmentPlay(w http.ResponseWriter, r *http.Req
 	if strings.EqualFold(filepath.Ext(segment.Filename), ".mp4") {
 		w.Header().Set("Content-Type", "video/mp4")
 	}
-	http.ServeContent(w, r, segment.Filename, info.ModTime(), file)
+	content, err := recordingmedia.NormalizedMP4(file, info.Size())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("recording media cannot be prepared"))
+		return
+	}
+	http.ServeContent(w, r, segment.Filename, info.ModTime(), content)
 }
 
 func (d routeDeps) handleRecordingSegmentDelete(w http.ResponseWriter, r *http.Request) {

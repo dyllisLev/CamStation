@@ -710,7 +710,11 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		"-stdin",
 		"-nostats",
 		"-stats_period", "1", "-progress", "pipe:1",
-		"-fflags", "+genpts",
+		// FFmpeg 5.1's RTSP probing can retain a leading H.264 packet with
+		// no PTS/DTS. Mixing that synthetic zero with later epoch packets
+		// collapses MP4 sample durations. Start from post-probe packets and
+		// let stream copy wait for their first timestamped keyframe.
+		"-fflags", "+genpts+nobuffer",
 		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
 		"-i", input,
@@ -726,17 +730,17 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 	default:
 		args = append(args, "-c:a", "aac")
 	}
-	// PRFT stores the incoming epoch PTS, while tfdt uses the file-local
-	// decode clock. use_editlist=0 silently rebases PRFT to zero as well;
-	// keep 1 even though empty_moov cannot emit a meaningful edit list.
-	// Audio must retain the same input clock instead of PTS-STARTPTS.
+	// Keep all tracks on the same packet epoch clock. With edit lists disabled,
+	// frag_discont keeps raw epoch tfdt values instead of rebasing each track.
+	// Disable timestamp rebasing in the child MP4 muxer
+	// as well, so embedded PRFT still identifies the original received packet.
 	return append(args,
 		"-f", "segment",
 		"-segment_time", strconv.Itoa(segmentMinutes*60),
 		"-segment_atclocktime", "1",
 		"-reset_timestamps", "0",
 		"-segment_format", "mp4",
-		"-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof:write_prft=pts:use_editlist=1:flush_packets=1",
+		"-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof+frag_discont:write_prft=pts:use_editlist=0:avoid_negative_ts=disabled:flush_packets=1",
 		"-strftime", "1",
 		"-avoid_negative_ts", "disabled",
 		outputPattern,

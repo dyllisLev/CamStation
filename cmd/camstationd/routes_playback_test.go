@@ -134,3 +134,41 @@ func TestPlaybackCommittedBytesSurviveArchiveMoveAndDeleteReturnsGone(t *testing
 		t.Fatalf("deleted response: %d %s", status, body)
 	}
 }
+
+func TestPlaybackAudioPrerollPreservesVideoClockAndManifest(t *testing.T) {
+	s := newRecordingRouteServer(t)
+	segment, err := s.db.OpenRecordingSegmentUnique(t.Context(), store.RecordingSegment{CameraID: 13, StreamName: "preroll", Filename: "preroll.mp4", TSStart: 98, Status: "recording"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := recordingmedia.Index{InitLength: 4, CommittedOffset: 20, VideoCodec: "avc1", TimeBasis: recordingmedia.TimeBasis, Fragments: []recordingmedia.Fragment{
+		{Sequence: 1, Offset: 4, Length: 8, MediaStartMs: 2000, MediaEndMs: 4000, StartMs: 100000, EndMs: 102000},
+		{Sequence: 2, Offset: 12, Length: 8, MediaStartMs: 4000, MediaEndMs: 6000, StartMs: 102000, EndMs: 104000},
+	}}
+	if err := s.db.PublishRecordingMedia(t.Context(), segment.ID, idx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		at     int
+		offset float64
+	}{{100500, 2.5}, {102500, 4.5}} {
+		found := playbackJSON(t, s, fmt.Sprintf("/api/playback/resolve?cameraKey=camera:13&atMs=%d", tc.at))
+		media := found["media"].(map[string]any)
+		if found["status"] != "found" || media["startMs"] != float64(100000) || media["mediaStartSeconds"] != float64(2) || media["requestedOffsetSeconds"] != tc.offset {
+			t.Fatalf("video clock lost shared origin: %+v", found)
+		}
+	}
+	gap := playbackJSON(t, s, "/api/playback/resolve?cameraKey=camera:13&atMs=99000")
+	if gap["status"] != "gap" || gap["nextAtMs"] != float64(100000) {
+		t.Fatalf("audio preroll advertised as video: %+v", gap)
+	}
+	status, manifest := playbackRequest(t, s, fmt.Sprintf("/api/playback/media/fmp4-%d/manifest.m3u8", segment.ID))
+	if status != 200 {
+		t.Fatalf("manifest: %d %s", status, manifest)
+	}
+	for _, expected := range []string{"#EXT-X-TARGETDURATION:4\n", "#EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:01:38.000Z\n#EXTINF:4.000,\nfragments/1", "#EXT-X-PROGRAM-DATE-TIME:1970-01-01T00:01:42.000Z\n#EXTINF:2.000,\nfragments/2"} {
+		if !strings.Contains(manifest, expected) {
+			t.Fatalf("missing %q in %s", expected, manifest)
+		}
+	}
+}

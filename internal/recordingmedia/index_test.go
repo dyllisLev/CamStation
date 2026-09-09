@@ -3,6 +3,7 @@ package recordingmedia
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,7 @@ func TestFFmpegFragmentEpochAndPartialTail(t *testing.T) {
 		}
 	}
 	command("-f", "lavfi", "-i", "testsrc2=size=128x72:rate=10", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "6", "-c:v", "libx264", "-g", "10", "-bf", "2", "-c:a", "aac", source)
-	command("-copyts", "-itsoffset", "1788912000", "-i", source, "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-f", "segment", "-segment_time", "3", "-reset_timestamps", "0", "-avoid_negative_ts", "disabled", "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof:write_prft=pts:use_editlist=1:flush_packets=1", filepath.Join(root, "out-%d.mp4"))
+	command("-copyts", "-itsoffset", "1788912000", "-i", source, "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-f", "segment", "-segment_frames", "30", "-reset_timestamps", "0", "-avoid_negative_ts", "disabled", "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof+frag_discont:write_prft=pts:use_editlist=0:avoid_negative_ts=disabled:flush_packets=1", filepath.Join(root, "out-%d.mp4"))
 	files, err := filepath.Glob(filepath.Join(root, "out-*.mp4"))
 	if err != nil || len(files) != 2 {
 		t.Fatalf("rotation files=%v err=%v", files, err)
@@ -80,5 +81,55 @@ func TestReadIndexRejectsOversizedBoxWithoutAllocation(t *testing.T) {
 	data := []byte{0, 0, 0, 1, 'm', 'o', 'o', 'v', 255, 255, 255, 255, 255, 255, 255, 255}
 	if _, err := ReadIndex(bytes.NewReader(data), int64(len(data))); err == nil {
 		t.Fatal("accepted overflowing box")
+	}
+}
+
+// Waiting for an RTSP keyframe may leave audio ahead of video. Their common
+// decode clock must survive rotation; video wall-clock time still comes from PRFT.
+func TestFFmpegFragmentPreservesAudioLead(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg unavailable")
+	}
+	root := t.TempDir()
+	video, audio := filepath.Join(root, "video.mp4"), filepath.Join(root, "audio.m4a")
+	command := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command(ffmpeg, append([]string{"-v", "error", "-y"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ffmpeg: %v: %s", err, out)
+		}
+	}
+	command("-f", "lavfi", "-i", "testsrc2=size=128x72:rate=10", "-t", "4", "-c:v", "libx264", "-g", "10", "-bf", "0", video)
+	command("-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "6", "-c:a", "aac", audio)
+	for _, legacy := range []bool{false, true} {
+		name, flags := "common", "movflags=+frag_keyframe+empty_moov+default_base_moof+frag_discont:write_prft=pts:use_editlist=0:avoid_negative_ts=disabled:flush_packets=1"
+		if legacy {
+			name, flags = "legacy", "movflags=+frag_keyframe+empty_moov+default_base_moof:write_prft=pts:use_editlist=1:flush_packets=1"
+		}
+		command("-copyts", "-itsoffset", "1788912002", "-i", video, "-itsoffset", "1788912000", "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-f", "segment", "-segment_frames", "20", "-reset_timestamps", "0", "-avoid_negative_ts", "disabled", "-segment_format_options", flags, filepath.Join(root, name+"-%d.mp4"))
+		for i := 0; i < 2; i++ {
+			path := filepath.Join(root, fmt.Sprintf("%s-%d.mp4", name, i))
+			idx, err := Inspect(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(idx.Fragments) != 2 {
+				t.Fatalf("%s: fragments=%+v", path, idx.Fragments)
+			}
+			first := idx.Fragments[0]
+			if first.StartMs != 1788912002000+int64(i)*2000 {
+				t.Fatalf("%s: lost epoch: %+v", path, first)
+			}
+			if !legacy && i == 0 && (first.MediaStartMs < 2021 || first.MediaStartMs > 2022) {
+				t.Fatalf("lost two-second audio lead: %+v", first)
+			}
+			if legacy && first.MediaStartMs != 0 {
+				t.Fatalf("legacy timeline changed: %+v", first)
+			}
+			if idx.Fragments[1].MediaStartMs-first.MediaStartMs != 1000 {
+				t.Fatalf("unstable normalized clock: %+v", idx.Fragments)
+			}
+		}
 	}
 }

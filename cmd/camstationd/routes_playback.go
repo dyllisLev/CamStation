@@ -144,12 +144,25 @@ func (d routeDeps) handlePlaybackResolve(w http.ResponseWriter, r *http.Request)
 		}
 		kind := "file"
 		url := fmt.Sprintf("/api/recordings/segments/%d/play", s.SegmentID)
+		mediaStartSeconds := 0.0
 		if s.Fragmented {
+			_, index, err := d.db.RecordingMedia(r.Context(), s.SegmentID)
+			if err != nil {
+				writePlaybackError(w, err)
+				return
+			}
+			if len(index.Fragments) == 0 {
+				writePlaybackError(w, store.ErrRecordingSegmentNotFound)
+				return
+			}
+			// HLS starts at the shared audio/video origin. Video coverage can
+			// begin later when audio precedes the first video keyframe.
+			mediaStartSeconds = float64(index.Fragments[0].MediaStartMs) / 1000
 			kind = "hls"
 			url = "/api/playback/media/" + store.PlaybackMediaID(s) + "/manifest.m3u8"
 		}
 		out["status"] = "found"
-		out["media"] = map[string]any{"id": store.PlaybackMediaID(s), "kind": kind, "url": url, "startMs": s.StartMs, "endMs": s.EndMs, "mediaStartSeconds": 0, "requestedOffsetSeconds": float64(at-s.StartMs) / 1000, "growing": s.Status == "recording" || s.Status == "finalizing", "timeBasis": s.TimeBasis}
+		out["media"] = map[string]any{"id": store.PlaybackMediaID(s), "kind": kind, "url": url, "startMs": s.StartMs, "endMs": s.EndMs, "mediaStartSeconds": mediaStartSeconds, "requestedOffsetSeconds": mediaStartSeconds + float64(at-s.StartMs)/1000, "growing": s.Status == "recording" || s.Status == "finalizing", "timeBasis": s.TimeBasis}
 	} else {
 		previous, next, err := d.db.PlaybackNeighbors(r.Context(), id, at)
 		if err != nil {
