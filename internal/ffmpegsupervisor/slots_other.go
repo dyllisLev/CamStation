@@ -15,3 +15,7 @@ func processAlive(pid int) bool { return false }
 func acquireSlot(dir string) (*os.File, error) {
 	return nil, errors.New("NVENC process admission unavailable on platform")
 }
+
+func lockStatus(path string) (func(), error) {
+	return nil, errors.New("process status locking unavailable on platform")
+}

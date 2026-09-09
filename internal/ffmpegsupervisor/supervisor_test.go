@@ -51,7 +51,7 @@ exit 0
 `)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
-	args := []string{"-camstation-output", "cam1_live", "-c:v", "h264_nvenc", "-preset", "llhp", "-tune", "ll", "-vf", "scale=640:360,fps=10", "-c:a", "aac", "-f", "rtsp", "rtsp://localhost/output"}
+	args := []string{"-camstation-output", "cam1_live", "-c:v", "h264_nvenc", "-preset", "llhp", "-tune", "ll", "-vf", "scale=640:360,fps=10", "-c:a", "aac", "-f", "null", "-"}
 	if n := Run(context.Background(), c, args); n != 0 {
 		t.Fatal(n)
 	}
@@ -393,5 +393,88 @@ func TestProbeCancellationDoesNotLatch(t *testing.T) {
 	}
 	if readFallback(c.StateDir, "cam_cancel_probe", currentParent()) != "" {
 		t.Fatal("user cancellation latched capability failure")
+	}
+}
+
+func TestReplacementStatusCannotBeOverwritten(t *testing.T) {
+	if dir := os.Getenv("CAMSTATION_TEST_STATUS_DIR"); dir != "" {
+		role := os.Getenv("CAMSTATION_TEST_STATUS_ROLE")
+		status := Status{Output: "cam_replace", ActualEncoder: role, Running: true}
+		writeStatus(dir, status)
+		fmt.Println("written")
+		var b [1]byte
+		_, _ = os.Stdin.Read(b[:])
+		if role == "nvenc" {
+			writeStatus(dir, status)
+			status.Running = false
+			writeStatus(dir, status)
+		}
+		fmt.Println("done")
+		_, _ = os.Stdin.Read(b[:])
+		os.Exit(0)
+	}
+	dir := t.TempDir()
+	start := func(role string) (*exec.Cmd, io.WriteCloser, *bufio.Reader) {
+		t.Helper()
+		c := exec.Command(os.Args[0], "-test.run=^TestReplacementStatusCannotBeOverwritten$")
+		c.Env = append(os.Environ(), "CAMSTATION_TEST_STATUS_DIR="+dir, "CAMSTATION_TEST_STATUS_ROLE="+role)
+		in, err := c.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := c.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+		reader := bufio.NewReader(out)
+		if line, err := reader.ReadString('\n'); err != nil || line != "written\n" {
+			t.Fatal(line, err)
+		}
+		return c, in, reader
+	}
+	_, older, olderOut := start("nvenc")
+	_, _, _ = start("cpu")
+	_, _ = older.Write([]byte("x"))
+	if line, err := olderOut.ReadString('\n'); err != nil || line != "done\n" {
+		t.Fatal(line, err)
+	}
+	states, err := ReadStatuses(dir)
+	if err != nil || len(states) != 1 || states[0].ActualEncoder != "cpu" || !states[0].Running {
+		t.Fatal("old retry stole replacement status", states, err)
+	}
+}
+func TestStatusOwnershipResetsAcrossBoots(t *testing.T) {
+	existing := record{PID: 200, StartIdentity: "999999", BootID: "previous-boot"}
+	current := record{PID: 100, StartIdentity: "100", BootID: "new-boot"}
+	if newerOwner(existing, current) {
+		t.Fatal("old boot blocked current status")
+	}
+	existing.BootID = current.BootID
+	if !newerOwner(existing, current) {
+		t.Fatal("newer same-boot owner not protected")
+	}
+}
+
+func TestManagedRTSPGPUFailureWaitsForProducerRecreation(t *testing.T) {
+	c := fakeFFmpeg(t, `case "$*" in *lavfi*) exit 0;; *h264_nvenc*) echo '[h264_nvenc] EncodePicture failed: NV_ENC_ERR_GENERIC' >&2; exit 1;; esac
+exit 0
+`)
+	args := []string{"-camstation-output", "cam_rtsp", "-c:v", "h264_nvenc", "-f", "rtsp", "rtsp://localhost/output"}
+	if Run(context.Background(), c, args) != 1 {
+		t.Fatal("managed RTSP must return failed GPU child exit")
+	}
+	if len(calls(t, c)) != 2 {
+		t.Fatal("inline CPU retried against stale RTSP waiter", calls(t, c))
+	}
+	if Run(context.Background(), c, args) != 0 {
+		t.Fatal("recreated producer CPU failed")
+	}
+	got := calls(t, c)
+	if len(got) != 3 || !strings.Contains(got[2], "libx264") {
+		t.Fatal("new producer did not use CPU", got)
 	}
 }

@@ -42,6 +42,7 @@ type record struct {
 	Status
 	PID           int    `json:"pid"`
 	StartIdentity string `json:"startIdentity"`
+	BootID        string `json:"bootID"`
 }
 
 var outputPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
@@ -182,7 +183,7 @@ func Run(ctx context.Context, cfg Config, args []string) int {
 		release = nil
 		cfg.slot = nil
 	}
-	if nvenc && status.ActualEncoder == "nvenc" && code != 0 && ctx.Err() == nil && gpuReason != "" {
+	if nvenc && status.ActualEncoder == "nvenc" && code != 0 && ctx.Err() == nil && gpuReason != "" && !(output != "" && rtspOutput(clean)) {
 		status.ActualEncoder = "cpu"
 		status.FallbackReason = gpuReason
 		cfg.onGPUFailure = nil
@@ -194,6 +195,19 @@ func Run(ctx context.Context, cfg Config, args []string) int {
 	}
 	publish(false)
 	return code
+}
+
+// A managed RTSP publisher belongs to go2rtc's producer/waiter lifecycle.
+// Once it fails, reconnecting inline can publish to a dead waiter. Let go2rtc
+// recreate the producer; the persisted latch makes that invocation use CPU.
+func rtspOutput(args []string) bool {
+	format := ""
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-f" {
+			format = args[i+1]
+		}
+	}
+	return format == "rtsp"
 }
 func isVideoCodec(s string) bool { return s == "-c:v" || s == "-codec:v" || s == "-vcodec" }
 func cpuArgs(args []string) []string {
@@ -339,16 +353,19 @@ func writeStatus(dir string, s Status) {
 	if os.MkdirAll(dir, 0700) != nil {
 		return
 	}
-	if !s.Running {
-		b, err := os.ReadFile(filepath.Join(dir, s.Output+".json"))
-		if err == nil {
-			var existing record
-			if json.Unmarshal(b, &existing) == nil && existing.PID != os.Getpid() {
-				return
-			}
+	unlock, err := lockStatus(filepath.Join(dir, s.Output+".status.lock"))
+	if err != nil {
+		return
+	}
+	defer unlock()
+	incoming := record{Status: s, PID: os.Getpid(), StartIdentity: processIdentity(os.Getpid()), BootID: bootIdentity()}
+	if previous, err := os.ReadFile(filepath.Join(dir, s.Output+".json")); err == nil {
+		var existing record
+		if json.Unmarshal(previous, &existing) == nil && newerOwner(existing, incoming) {
+			return
 		}
 	}
-	b, err := json.Marshal(record{Status: s, PID: os.Getpid(), StartIdentity: processIdentity(os.Getpid())})
+	b, err := json.Marshal(incoming)
 	if err != nil {
 		return
 	}
@@ -394,7 +411,7 @@ func ReadStatuses(dir string) ([]Status, error) {
 		if json.Unmarshal(b, &r) != nil || !outputPattern.MatchString(r.Output) {
 			continue
 		}
-		if r.Running && (!processAlive(r.PID) || r.StartIdentity == "" || r.StartIdentity != processIdentity(r.PID)) {
+		if r.Running && (r.BootID != bootIdentity() || !processAlive(r.PID) || r.StartIdentity == "" || r.StartIdentity != processIdentity(r.PID)) {
 			r.Running = false
 		}
 		out = append(out, r.Status)
@@ -417,4 +434,28 @@ func processIdentity(pid int) string {
 		return ""
 	}
 	return fields[19]
+}
+
+// Compare ownership even when the newer wrapper has stopped: an older retry
+// must never resurrect or terminate the status of its replacement.
+func newerOwner(existing, incoming record) bool {
+	if existing.BootID == "" || existing.BootID != incoming.BootID {
+		return false
+	}
+	previous, err := strconv.ParseUint(existing.StartIdentity, 10, 64)
+	if err != nil {
+		return false
+	}
+	current, err := strconv.ParseUint(incoming.StartIdentity, 10, 64)
+	if err != nil {
+		return true
+	}
+	return previous > current || previous == current && existing.PID > incoming.PID
+}
+func bootIdentity() string {
+	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
