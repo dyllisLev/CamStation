@@ -7,27 +7,33 @@ import (
 )
 
 func (d *DB) OpenRecordingSegment(ctx context.Context, segment RecordingSegment) (RecordingSegment, error) {
+	return d.openRecordingSegment(ctx, segment, false)
+}
+
+// OpenRecordingSegmentUnique never replaces an earlier recording on an identity collision.
+func (d *DB) OpenRecordingSegmentUnique(ctx context.Context, segment RecordingSegment) (RecordingSegment, error) {
+	return d.openRecordingSegment(ctx, segment, true)
+}
+
+func (d *DB) openRecordingSegment(ctx context.Context, segment RecordingSegment, unique bool) (RecordingSegment, error) {
 	now := time.Now().Unix()
 	if segment.Status == "" {
 		segment.Status = "recording"
 	}
 	segment.CreatedAt = now
 	segment.UpdatedAt = now
+	conflict := ` ON CONFLICT(stream_name, ts_start) DO UPDATE SET
+		filename=excluded.filename, temp_path=excluded.temp_path, status=excluded.status,
+		backup_state='pending', backed_up_at=NULL, backup_job_id=0, error='', updated_at=excluded.updated_at`
+	if unique {
+		conflict = ""
+	}
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO recording_segments(
 				camera_id, stream_name, filename, temp_path, final_path, ts_start,
 				ts_end, file_size, status, backup_state, backed_up_at, backup_job_id,
-				error, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(stream_name, ts_start) DO UPDATE SET
-				filename=excluded.filename,
-				temp_path=excluded.temp_path,
-				status=excluded.status,
-				backup_state='pending',
-				backed_up_at=NULL,
-				backup_job_id=0,
-				error='',
-				updated_at=excluded.updated_at`,
+				error, created_at, updated_at, camera_name
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT name FROM cameras WHERE id = ?), ''))`+conflict,
 		segment.CameraID,
 		segment.StreamName,
 		segment.Filename,
@@ -43,6 +49,7 @@ func (d *DB) OpenRecordingSegment(ctx context.Context, segment RecordingSegment)
 		nullString(segment.Error),
 		segment.CreatedAt,
 		segment.UpdatedAt,
+		segment.CameraID,
 	)
 	if err != nil {
 		return RecordingSegment{}, err
@@ -122,7 +129,7 @@ func (d *DB) ListRecordingSegments(ctx context.Context, streamName string, from,
 			        ts_end, file_size, status, backup_state, backed_up_at, backup_job_id,
 			        error, created_at, updated_at
 			 FROM recording_segments
-		 WHERE stream_name = ? AND ts_start >= ? AND ts_start < ?`+statusClause+`
+		 WHERE stream_name = ? AND COALESCE(ts_end, ts_start) > ? AND ts_start < ?`+statusClause+`
 		 ORDER BY ts_start`,
 		args...,
 	)

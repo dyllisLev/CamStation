@@ -148,6 +148,7 @@ func (d routeDeps) handler() (http.Handler, error) {
 	d.registerSettingsJobRoutes(mux)
 	d.registerAlertRoutes(mux)
 	d.registerRecordingRoutes(mux)
+	d.registerPlaybackRoutes(mux)
 	d.registerBackupRoutes(mux)
 	d.registerEventIncidentRoutes(mux)
 	d.registerPlaybackDiagnosticRoutes(mux)

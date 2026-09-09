@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import type { RecordingSegmentFilter } from "../app/api";
+import type { RecordingSegment, RecordingSegmentFilter } from "../app/api";
 import { isViewerMode } from "../app/viewerMode";
+import { RecordingBrowserWorkspace, type RecordingBrowserRequest } from "../components/playback/RecordingBrowserWorkspace";
 import {
   useCleanupRecordings,
   useDeleteRecordingSegment,
@@ -16,18 +17,16 @@ import { RecordingSegmentsPanel } from "./recordings/RecordingSegmentsPanel";
 import { RecordingStoragePanel } from "./recordings/RecordingStoragePanel";
 import { toSegmentTimeFilter } from "./recordings/recordingUtils";
 
+type RecordingsTab = "playback" | "management";
+
 export function RecordingsPage() {
   return isViewerMode(window.location.search) ? <ViewerRecordingsPage /> : <OperatorRecordingsPage />;
 }
 
 function ViewerRecordingsPage() {
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-100">녹화 영상</h1>
-        <p className="mt-1 text-sm text-slate-400">세그먼트를 선택해 영상을 확인하세요.</p>
-      </div>
-      <RecordingSegmentsWorkspace readOnly />
+    <div className="h-full min-h-0">
+      <RecordingBrowserWorkspace />
     </div>
   );
 }
@@ -39,23 +38,65 @@ function OperatorRecordingsPage() {
   const startRecorder = useStartRecorder();
   const stopRecorder = useStopRecorder();
   const [workerMessage, setWorkerMessage] = useState("");
+  const [activeTab, setActiveTab] = useState<RecordingsTab>("playback");
+  const [playbackRequest, setPlaybackRequest] = useState<RecordingBrowserRequest>();
+
+  const playSegment = (segment: RecordingSegment) => {
+    setPlaybackRequest({
+      requestId: `${segment.id}:${Date.now()}`,
+      segmentId: segment.id,
+      cameraId: segment.camera_id,
+      cameraKeyHint: segment.streamName,
+      atMs: segment.ts_start * 1000,
+    });
+    setActiveTab("playback");
+  };
 
   return (
-    <div className="space-y-4">
-      <RecordingStoragePanel storage={storage} cleanup={cleanup} />
-      <RecorderWorkersPanel
-        recorders={recorders}
-        startRecorder={startRecorder}
-        stopRecorder={stopRecorder}
-        message={workerMessage}
-        onMessage={setWorkerMessage}
-      />
-      <RecordingSegmentsWorkspace />
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 items-center gap-1 border-b border-slate-800" role="tablist" aria-label="녹화 화면">
+        <button
+          className={activeTab === "playback" ? "recordings-page-tab recordings-page-tab-active" : "recordings-page-tab"}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "playback"}
+          onClick={() => setActiveTab("playback")}
+        >
+          영상 재생
+        </button>
+        <button
+          className={activeTab === "management" ? "recordings-page-tab recordings-page-tab-active" : "recordings-page-tab"}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "management"}
+          onClick={() => setActiveTab("management")}
+        >
+          녹화 관리
+        </button>
+      </div>
+
+      <div className={activeTab === "playback" ? "min-h-0 flex-1" : "hidden"} role="tabpanel">
+        <RecordingBrowserWorkspace active={activeTab === "playback"} request={playbackRequest} />
+      </div>
+
+      <div className={activeTab === "management" ? "min-h-0 flex-1 overflow-y-auto pr-1" : "hidden"} role="tabpanel">
+        <div className="space-y-4">
+          <RecordingStoragePanel storage={storage} cleanup={cleanup} />
+          <RecorderWorkersPanel
+            recorders={recorders}
+            startRecorder={startRecorder}
+            stopRecorder={stopRecorder}
+            message={workerMessage}
+            onMessage={setWorkerMessage}
+          />
+          <RecordingSegmentsWorkspace onPlaySegment={playSegment} />
+        </div>
+      </div>
     </div>
   );
 }
 
-function RecordingSegmentsWorkspace({ readOnly = false }: { readonly readOnly?: boolean }) {
+function RecordingSegmentsWorkspace({ onPlaySegment }: { readonly onPlaySegment: (segment: RecordingSegment) => void }) {
   const recorders = useRecorderStatus();
   const deleteSegment = useDeleteRecordingSegment();
   const [streamFilter, setStreamFilter] = useState("");
@@ -89,7 +130,6 @@ function RecordingSegmentsWorkspace({ readOnly = false }: { readonly readOnly?: 
   }, [recorders.data?.workers, segments.data?.segments]);
 
   const deleteSelectedSegment = (id: number) => {
-    if (readOnly) return;
     if (armedDeleteId !== id) {
       setArmedDeleteId(id);
       setDeleteError("");
@@ -111,7 +151,6 @@ function RecordingSegmentsWorkspace({ readOnly = false }: { readonly readOnly?: 
   };
 
   return <RecordingSegmentsPanel
-    readOnly={readOnly}
     segments={segments}
     selectedSegment={selectedSegment}
     streamOptions={streamOptions}
@@ -131,6 +170,7 @@ function RecordingSegmentsWorkspace({ readOnly = false }: { readonly readOnly?: 
     onToFilterChange={setToFilter}
     onLimitFilterChange={setLimitFilter}
     onSelectSegment={setSelectedSegmentId}
+    onPlaySegment={onPlaySegment}
     onDeleteSegment={deleteSelectedSegment}
     onCancelDelete={() => setArmedDeleteId(null)}
     onRefresh={() => void segments.refetch()}

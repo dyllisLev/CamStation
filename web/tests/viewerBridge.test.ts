@@ -250,3 +250,110 @@ test("uses a narrow native fullscreen bridge when present", async () => {
   unsubscribe();
   assert.equal(listener, undefined);
 });
+
+test("native fullscreen acknowledgements publish the actual boolean rather than the requested value", async () => {
+  const observed: boolean[] = [];
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined,
+    onCommand: () => undefined,
+    setFullscreen: async () => false,
+    onFullscreenChange: () => undefined,
+  };
+  const unsubscribe = subscribeViewerFullscreen((value) => observed.push(value), bridge);
+  assert.equal(await requestViewerFullscreen(true, bridge), true, "the return value retains the command-delivery contract");
+  assert.deepEqual(observed, [false]);
+  unsubscribe();
+});
+
+test("confirmed native fullscreen survives document navigation in the same session", (context) => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const stored = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value) },
+  } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const documentBridge = () => {
+    let listener: ((fullscreen: boolean) => void) | undefined;
+    const bridge: CamStationViewerBridge = {
+      reportStream: () => undefined, onCommand: () => undefined,
+      onFullscreenChange: (handler) => { listener = handler; return () => { listener = undefined; }; },
+    };
+    return { bridge, event: (value: boolean) => listener?.(value) };
+  };
+  const first = documentBridge();
+  const firstObserved: boolean[] = [];
+  const stopFirst = subscribeViewerFullscreen((value) => firstObserved.push(value), first.bridge);
+  assert.deepEqual(firstObserved, [], "an unobserved initial state is not guessed");
+  first.event(true);
+  stopFirst();
+
+  const second = documentBridge();
+  const secondObserved: boolean[] = [];
+  const stopSecond = subscribeViewerFullscreen((value) => secondObserved.push(value), second.bridge);
+  assert.deepEqual(secondObserved, [true], "the new document receives the confirmed previous native state");
+  second.event(false);
+  assert.deepEqual(secondObserved, [true, false]);
+  stopSecond();
+
+  const third = documentBridge();
+  const thirdObserved: boolean[] = [];
+  const stopThird = subscribeViewerFullscreen((value) => thirdObserved.push(value), third.bridge);
+  assert.deepEqual(thirdObserved, [false]);
+  stopThird();
+});
+
+test("failed or unacknowledged fullscreen requests do not invent an observed state", async () => {
+  const observed: boolean[] = [];
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined, onCommand: () => undefined,
+    onFullscreenChange: () => undefined,
+    setFullscreen: async () => undefined,
+  };
+  const unsubscribe = subscribeViewerFullscreen((value) => observed.push(value), bridge);
+  assert.equal(await requestViewerFullscreen(true, bridge), true);
+  bridge.setFullscreen = async () => { throw new Error("IPC unavailable"); };
+  assert.equal(await requestViewerFullscreen(true, bridge), false);
+  assert.deepEqual(observed, []);
+  unsubscribe();
+});
+
+test("a late native command reply cannot overwrite a newer fullscreen event", async () => {
+  let reply: ((value: boolean) => void) | undefined;
+  let event: ((value: boolean) => void) | undefined;
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined, onCommand: () => undefined,
+    onFullscreenChange: (handler) => { event = handler; },
+    setFullscreen: () => new Promise<boolean>((resolve) => { reply = resolve; }),
+  };
+  const observed: boolean[] = [];
+  const unsubscribe = subscribeViewerFullscreen((value) => observed.push(value), bridge);
+  const pending = requestViewerFullscreen(true, bridge);
+  event?.(true);
+  reply?.(false);
+  await pending;
+  assert.deepEqual(observed, [true]);
+  unsubscribe();
+});
+
+test("native fullscreen observations still work when session storage is denied", async (context) => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    get sessionStorage() { throw new Error("storage denied"); },
+  } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const bridge: CamStationViewerBridge = {
+    reportStream: () => undefined, onCommand: () => undefined,
+    onFullscreenChange: () => undefined, setFullscreen: async () => true,
+  };
+  const observed: boolean[] = [];
+  const unsubscribe = subscribeViewerFullscreen((value) => observed.push(value), bridge);
+  assert.equal(await requestViewerFullscreen(true, bridge), true);
+  assert.deepEqual(observed, [true]);
+  unsubscribe();
+});

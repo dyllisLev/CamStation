@@ -61,11 +61,12 @@ export function ConsoleLayout() {
   const online = cameras.data?.filter((camera) => camera.enabled && camera.state === "streaming").length ?? 0;
   const title = t(titles[location.pathname] ?? "controlRoom");
   const isLiveWorkspace = location.pathname === "/live";
+  const isRecordingsWorkspace = location.pathname === "/recordings";
   const viewerMode = isViewerMode(location.search);
 
   if (viewerMode) {
     return (
-      <div className="new-console-app">
+      <div className="new-console-app new-viewer-shell">
         <header className="new-console-header sticky top-0 z-10">
           <div className="flex min-h-14 items-center gap-4 px-4 lg:px-6">
             <div className="new-brand-title">CamStation Viewer</div>
@@ -85,7 +86,7 @@ export function ConsoleLayout() {
             </nav>
           </div>
         </header>
-        <main className="new-console-main px-4 py-5 lg:px-6">
+        <main className="new-console-main new-viewer-main px-4 py-5 lg:px-6">
           <Outlet />
         </main>
       </div>
@@ -101,7 +102,7 @@ export function ConsoleLayout() {
   }
 
   return (
-    <div className="new-console-app">
+    <div className={cn("new-console-app", isRecordingsWorkspace && "new-recordings-shell")}>
       <aside className="new-console-sidebar fixed inset-y-0 left-0 z-20 hidden w-64 lg:block">
         <div className="new-console-brand flex h-16 items-center gap-3 px-5">
           <div className="new-brand-mark">
@@ -132,7 +133,7 @@ export function ConsoleLayout() {
         </nav>
       </aside>
 
-      <div className="lg:pl-64">
+      <div className={cn("lg:pl-64", isRecordingsWorkspace && "new-recordings-shell-body")}>
         <header className="new-console-header sticky top-0 z-10">
           <div className="flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6">
             <div>
@@ -180,7 +181,7 @@ export function ConsoleLayout() {
             ))}
           </nav>
         </header>
-        <main className="new-console-main px-4 py-5 lg:px-6">
+        <main className={cn("new-console-main px-4 py-5 lg:px-6", isRecordingsWorkspace && "new-recordings-main")}>
           <Outlet />
         </main>
       </div>

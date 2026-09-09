@@ -3,6 +3,8 @@ package recorder
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -73,12 +75,15 @@ type worker struct {
 	done           chan struct{}
 	proc           *exec.Cmd
 	currentSegment *segmentRef
+	segmentMu      sync.Mutex
 }
 
 type segmentRef struct {
-	path     string
-	filename string
-	tsStart  float64
+	id        int64
+	committed int64
+	path      string
+	filename  string
+	tsStart   float64
 }
 
 func New(db *store.DB, recordingsDir, tempDir string, segmentMinutes int, opts ...Option) *Manager {
@@ -550,16 +555,17 @@ func (w *worker) logFFmpegLine(line string, attempt int) {
 }
 
 func (w *worker) openSegment(path string) error {
-	tsStart, ok := TimestampFromSegmentPath(path)
-	if !ok {
-		return fmt.Errorf("cannot parse segment timestamp from %s", path)
-	}
+	w.segmentMu.Lock()
+	defer w.segmentMu.Unlock()
+	// Temporary row identity only. Playback is not published until packet PRFT
+	// establishes the actual media interval and replaces this timestamp.
+	tsStart := float64(time.Now().UnixMicro()) / 1e6
 	if current := w.currentRef(); current != nil {
 		w.closeSegment(current, tsStart)
 	}
 
 	filename := filepath.Base(path)
-	_, err := w.manager.db.OpenRecordingSegment(context.Background(), store.RecordingSegment{
+	opened, err := w.manager.db.OpenRecordingSegmentUnique(context.Background(), store.RecordingSegment{
 		CameraID:   w.camera.ID,
 		StreamName: w.camera.StreamName,
 		Filename:   filename,
@@ -571,7 +577,7 @@ func (w *worker) openSegment(path string) error {
 		return err
 	}
 	w.mu.Lock()
-	w.currentSegment = &segmentRef{path: path, filename: filename, tsStart: tsStart}
+	w.currentSegment = &segmentRef{id: opened.ID, path: path, filename: filename, tsStart: tsStart}
 	w.current = path
 	w.lastErr = ""
 	w.mu.Unlock()
@@ -579,6 +585,8 @@ func (w *worker) openSegment(path string) error {
 }
 
 func (w *worker) closeCurrent(tsEnd int64) {
+	w.segmentMu.Lock()
+	defer w.segmentMu.Unlock()
 	current := w.currentRef()
 	if current == nil {
 		return
@@ -593,7 +601,22 @@ func (w *worker) closeCurrent(tsEnd int64) {
 }
 
 func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
-	finalPath, size, err := MoveToRecordings(segment.path, w.camera.Name, w.camera.StreamName, w.manager.recordingsDir)
+	if idx, err := w.publishSegment(segment); err == nil && len(idx.Fragments) > 0 {
+		segment.tsStart = float64(idx.Fragments[0].StartMs) / 1000
+		tsEnd = float64(idx.Fragments[len(idx.Fragments)-1].EndMs) / 1000
+	} else if err != nil {
+		w.logMediaIndexError(segment, err)
+	}
+	var finalPath string
+	var size *int64
+	err := w.manager.db.WithRecordingMediaLock(func() error {
+		var err error
+		finalPath, size, err = MoveToRecordings(segment.path, w.camera.Name, w.camera.StreamName, w.manager.recordingsDir)
+		if err != nil {
+			return err
+		}
+		return w.manager.db.CloseRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size)
+	})
 	if err != nil {
 		_ = w.manager.db.MarkRecordingSegmentStatus(context.Background(), w.camera.StreamName, segment.filename, "failed", err.Error())
 		w.setState(statusRunning, segment.path, err.Error())
@@ -603,14 +626,7 @@ func (w *worker) closeSegment(segment *segmentRef, tsEnd float64) {
 		})
 		return
 	}
-	if err := w.manager.db.CloseRecordingSegment(context.Background(), w.camera.StreamName, segment.filename, tsEnd, finalPath, size); err != nil {
-		w.setState(statusRunning, segment.path, err.Error())
-		w.manager.log(opslog.Error, "segment_close_failed", opslog.Fields{
-			CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: segment.filename,
-			ErrorCode: "segment_store_failed", Message: err.Error(),
-		})
-		return
-	}
+
 	fields := opslog.Fields{
 		CameraID: w.camera.ID, StreamName: w.camera.StreamName, Filename: segment.filename,
 		DurationMS: int64((tsEnd - segment.tsStart) * 1000),
@@ -678,7 +694,13 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 	if segmentMinutes <= 0 {
 		segmentMinutes = 30
 	}
-	filenamePattern := "%Y-%m-%d_%H-%M.mp4"
+	// One generation per ffmpeg invocation prevents same-second restarts from
+	// replacing an earlier archive, independently of camera names and wallclock.
+	var generation [12]byte
+	if _, err := rand.Read(generation[:]); err != nil {
+		panic("recorder generation: " + err.Error())
+	}
+	filenamePattern := "%Y-%m-%d_%H-%M-%S_" + hex.EncodeToString(generation[:]) + ".mp4"
 	if archiveName != "" {
 		filenamePattern = archiveName + "_" + filenamePattern
 	}
@@ -692,6 +714,8 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
 		"-i", input,
+		"-copyts",
+		"-map", "0:v:0", "-map", "0:a:0?",
 		"-c:v", "copy",
 	}
 	switch audioMode {
@@ -700,15 +724,21 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 	case store.CameraAudioAAC:
 		args = append(args, "-c:a", "copy")
 	default:
-		args = append(args, "-af", "asetpts=PTS-STARTPTS", "-c:a", "aac")
+		args = append(args, "-c:a", "aac")
 	}
+	// PRFT stores the incoming epoch PTS, while tfdt uses the file-local
+	// decode clock. use_editlist=0 silently rebases PRFT to zero as well;
+	// keep 1 even though empty_moov cannot emit a meaningful edit list.
+	// Audio must retain the same input clock instead of PTS-STARTPTS.
 	return append(args,
 		"-f", "segment",
 		"-segment_time", strconv.Itoa(segmentMinutes*60),
 		"-segment_atclocktime", "1",
-		"-reset_timestamps", "1",
+		"-reset_timestamps", "0",
+		"-segment_format", "mp4",
+		"-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof:write_prft=pts:use_editlist=1:flush_packets=1",
 		"-strftime", "1",
-		"-avoid_negative_ts", "make_zero",
+		"-avoid_negative_ts", "disabled",
 		outputPattern,
 	)
 }
@@ -751,11 +781,15 @@ func ParseSegmentPath(line string) string {
 
 func TimestampFromSegmentPath(path string) (float64, bool) {
 	stem := fileStem(path)
-	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})$`).FindStringSubmatch(stem)
-	if len(matches) != 4 {
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:-(\d{2})_[a-f0-9]+)?$`).FindStringSubmatch(stem)
+	if len(matches) != 5 {
 		return 0, false
 	}
-	parsed, err := time.ParseInLocation("2006-01-02 15:04", matches[1]+" "+matches[2]+":"+matches[3], kst())
+	seconds := matches[4]
+	if seconds == "" {
+		seconds = "00"
+	}
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", matches[1]+" "+matches[2]+":"+matches[3]+":"+seconds, kst())
 	if err != nil {
 		return 0, false
 	}
@@ -788,7 +822,7 @@ func MoveToRecordings(tempPath, cameraName, streamName, recordingsDir string) (s
 
 func dateFromSegmentPath(path string) (string, bool) {
 	stem := fileStem(path)
-	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}$`).FindStringSubmatch(stem)
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}(?:-\d{2}_[a-f0-9]+)?$`).FindStringSubmatch(stem)
 	if len(matches) == 2 {
 		return matches[1], true
 	}
@@ -803,7 +837,7 @@ func fileStem(path string) string {
 
 func archiveSegmentFilename(path, archiveName string) string {
 	stem := fileStem(path)
-	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})$`).FindStringSubmatch(stem)
+	matches := regexp.MustCompile(`^(?:.+_)?(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}(?:-\d{2}_[a-f0-9]+)?)$`).FindStringSubmatch(stem)
 	if len(matches) != 2 {
 		return filepath.Base(path)
 	}

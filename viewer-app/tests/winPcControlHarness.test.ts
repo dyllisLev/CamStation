@@ -107,6 +107,12 @@ test("interactive worker normalizes UTF-8 JSON, references, evidence, and verifi
   assert.match(source, /DriverProcessId\s*=\s*\$verifiedDriverProcessId/u);
   assert.match(source, /effect.*unverifiable/isu);
   assert.match(source, /\$requiresVisualVerification\s*=\s*\$true/iu);
+  assert.match(source, /function Close-VerifiedControlWindow/iu);
+  assert.match(source, /close_window PID belongs to another session/u);
+  assert.match(source, /close_window HWND does not belong to the requested PID/u);
+  assert.match(source, /PostMessage\(\$handle, 0x0010,/u);
+  assert.match(source, /GetWindowThreadProcessId/iu);
+  assert.doesNotMatch(source, /ValuePattern|Current\.Value/iu);
   assert.match(source, /function Write-DesktopScreenshotFallback/iu);
   assert.match(source, /GetSystemMetrics\(76\).*GetSystemMetrics\(79\)/isu);
   assert.match(source, /CopyFromScreen/iu);

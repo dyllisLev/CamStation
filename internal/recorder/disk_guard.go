@@ -117,6 +117,8 @@ func (w *worker) waitForProcess(cmd *exec.Cmd, stdin io.WriteCloser, waitDone <-
 	}
 	ticker := time.NewTicker(w.manager.diskGuard.checkInterval)
 	defer ticker.Stop()
+	mediaTicker := time.NewTicker(time.Second)
+	defer mediaTicker.Stop()
 	for {
 		select {
 		case <-w.stop:
@@ -124,6 +126,8 @@ func (w *worker) waitForProcess(cmd *exec.Cmd, stdin io.WriteCloser, waitDone <-
 			return nil
 		case err := <-waitDone:
 			return err
+		case <-mediaTicker.C:
+			w.publishCurrent()
 		case <-ticker.C:
 			if err := w.manager.checkDiskCapacity(); err != nil {
 				_ = stopRecorderProcess(cmd, stdin, waitDone)

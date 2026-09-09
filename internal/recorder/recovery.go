@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"camstation/internal/recordingmedia"
 	"camstation/internal/store"
 )
 
@@ -17,6 +18,7 @@ type RecoveryResult struct {
 }
 
 type recoveryStore interface {
+	RecordingMedia(ctx context.Context, segmentID int64) (store.RecordingSegment, recordingmedia.Index, error)
 	ListRecordingSegmentsByStatus(ctx context.Context, statuses ...string) ([]store.RecordingSegment, error)
 	MarkRecordingSegmentStatusByID(ctx context.Context, id int64, status, message string) error
 }
@@ -29,7 +31,18 @@ func RecoverInterruptedSegments(ctx context.Context, db recoveryStore, quarantin
 	}
 	for _, segment := range segments {
 		message := "interrupted recorder recovered on startup"
-		if segment.TempPath != "" {
+		// Published fragments remain addressable after a basic restart. Preserve
+		// their canonical file and existing failed-state semantics; do not repair
+		// or publish an uncommitted tail, nor promote it to ready/backed-up.
+		_, index, indexErr := db.RecordingMedia(ctx, segment.ID)
+		preserve := false
+		if indexErr == nil && len(index.Fragments) > 0 {
+			if info, statErr := os.Stat(segment.TempPath); statErr == nil && info.Size() >= index.CommittedOffset {
+				preserve = true
+				message += "; completed playback fragments retained"
+			}
+		}
+		if segment.TempPath != "" && !preserve {
 			if moved, moveErr := quarantineTemp(segment.TempPath, quarantineRoot); moveErr != nil {
 				result.FailedMoves++
 				message = fmt.Sprintf("%s; quarantine failed: %v", message, moveErr)

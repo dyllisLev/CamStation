@@ -367,7 +367,7 @@ function cancelScheduledReconnect(): void {
 function hasCurrentLiveDocument(): boolean {
   if (!window || window.isDestroyed() || setupVisible || !currentLiveURL) return false;
   try {
-    return window.webContents.getURL() === currentLiveURL;
+    return isNavigationAllowed(window.webContents.getURL(), currentLiveURL);
   } catch {
     return false;
   }

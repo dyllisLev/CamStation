@@ -22,7 +22,7 @@ func TestBuildFFmpegArgsUsesLocalGo2RTCInput(t *testing.T) {
 	if !strings.Contains(joined, "-segment_time 1800") {
 		t.Fatalf("expected 30 minute segments, got %s", joined)
 	}
-	if !strings.Contains(joined, "%Y-%m-%d_%H-%M.mp4") {
+	if !strings.Contains(joined, "%Y-%m-%d_%H-%M-%S_") {
 		t.Fatalf("expected dated strftime output pattern, got %s", joined)
 	}
 	if !strings.Contains(joined, "-stats_period 1 -progress pipe:1") {
@@ -120,11 +120,20 @@ func decodeRecorderOperationalLines(t *testing.T, value string) []opslog.Record 
 	return result
 }
 
-func TestBuildFFmpegArgsResetsAudioPtsForSegmentPlayback(t *testing.T) {
+func TestBuildFFmpegArgsPreservesPacketEpochForFragmentPlayback(t *testing.T) {
 	args := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 5)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-af asetpts=PTS-STARTPTS") {
-		t.Fatalf("expected audio PTS reset for stable MP4 duration, got %s", joined)
+	for _, required := range []string{"-copyts", "-reset_timestamps 0", "write_prft=pts", "use_editlist=1", "+frag_keyframe+empty_moov+default_base_moof", "-avoid_negative_ts disabled"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("missing epoch-preserving fragment option %q: %s", required, joined)
+		}
+	}
+	if strings.Contains(joined, "asetpts=PTS-STARTPTS") {
+		t.Fatalf("audio must share the preserved packet clock: %s", joined)
+	}
+	second := BuildFFmpegArgs("rtsp://127.0.0.1:8554/cam1", "/tmp/cam1", 5)
+	if args[len(args)-1] == second[len(second)-1] {
+		t.Fatal("same-second restart reused output filename")
 	}
 }
 

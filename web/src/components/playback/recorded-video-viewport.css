@@ -1,0 +1,19 @@
+.playback-recorded-video-frame .new-live-video {
+  pointer-events: none;
+  user-select: none;
+}
+
+.playback-recorded-video-state {
+  z-index: 1;
+  align-content: center;
+  gap: 8px;
+  padding: 36px 12px 42px;
+  background: rgb(1 4 7 / 72%);
+  pointer-events: none;
+  text-align: center;
+}
+
+.playback-recorded-video-state button {
+  min-height: 30px;
+  pointer-events: auto;
+}

@@ -4,16 +4,15 @@ import type { MouseEvent, ReactNode, WheelEvent } from "react";
 import GridLayout from "react-grid-layout/legacy";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import type { Camera, TimelineData } from "../../app/api";
+import type { Camera } from "../../app/api";
 import { withAppBase } from "../../app/basePath";
-import { isViewerMode, livePlaybackSurface, viewerRoute } from "../../app/viewerMode";
+import { isViewerMode, livePlaybackSurface } from "../../app/viewerMode";
 import {
   useCameras,
   useCreateLayout,
   useDeleteLayout,
   useLayouts,
   useRefreshCameraControls,
-  useTimeline,
   useUpdateLayout,
 } from "../../app/queries";
 import { cn } from "../../lib/utils";
@@ -32,13 +31,17 @@ import { playbackStatusCopy } from "./playbackPresentation";
 import { playbackStreamCandidates, tileFocusPresentation } from "./streamSelection";
 import { hasViewerFullscreenBridge, reportViewerStream, requestViewerFullscreen, subscribeViewerCommands, subscribeViewerFullscreen } from "./viewerBridge";
 import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
+import { usePlaybackTimelines } from "../../app/playbackQueries";
+import { PlaybackControls } from "../playback/PlaybackControls";
+import { RecordedVideoViewport } from "../playback/RecordedVideoViewport";
+import { PlaybackTimeline, type PlaybackTimelineRange } from "../playback/PlaybackTimeline";
+import { usePlaybackWorkspace, type PlaybackWorkspace } from "../playback/usePlaybackWorkspace";
+import "./livePlayback.css";
 
 const GRID_MARGIN: [number, number] = [4, 4];
 const LAST_LAYOUT_KEY = "camstation-live-layout-id";
 const TIMELINE_KEY = "camstation-live-timeline-collapsed";
 const DEFAULT_VIDEO_VIEWPORT: VideoViewport = { scale: 1, tx: 0, ty: 0 };
-
-type TimelineRange = { ts_start: number; ts_end: number };
 
 export function LiveWorkspace() {
   const cameras = useCameras();
@@ -59,24 +62,51 @@ export function LiveWorkspace() {
   const [ptzPanelOpen, setPtzPanelOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [zoomedStream, setZoomedStream] = useState<string | null>(null);
+  const [recordedViewports, setRecordedViewports] = useState<Record<string, VideoViewport>>({});
   const [timelineCollapsed, setTimelineCollapsed] = useState(() => localStorage.getItem(TIMELINE_KEY) === "true");
   const viewerMode = isViewerMode(window.location.search);
   const nativeFullscreen = hasViewerFullscreenBridge();
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
+  const today = formatKstDate(Date.now());
+  const [timelineViewport, setTimelineViewport] = useState(() => kstDayViewport(today));
+  const [browseDate, setBrowseDate] = useState(today);
+  const [timeDraft, setTimeDraft] = useState(() => formatKstTime(Date.now()));
   const selectedCamera = rows.find((camera) => camera.streamName === selectedStream);
-  const selectedTimeline = useTimeline(selectedCamera?.streamName ?? "", today);
+  const cameraByStream = useMemo(() => new Map(rows.map((camera) => [camera.streamName, camera])), [rows]);
+  const displayedCameraKeys = useMemo(
+    () => layout.map((item) => item.i).filter((streamName) => cameraByStream.has(streamName)),
+    [cameraByStream, layout],
+  );
+  const workspace = usePlaybackWorkspace({ cameraKeys: displayedCameraKeys, initialMode: "live" });
+  const timelineQueries = usePlaybackTimelines(
+    displayedCameraKeys,
+    timelineViewport.fromMs,
+    timelineViewport.toMs,
+  );
+  const selectedTimelineIndex = displayedCameraKeys.indexOf(selectedCamera?.streamName ?? "");
+  const selectedCoverage = selectedTimelineIndex >= 0
+    ? timelineQueries[selectedTimelineIndex]?.data?.coverage ?? []
+    : [];
+  const aggregateCoverage = useMemo(
+    () => mergeTimelineRanges(timelineQueries.flatMap((query) => query.data?.coverage ?? [])),
+    [timelineQueries],
+  );
+  const failedTimelineQueries = timelineQueries.filter((query) => query.isError);
   const layoutInitializedRef = useRef(false);
   const refreshAttemptedRef = useRef(new Set<string>());
   const ptzStopRef = useRef<() => Promise<void>>(async () => undefined);
+  const playbackIntentRef = useRef(0);
   const selectedControls = selectedCamera?.controlCapabilities;
   const ptzEnabled = Boolean(
+    workspace.mode === "live" &&
     selectedCamera?.state === "streaming" &&
       selectedControls?.ptz.support === "supported" &&
       selectedControls.ptz.available,
   );
   const ptzDisabledReason = !selectedCamera
     ? "카메라를 선택하세요."
-    : selectedCamera.state !== "streaming"
+    : workspace.mode === "playback"
+      ? "녹화 재생 중에는 PTZ를 사용할 수 없습니다."
+      : selectedCamera.state !== "streaming"
       ? "카메라가 온라인 상태가 아닙니다."
       : selectedControls?.ptz.support === "unknown" || !selectedControls
         ? "PTZ 지원 여부를 확인하지 못했습니다."
@@ -102,6 +132,50 @@ export function LiveWorkspace() {
     if (ptzPanelOpen) await closePtzPanel();
     setSideHidden(true);
   }, [closePtzPanel, ptzPanelOpen]);
+
+  const seekPlayback = useCallback(async (atMs: number) => {
+    const intent = ++playbackIntentRef.current;
+    if (workspace.mode === "live") {
+      await ptzStopRef.current();
+      if (intent !== playbackIntentRef.current) return;
+      setPtzPanelOpen(false);
+    }
+    setBrowseDate(formatKstDate(atMs));
+    setTimeDraft(formatKstTime(atMs));
+    workspace.seek(atMs, { play: workspace.mode === "live" ? true : workspace.playing });
+  }, [workspace]);
+
+  const returnToLive = useCallback(() => {
+    playbackIntentRef.current += 1;
+    setRecordedViewports({});
+    workspace.goLive();
+  }, [workspace]);
+
+  const retryCamera = useCallback((streamName: string) => {
+    if (workspace.mode === "playback") {
+      workspace.retry(streamName);
+      return;
+    }
+    setReconnectGenerations((current) => ({
+      ...current,
+      [streamName]: (current[streamName] ?? 0) + 1,
+    }));
+  }, [workspace]);
+
+  const handleRecordedViewportChange = useCallback((streamName: string, viewport: VideoViewport) => {
+    setRecordedViewports((current) => ({ ...current, [streamName]: viewport }));
+  }, []);
+
+  const handleBrowseDateChange = useCallback((nextDate: string) => {
+    if (!nextDate) return;
+    setBrowseDate(nextDate);
+    setTimelineViewport(kstDayViewport(nextDate));
+  }, []);
+
+  const commitTimeDraft = useCallback(() => {
+    const atMs = parseKstDateTime(browseDate, timeDraft);
+    if (atMs !== null) void seekPlayback(atMs);
+  }, [browseDate, seekPlayback, timeDraft]);
 
   useEffect(() => {
     if (selectedStream || rows.length === 0) return;
@@ -343,9 +417,9 @@ export function LiveWorkspace() {
           {timelineCollapsed ? "타임라인 보기" : "타임라인 숨기기"}
         </button>
         <div className="new-spacer" />
-        <div className="new-live-pill">
-          <span className="new-pulse" />
-          LIVE
+        <div className={cn("new-mode-pill", workspace.mode === "live" ? "new-mode-live" : "new-mode-playback") }>
+          <span className={workspace.mode === "live" ? "new-pulse" : "new-mode-dot"} />
+          {workspace.mode === "live" ? "LIVE" : `녹화 재생 · ${formatKstDateTime(workspace.playheadMs)}`}
         </div>
         <button className="new-ghost" type="button" onClick={toggleFullscreen}>
           <Expand size={14} />
@@ -360,6 +434,7 @@ export function LiveWorkspace() {
               cameras={rows}
               reconnectGenerations={reconnectGenerations}
               layout={layout}
+              workspace={workspace}
               selectedStream={selectedCamera?.streamName ?? ""}
               onLayoutChange={handleLayoutChange}
               onSelectCamera={(camera) => setSelectedStream(camera.streamName)}
@@ -369,6 +444,8 @@ export function LiveWorkspace() {
                 setZoomedStream((current) => (current === camera.streamName ? null : camera.streamName));
               }}
               onVideoViewportChange={handleVideoViewportChange}
+              recordedViewports={recordedViewports}
+              onRecordedViewportChange={handleRecordedViewportChange}
             />
           ) : (
             <div className="new-empty">
@@ -457,17 +534,14 @@ export function LiveWorkspace() {
                         >
                           <span className={cn("new-state", camera.state !== "streaming" && "new-danger")} />
                           <span>{camera.name}</span>
-                          <em>{camera.state === "streaming" ? "live" : camera.state}</em>
+                          <em>{workspace.mode === "playback" ? "playback" : camera.state === "streaming" ? "live" : camera.state}</em>
                         </button>
                         <button
                           className="new-camera-reconnect"
                           type="button"
-                          aria-label={`${camera.name} 다시 연결`}
-                          title="다시 연결"
-                          onClick={() => setReconnectGenerations((current) => ({
-                            ...current,
-                            [camera.streamName]: (current[camera.streamName] ?? 0) + 1,
-                          }))}
+                          aria-label={`${camera.name} ${workspace.mode === "live" ? "다시 연결" : "녹화 다시 시도"}`}
+                          title={workspace.mode === "live" ? "다시 연결" : "녹화 다시 시도"}
+                          onClick={() => retryCamera(camera.streamName)}
                         >
                           <RefreshCw size={14} />
                         </button>
@@ -481,14 +555,69 @@ export function LiveWorkspace() {
         )}
       </section>
 
-      <TwoRowTimeline
-        cameras={rows}
-        selectedCamera={selectedCamera}
-        date={today}
-        data={selectedTimeline.data}
-        collapsed={timelineCollapsed}
-        onToggle={toggleTimeline}
-      />
+      <footer className={cn("new-timeline new-playback-timeline-shell", timelineCollapsed && "new-collapsed")} aria-label="선택 카메라와 현재 배치 녹화 타임라인">
+        <div className="new-timeline-top new-playback-timeline-top">
+          <form
+            className="new-playback-datetime"
+            onSubmit={(event) => {
+              event.preventDefault();
+              commitTimeDraft();
+            }}
+          >
+            <input
+              type="date"
+              value={browseDate}
+              onChange={(event) => handleBrowseDateChange(event.target.value)}
+              aria-label="탐색 날짜"
+            />
+            <input
+              type="time"
+              step="1"
+              value={timeDraft}
+              onChange={(event) => setTimeDraft(event.target.value)}
+              aria-label="탐색 시각"
+            />
+            <button type="submit" className="new-ghost">이동</button>
+          </form>
+          <PlaybackControls
+            workspace={{ ...workspace, goLive: returnToLive }}
+            liveEnabled
+            className="new-live-playback-controls"
+          />
+          <button className="new-ghost new-playback-collapse" type="button" onClick={toggleTimeline}>
+            {timelineCollapsed ? "타임라인 보기" : "타임라인 숨기기"}
+          </button>
+        </div>
+        {!timelineCollapsed && (
+          <div className="new-live-playback-timeline-body">
+            {failedTimelineQueries.length > 0 && (
+              <div className="new-playback-timeline-error" role="alert">
+                <span>일부 카메라의 녹화 범위를 불러오지 못했습니다.</span>
+                <button
+                  type="button"
+                  className="new-ghost"
+                  onClick={() => failedTimelineQueries.forEach((query) => void query.refetch())}
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+            <PlaybackTimeline
+              ranges={toTimelineRanges(selectedCoverage)}
+              aggregateRanges={aggregateCoverage}
+              viewport={timelineViewport}
+              playheadMs={workspace.playheadMs}
+              onSeek={(atMs) => void seekPlayback(atMs)}
+              onViewportChange={setTimelineViewport}
+              selectedLabel={selectedCamera?.name ?? "카메라 없음"}
+              aggregateLabel="현재 배치 · 하나 이상 녹화"
+              disabled={displayedCameraKeys.length === 0}
+              className="new-live-playback-timeline"
+              ariaLabel="선택 카메라와 현재 배치 녹화 범위"
+            />
+          </div>
+        )}
+      </footer>
     </div>
   );
 }
@@ -496,18 +625,22 @@ export function LiveWorkspace() {
 function MonitorHeader({ children, viewerMode }: { readonly children: ReactNode; readonly viewerMode: boolean }) {
   return (
     <header className="new-command">
-      <a className="new-brand" href={withAppBase("/")} aria-label="CamStation 모니터링">
-        <div className="new-brand-mark"><LayoutDashboard size={16} /></div>
-        <div>
-          <div className="new-brand-title">CamStation</div>
-          <div className="new-mini">HOME MONITOR</div>
-        </div>
-      </a>
-      <nav className="new-nav" aria-label="주요 화면">
-        <a className="new-active" href={withAppBase("/live")}>라이브</a>
-        <a href={withAppBase(viewerMode ? viewerRoute("/recordings") : "/recordings")}>녹화</a>
-        {!viewerMode && <a href={withAppBase("/settings")}>설정</a>}
-      </nav>
+      {!viewerMode && (
+        <>
+          <a className="new-brand" href={withAppBase("/")} aria-label="CamStation 모니터링">
+            <div className="new-brand-mark"><LayoutDashboard size={16} /></div>
+            <div>
+              <div className="new-brand-title">CamStation</div>
+              <div className="new-mini">HOME MONITOR</div>
+            </div>
+          </a>
+          <nav className="new-nav" aria-label="주요 화면">
+            <a className="new-active" href={withAppBase("/live")}>라이브</a>
+            <a href={withAppBase("/recordings")}>녹화</a>
+            <a href={withAppBase("/settings")}>설정</a>
+          </nav>
+        </>
+      )}
       {children}
     </header>
   );
@@ -517,22 +650,28 @@ function CameraGrid({
   cameras,
   reconnectGenerations,
   layout,
+  workspace,
   selectedStream,
   onLayoutChange,
   onSelectCamera,
   zoomedStream,
   onToggleZoom,
   onVideoViewportChange,
+  recordedViewports,
+  onRecordedViewportChange,
 }: {
   cameras: Camera[];
   reconnectGenerations: Record<string, number>;
   layout: MonitorLayoutItem[];
+  workspace: PlaybackWorkspace;
   selectedStream: string;
   onLayoutChange: (layout: MonitorLayoutItem[]) => void;
   onSelectCamera: (camera: Camera) => void;
   zoomedStream: string | null;
   onToggleZoom: (camera: Camera) => void;
   onVideoViewportChange: (streamName: string, viewport: VideoViewport) => void;
+  recordedViewports: Record<string, VideoViewport>;
+  onRecordedViewportChange: (streamName: string, viewport: VideoViewport) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -582,6 +721,7 @@ function CameraGrid({
               <div key={item.i} className={cn("new-grid-item", `new-grid-item-${presentation}`)}>
                 <CameraTile
                   camera={camera}
+                  workspace={workspace}
                   reconnectGeneration={reconnectGenerations[camera.streamName] ?? 0}
                   selected={camera.streamName === selectedStream}
                   zoomed={presentation === "focused"}
@@ -589,6 +729,8 @@ function CameraGrid({
                   onToggleZoom={() => onToggleZoom(camera)}
                   videoViewport={item.videoZoom}
                   onVideoViewportChange={(viewport) => onVideoViewportChange(camera.streamName, viewport)}
+                  recordedViewport={recordedViewports[camera.streamName]}
+                  onRecordedViewportChange={(viewport) => onRecordedViewportChange(camera.streamName, viewport)}
                 />
               </div>
             );
@@ -601,6 +743,7 @@ function CameraGrid({
 
 function CameraTile({
   camera,
+  workspace,
   reconnectGeneration,
   selected,
   zoomed = false,
@@ -608,8 +751,11 @@ function CameraTile({
   onToggleZoom,
   videoViewport,
   onVideoViewportChange,
+  recordedViewport,
+  onRecordedViewportChange,
 }: {
   camera: Camera;
+  workspace: PlaybackWorkspace;
   reconnectGeneration: number;
   selected: boolean;
   zoomed?: boolean;
@@ -617,13 +763,18 @@ function CameraTile({
   onToggleZoom: () => void;
   videoViewport?: VideoViewport;
   onVideoViewportChange: (viewport: VideoViewport) => void;
+  recordedViewport?: VideoViewport;
+  onRecordedViewportChange: (viewport: VideoViewport) => void;
 }) {
   const [playback, setPlayback] = useState<{ phase: PlaybackPhase; usingFallback: boolean }>({
     phase: "connecting",
     usingFallback: false,
   });
   const browserPlaying = playback.phase === "playing";
-  const playbackUnavailable = !browserPlaying;
+  const recordedState = workspace.cameras[camera.streamName];
+  const playbackUnavailable = workspace.mode === "live"
+    ? !browserPlaying
+    : !recordedState || !["ready", "playing"].includes(recordedState.status);
 
   return (
     <article
@@ -634,17 +785,27 @@ function CameraTile({
         onToggleZoom();
       }}
     >
-      <LiveVideo
-        reconnectGeneration={reconnectGeneration}
-        streamNames={playbackStreamCandidates(camera)}
-        viewport={videoViewport}
-        onViewportChange={onVideoViewportChange}
-        onPlaybackChange={setPlayback}
-      />
+      {workspace.mode === "live" ? (
+        <LiveVideo
+          reconnectGeneration={reconnectGeneration}
+          streamNames={playbackStreamCandidates(camera)}
+          viewport={videoViewport}
+          onViewportChange={onVideoViewportChange}
+          onPlaybackChange={setPlayback}
+        />
+      ) : (
+        <RecordedVideoViewport
+          workspace={workspace}
+          cameraKey={camera.streamName}
+          selected={selected}
+          viewport={recordedViewport}
+          onViewportChange={onRecordedViewportChange}
+        />
+      )}
       <div className="new-tile-head cam-drag-handle">
         <span className={cn("new-state", playbackUnavailable && "new-danger")} />
         <strong>{camera.name}</strong>
-        <span className="new-cam-id">{camera.name}</span>
+        <span className="new-cam-id">{workspace.mode === "live" ? camera.name : "녹화 재생"}</span>
       </div>
       <button
         className="new-focus-btn"
@@ -835,110 +996,6 @@ function LiveVideo({
   );
 }
 
-function TwoRowTimeline({
-  cameras,
-  selectedCamera,
-  date,
-  data,
-  collapsed,
-  onToggle,
-}: {
-  cameras: Camera[];
-  selectedCamera?: Camera;
-  date: string;
-  data?: TimelineData;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const dayStart = new Date(`${date}T00:00:00+09:00`).getTime() / 1000;
-  const dayEnd = dayStart + 86400;
-  const cursorTs = now.getTime() / 1000;
-  const selectedRanges = (data?.segments ?? []).map((segment) => ({
-    ts_start: segment.ts_start,
-    ts_end: segment.ts_end ?? cursorTs,
-  }));
-  const motionEvents = data?.motion_events ?? [];
-
-  return (
-    <footer className={cn("new-timeline", collapsed && "new-collapsed")} aria-label="선택 카메라와 전체 카메라 2줄 타임라인">
-      <div className="new-timeline-top">
-        <div className="new-clock">{formatClock(now)}</div>
-        <div className="new-mini">{date} · 1줄 선택 카메라 · 2줄 전체 집계</div>
-        <div className="new-spacer" />
-        <div className="new-live-pill">
-          <span className="new-pulse" />
-          LIVE
-        </div>
-        <button className="new-ghost" type="button" onClick={onToggle}>
-          {collapsed ? "타임라인 보기" : "타임라인 숨기기"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="new-timeline-body">
-          <div className="new-track">
-            <div className="new-track-name">
-              <strong>{selectedCamera?.name ?? "카메라 없음"}</strong>선택 카메라
-            </div>
-            <TimelineBar ranges={selectedRanges} motionEvents={motionEvents} dayStart={dayStart} dayEnd={dayEnd} cursorTs={cursorTs} />
-          </div>
-          <div className="new-track">
-            <div className="new-track-name">
-              <strong>전체 카메라</strong>{cameras.length > 0 ? "녹화 있음" : "녹화 없음"}
-            </div>
-            <TimelineBar ranges={selectedRanges} motionEvents={motionEvents} dayStart={dayStart} dayEnd={dayEnd} cursorTs={cursorTs} aggregate />
-          </div>
-          <div className="new-ticks">
-            <span />
-            {["00", "04", "08", "12", "16", "20", "24"].map((tick) => (
-              <span key={tick}>{tick}</span>
-            ))}
-          </div>
-        </div>
-      )}
-    </footer>
-  );
-}
-
-function TimelineBar({
-  ranges,
-  motionEvents,
-  dayStart,
-  dayEnd,
-  cursorTs,
-  aggregate,
-}: {
-  ranges: TimelineRange[];
-  motionEvents: Array<{ ts_start: number; ts_end: number | null }>;
-  dayStart: number;
-  dayEnd: number;
-  cursorTs: number;
-  aggregate?: boolean;
-}) {
-  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
-    event.currentTarget.blur();
-  };
-  return (
-    <div className={cn("new-daybar", aggregate && "new-aggregate")} onClick={handleClick}>
-      {ranges.map((range, index) => {
-        const left = pctInDay(range.ts_start, dayStart, dayEnd);
-        const right = pctInDay(range.ts_end, dayStart, dayEnd);
-        return <span key={`${range.ts_start}-${index}`} className="new-chunk" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.18)}%` }} />;
-      })}
-      {motionEvents.map((event, index) => {
-        const left = pctInDay(event.ts_start, dayStart, dayEnd);
-        const right = pctInDay(event.ts_end ?? event.ts_start + 5, dayStart, dayEnd);
-        return <span key={`${event.ts_start}-${index}`} className="new-motion" style={{ left: `${left}%`, width: `${Math.max(right - left, 0.24)}%` }} />;
-      })}
-      <span className="new-cursor" style={{ left: `${pctInDay(cursorTs, dayStart, dayEnd)}%` }} />
-    </div>
-  );
-}
-
 function clampVideoViewport(viewport: { scale: number; tx: number; ty: number }, width: number, height: number) {
   const scale = clampNumber(viewport.scale, 1, 4);
   if (scale <= 1) return { scale: 1, tx: 0, ty: 0 };
@@ -966,18 +1023,60 @@ function toLayoutItem(item: MonitorLayoutItem) {
   };
 }
 
-function pctInDay(ts: number, dayStart: number, dayEnd: number): number {
-  const value = ((ts - dayStart) / (dayEnd - dayStart)) * 100;
-  return Math.min(100, Math.max(0, value));
+function toTimelineRanges(ranges: readonly { startMs: number; endMs: number }[]): PlaybackTimelineRange[] {
+  return ranges.map(({ startMs, endMs }) => ({ startMs, endMs }));
 }
 
-function formatClock(date: Date): string {
-  return new Intl.DateTimeFormat("ko-KR", {
+function mergeTimelineRanges(ranges: readonly { startMs: number; endMs: number }[]): PlaybackTimelineRange[] {
+  const sorted = toTimelineRanges(ranges)
+    .filter((range) => Number.isFinite(range.startMs) && Number.isFinite(range.endMs) && range.endMs > range.startMs)
+    .sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
+  const merged: PlaybackTimelineRange[] = [];
+  for (const range of sorted) {
+    const previous = merged.at(-1);
+    if (!previous || range.startMs > previous.endMs) {
+      merged.push(range);
+      continue;
+    }
+    if (range.endMs > previous.endMs) {
+      merged[merged.length - 1] = { startMs: previous.startMs, endMs: range.endMs };
+    }
+  }
+  return merged;
+}
+
+function formatKstDate(atMs: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(atMs));
+}
+
+function formatKstTime(atMs: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Seoul",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
-  }).format(date);
+    hourCycle: "h23",
+  }).format(new Date(atMs));
+}
+
+function formatKstDateTime(atMs: number): string {
+  return `${formatKstDate(atMs)} ${formatKstTime(atMs)} KST`;
+}
+
+function kstDayViewport(date: string) {
+  const fromMs = new Date(`${date}T00:00:00+09:00`).getTime();
+  return { fromMs, toMs: fromMs + 24 * 60 * 60 * 1000 };
+}
+
+function parseKstDateTime(date: string, time: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}(?::\d{2})?$/.test(time)) return null;
+  const atMs = new Date(`${date}T${time.length === 5 ? `${time}:00` : time}+09:00`).getTime();
+  return Number.isFinite(atMs) ? atMs : null;
 }
 
 function formatShortTime(value: number): string {

@@ -42,6 +42,15 @@ export type CamStationViewerBridge = {
   onFullscreenChange?(handler: (fullscreen: boolean) => void): void | (() => void);
 };
 
+const FULLSCREEN_SESSION_KEY = "camstation.viewer.nativeFullscreen.v1";
+type FullscreenObservation = {
+  value: boolean | undefined;
+  eventRevision: number;
+  commandGeneration: number;
+  handlers: Set<(fullscreen: boolean) => void>;
+};
+const fullscreenObservations = new WeakMap<CamStationViewerBridge, FullscreenObservation>();
+
 declare global {
   interface Window {
     camstationViewer?: CamStationViewerBridge;
@@ -140,8 +149,14 @@ export function hasViewerFullscreenBridge(bridge = preloadBridge()): boolean {
 
 export async function requestViewerFullscreen(fullscreen: boolean, bridge = preloadBridge()): Promise<boolean> {
   if (typeof bridge?.setFullscreen !== "function") return false;
+  const observation = fullscreenObservation(bridge);
+  const generation = ++observation.commandGeneration;
+  const eventRevision = observation.eventRevision;
   try {
-    await bridge.setFullscreen(fullscreen);
+    const actual = await bridge.setFullscreen(fullscreen);
+    if (typeof actual === "boolean" && generation === observation.commandGeneration && eventRevision === observation.eventRevision) {
+      publishFullscreenObservation(observation, actual);
+    }
     return true;
   } catch {
     return false;
@@ -150,20 +165,59 @@ export async function requestViewerFullscreen(fullscreen: boolean, bridge = prel
 
 export function subscribeViewerFullscreen(handler: (fullscreen: boolean) => void, bridge = preloadBridge()): () => void {
   if (typeof bridge?.onFullscreenChange !== "function") return () => undefined;
+  const observation = fullscreenObservation(bridge);
+  let delivered = false;
+  const receive = (fullscreen: boolean) => { delivered = true; handler(fullscreen); };
+  observation.handlers.add(receive);
   try {
-    const unsubscribe = bridge.onFullscreenChange(handler);
-    return typeof unsubscribe === "function"
-      ? () => {
-          try {
-            unsubscribe();
-          } catch {
-            // Native fullscreen IPC cleanup must not affect the live workspace.
-          }
-        }
-      : () => undefined;
+    const unsubscribe = bridge.onFullscreenChange((fullscreen) => {
+      if (typeof fullscreen !== "boolean") return;
+      observation.eventRevision++;
+      publishFullscreenObservation(observation, fullscreen);
+    });
+    if (!delivered && observation.value !== undefined) receive(observation.value);
+    return () => {
+      observation.handlers.delete(receive);
+      try {
+        if (typeof unsubscribe === "function") unsubscribe();
+      } catch {
+        // Native fullscreen IPC cleanup must not affect the live workspace.
+      }
+    };
   } catch {
+    observation.handlers.delete(receive);
     return () => undefined;
   }
+}
+
+function fullscreenObservation(bridge: CamStationViewerBridge): FullscreenObservation {
+  let observation = fullscreenObservations.get(bridge);
+  if (!observation) {
+    let value: boolean | undefined;
+    try {
+      const stored = typeof window === "undefined" ? null : window.sessionStorage.getItem(FULLSCREEN_SESSION_KEY);
+      if (stored === "true" || stored === "false") value = stored === "true";
+    } catch {
+      // Restricted storage must not block native fullscreen controls.
+    }
+    observation = { value, eventRevision: 0, commandGeneration: 0, handlers: new Set() };
+    fullscreenObservations.set(bridge, observation);
+  }
+  return observation;
+}
+
+function publishFullscreenObservation(observation: FullscreenObservation, fullscreen: boolean): void {
+  // Persist native acknowledgements/events only, never a requested value or a window-size guess.
+  try {
+    if (typeof window !== "undefined") window.sessionStorage.setItem(FULLSCREEN_SESSION_KEY, String(fullscreen));
+  } catch {
+    // The in-document observation still works when session storage is unavailable.
+  }
+  if (observation.value === fullscreen) return;
+  observation.value = fullscreen;
+  observation.handlers.forEach((handler) => {
+    try { handler(fullscreen); } catch { /* One subscriber cannot prevent another from receiving native state. */ }
+  });
 }
 
 function preloadBridge(): CamStationViewerBridge | undefined {

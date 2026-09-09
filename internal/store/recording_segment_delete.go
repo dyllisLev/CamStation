@@ -34,6 +34,8 @@ type recordingSegmentDeleteRequest struct {
 }
 
 func (d *DB) deleteReadyRecordingSegmentFile(ctx context.Context, request recordingSegmentDeleteRequest) (RecordingSegment, error) {
+	d.recordingMediaMu.Lock()
+	defer d.recordingMediaMu.Unlock()
 	segment, path, _, err := d.readyRecordingSegmentPath(ctx, request.ID, request.RecordingsDir)
 	if err != nil {
 		return RecordingSegment{}, err

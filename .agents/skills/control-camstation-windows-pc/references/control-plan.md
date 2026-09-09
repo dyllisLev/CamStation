@@ -167,6 +167,11 @@ unavailable or a fresh post-observation proves no effect. If any action returns
 `effect=unverifiable`, only a matching post-state or inspected screenshot can establish success.
 Do not turn a successful process exit code into an input-success claim.
 
+If visible close/key input is verified ineffective on an authorized target window, `close_window`
+accepts only its fresh `pid` and `window_id`. It validates the owner/session and queues `WM_CLOSE`
+inside the same interactive worker. Verify disappearance with a later `list_windows` assertion;
+queuing the message alone is not closure, and this operation never force-terminates a process.
+
 For close buttons exposed by the Windows title bar, select a fresh `Button` with the verified
 `element_index`; do not guess a localized label. If close succeeds but a UWP host remains without a
 window, require zero matching windows and stop only the exact PID returned by this run. Never kill

@@ -213,6 +213,9 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if err := d.ensureRecordingBackupSchema(ctx); err != nil {
 		return err
 	}
+	if err := d.ensurePlaybackSchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

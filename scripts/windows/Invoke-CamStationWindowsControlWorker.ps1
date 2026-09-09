@@ -69,6 +69,7 @@ $readOnlyTools = @(
 $mutatingTools = @(
   "bring_to_front",
   "click",
+  "close_window",
   "double_click",
   "drag",
   "hotkey",
@@ -99,6 +100,13 @@ public static class CamStationWindowsControlNative {
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindow(IntPtr hWnd);
+
   [DllImport("user32.dll")]
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool SetProcessDPIAware();
@@ -107,6 +115,28 @@ public static class CamStationWindowsControlNative {
   public static extern int GetSystemMetrics(int index);
 }
 "@
+
+function Close-VerifiedControlWindow {
+  param([Parameter(Mandatory)] [object]$InputValue)
+  if (@($InputValue.Keys | Where-Object { $_ -notin @("pid", "window_id") }).Count -ne 0) {
+    throw "close_window accepts only pid and window_id"
+  }
+  $targetPid = [int](Get-ObjectProperty -Value $InputValue -Name "pid")
+  $targetWindow = [long](Get-ObjectProperty -Value $InputValue -Name "window_id")
+  if ($targetPid -le 0 -or $targetWindow -le 0) { throw "close_window requires a positive PID and HWND" }
+  $targetProcess = Get-Process -Id $targetPid -ErrorAction Stop
+  if ($targetProcess.SessionId -ne $sessionId) { throw "close_window PID belongs to another session" }
+  $handle = [IntPtr]$targetWindow
+  [uint32]$ownerPid = 0
+  [void][CamStationWindowsControlNative]::GetWindowThreadProcessId($handle, [ref]$ownerPid)
+  if (-not [CamStationWindowsControlNative]::IsWindow($handle) -or $ownerPid -ne $targetPid) {
+    throw "close_window HWND does not belong to the requested PID"
+  }
+  if (-not [CamStationWindowsControlNative]::PostMessage($handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
+    throw "close_window could not queue WM_CLOSE"
+  }
+  return [ordered]@{ effect = "unverifiable"; route = "wm_close"; pid = $targetPid; window_id = $targetWindow }
+}
 
 function Write-DesktopScreenshotFallback {
   param([Parameter(Mandatory)] [string]$Path)
@@ -298,7 +328,8 @@ function Get-SafeStepOutputSummary {
   foreach ($name in @("effect", "success", "route", "pid", "window_id", "snapshot_id",
       "running", "active", "element_count", "returned_element_count", "total_element_count",
       "elements_complete", "screenshot_width", "screenshot_height", "screenshot_mime_type",
-      "capture_mode", "fallback_reason")) {
+      "capture_mode", "fallback_reason", "landed_on_target", "now_fg_hwnd",
+      "previous_fg_hwnd", "target_hwnd", "raised", "restored")) {
     $value = Get-OptionalObjectProperty -Value $Output -Name $name
     if ($null -ne $value -and ($value -is [ValueType] -or $value -is [string])) {
       $summary[$name] = ConvertTo-SafeJsonValue -Value $value
@@ -651,7 +682,13 @@ try {
     if ($tool -eq "get_desktop_state") { $resolvedInput["session"] = $managedDesktopSession }
 
     try {
-      $output = Invoke-DriverTool -Tool $tool -InputValue $resolvedInput
+      if ($tool -eq "close_window") {
+        $script:lastDriverOutputEncoding = "native-window"
+        $script:lastDriverOutputSha256 = $null
+        $output = Close-VerifiedControlWindow -InputValue $resolvedInput
+      } else {
+        $output = Invoke-DriverTool -Tool $tool -InputValue $resolvedInput
+      }
     } catch {
       $driverFailureMessage = Get-ControlFailureMessage -Failure $_
       if ($tool -ne "get_desktop_state" -or $null -eq $artifactName -or

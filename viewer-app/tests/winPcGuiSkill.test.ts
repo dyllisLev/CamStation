@@ -14,18 +14,49 @@ const setupRunbookURL = new URL("references/setup.md", skillRoot);
 const viewerRunbookURL = new URL("references/evidence-loop.md", skillRoot);
 const metadataURL = new URL("agents/openai.yaml", skillRoot);
 
-test("one repository skill discovers setup, general WinPC control, and Viewer requests", async () => {
+test("one repository skill discovers authorized PC setup, GUI control, and Viewer requests", async () => {
   const [skill, metadata] = await Promise.all([
     readFile(skillURL, "utf8"),
     readFile(metadataURL, "utf8"),
   ]);
 
   assert.match(skill, /^---\nname: control-camstation-windows-pc\n/u);
-  assert.match(skill, /Install, audit, observe, and control.*CamStation Windows test PC or monitoring PC/iu);
-  assert.match(skill, /screenshots.*app launch\/close.*click.*typing.*hotkeys.*scroll/iu);
-  assert.match(skill, /move\/resize\/maximize\/fullscreen.*Viewer.*GUI capture/iu);
-  assert.match(skill, /WinPC 제어.*테스트 PC 조작.*모니터링 PC 제어.*전체 화면 캡처.*창 최대화.*전체화면/isu);
+  // Discovery text names the supported tasks and target boundary; detailed GUI
+  // operations belong in the linked runbooks, not a fixed marketing sentence.
+  const frontmatter = skill.match(/^---\n([\s\S]*?)\n---(?:\n|$)/u)?.[1];
+  assert.ok(frontmatter, "skill must expose discovery frontmatter");
+  const description = frontmatter.match(/^description:\s*(.+)$/mu)?.[1];
+  assert.ok(description, "skill must expose a nonempty discovery description");
+  for (const capability of [
+    /\bauthorized\b/iu,
+    /\bCamStation\b/u,
+    /\btest-pc\b/u,
+    /\bmonitoring-pc\b/u,
+    /\bpinned target wrapper\b/iu,
+    /\binteractive Windows session\b/iu,
+    /\bstatus\b/iu,
+    /\bdesktop\b/iu,
+    /\bViewer capture\b/iu,
+    /\bGUI input\b/iu,
+    /\bprocesses\b/iu,
+    /\bservices\b/iu,
+    /\bdriver setup\b/iu,
+  ]) {
+    assert.match(description, capability);
+  }
+  assert.match(description, /not for generic screenshots or application rollout planning/iu);
+  for (const reference of [
+    "targets", "control-plan", "system-control", "setup", "evidence-loop",
+  ]) {
+    assert.ok(skill.includes(`](references/${reference}.md)`), `missing ${reference} runbook link`);
+  }
+  assert.match(skill, /desktop\/window\s+observation, input, app\/window control/iu);
+  assert.match(skill, /Windows maximize\/restore.*native fullscreen/isu);
+  assert.match(skill, /exact CamStation Viewer window, rendering, controls, or keyboard focus/iu);
+  assert.match(metadata, /display_name: "CamStation Windows PC Control"/u);
   assert.match(metadata, /default_prompt: "Use \$control-camstation-windows-pc/u);
+  assert.match(metadata, /test-pc or monitoring-pc explicitly/iu);
+  assert.match(metadata, /verify its Windows session.*inspect evidence.*clean up exactly/iu);
   assert.doesNotMatch(
     skill + metadata,
     /(?:\d{1,3}\.){3}\d{1,3}|SHA256:[A-Za-z0-9+/]{20,}|BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY/u,

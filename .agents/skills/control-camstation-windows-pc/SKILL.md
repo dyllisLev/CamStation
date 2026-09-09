@@ -1,6 +1,6 @@
 ---
 name: control-camstation-windows-pc
-description: Install, audit, observe, and control the authorized CamStation Windows test PC or monitoring PC through an explicit target profile, pinned SSH management plane, and logged-on interactive session. Use for Windows PC setup, status or performance checks, service/process control, full-desktop or exact-window screenshots, app launch/close, click, typing, hotkeys, scroll, window move/resize/maximize/fullscreen, CamStation Viewer configuration, GUI capture, and visual diagnosis. Also trigger for Korean requests such as "WinPC 제어", "테스트 PC 조작", "모니터링 PC 제어", "화면 확인", "전체 화면 캡처", "창 최대화", "전체화면", or "Viewer 실행 화면 확인". Do not use for an unapproved host, application rollout planning, or adding a remote-access service.
+description: Observe and control the authorized CamStation test-pc or monitoring-pc through the pinned target wrapper and interactive Windows session. Use for these PCs’ status, desktop or Viewer capture, GUI input, processes, services, and driver setup; not for generic screenshots or application rollout planning.
 ---
 
 # Control CamStation Windows PC

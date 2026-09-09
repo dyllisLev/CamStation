@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
+import { isNavigationAllowed } from "../src/navigation.ts";
 import { disconnectAction, liveDocumentLoadAction, reconnectDelaySeconds, setupLoadAction, startupAction } from "../src/viewerLifecycle.ts";
 
 test("direct launch decides between setup, quiet exit, and live Viewer", () => {
@@ -41,4 +44,36 @@ test("management reconnect preserves only the same verified live document", () =
     currentURL: "http://camstation/live?viewer=1",
     nextURL: "http://camstation/live?viewer=1",
   }), "load");
+});
+
+test("management disconnect and lease recovery preserve the allowed recordings document", async () => {
+  const source = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
+  // Exercise the actual main-process visibility predicate with a BrowserWindow stub.
+  const predicateSource = source.slice(
+    source.indexOf("function hasCurrentLiveDocument()"),
+    source.indexOf("function hardenSession("),
+  ).replace("(): boolean", "()");
+  const currentLiveURL = "http://camstation/live?viewer=1";
+  for (const [documentURL, expectedVisible] of [
+    [currentLiveURL, true],
+    ["http://camstation/recordings?viewer=1", true],
+    ["http://camstation/recordings", false],
+    ["http://camstation/settings?viewer=1", false],
+    ["http://other/recordings?viewer=1", false],
+    ["file:///setup.html", false],
+  ] as const) {
+    const isVisible = runInNewContext(`${predicateSource}\nhasCurrentLiveDocument`, {
+      window: { isDestroyed: () => false, webContents: { getURL: () => documentURL } },
+      setupVisible: false,
+      currentLiveURL,
+      isNavigationAllowed,
+    }) as () => boolean;
+    const liveVisible = isVisible();
+    assert.equal(liveVisible, expectedVisible, documentURL);
+    assert.equal(disconnectAction({ explicitShutdown: false, retryCount: 0, liveVisible }),
+      expectedVisible ? "preserve_live_and_reconnect" : "show_service_error_and_reconnect", documentURL);
+    assert.equal(liveDocumentLoadAction({ liveVisible, currentURL: currentLiveURL, nextURL: currentLiveURL }),
+      expectedVisible ? "preserve" : "load", documentURL);
+    assert.equal(liveDocumentLoadAction({ liveVisible, currentURL: currentLiveURL, nextURL: "http://new/live?viewer=1" }), "load");
+  }
 });
