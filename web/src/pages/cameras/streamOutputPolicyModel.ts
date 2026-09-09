@@ -1,5 +1,6 @@
 import type {
   Camera,
+  OutputEncoderStatus,
   CameraSourceKey,
   StreamCandidate,
   StreamOutputMutationResponse,
@@ -94,6 +95,7 @@ export function validateStreamOutputs(outputs: readonly StreamOutputSettings[], 
   }
   for (const item of outputs) {
     if (!availableSourceKeys.includes(item.sourceKey)) return `${purposeLabel(item.purpose)}에서 사용할 수 없는 원본 입력입니다.`;
+    if (item.videoMode === "copy" && item.videoEncoder === "nvenc") return `${purposeLabel(item.purpose)} 원본 복사에서는 GPU 인코딩을 사용할 수 없습니다.`;
     const hasWidth = item.maxWidth !== null;
     const hasHeight = item.maxHeight !== null;
     if (hasWidth !== hasHeight) return `${purposeLabel(item.purpose)} 최대 폭과 높이를 함께 입력하세요.`;
@@ -139,5 +141,20 @@ function output(
   audioMode: StreamOutputSettings["audioMode"],
   activation: StreamOutputSettings["activation"],
 ): StreamOutputSettings {
-  return { purpose, sourceKey, videoMode, maxWidth, maxHeight, maxFPS, audioMode, activation };
+  return { purpose, sourceKey, videoMode, videoEncoder: "cpu", maxWidth, maxHeight, maxFPS, audioMode, activation };
+}
+
+
+export function outputEncoderLabel(value?: OutputEncoderStatus): string {
+  if (!value) return "미검증";
+  const encoder = value.actualEncoder === "nvenc" ? "NVIDIA GPU" : value.actualEncoder === "cpu" ? "CPU" : value.actualEncoder === "copy" ? "원본 전달" : "미검증";
+  const reasons: Record<string, string> = {
+    device_unavailable: "GPU 장치 없음", permission_denied: "GPU 접근 권한 없음",
+    library_unavailable: "GPU 라이브러리 없음", api_incompatible: "GPU 드라이버 호환 불가",
+    encoder_failed: "GPU 인코딩 실패", session_limit: "GPU 3세션 제한", cpu_failed: "CPU 인코딩 실패",
+    supervisor_unavailable: "GPU 실행 관리자 없음", probe_timeout: "GPU 호환성 검사 시간 초과",
+  };
+  const reason = value.reason ? reasons[value.reason] : undefined;
+  const allocation = !value.actualEncoder && value.allocatedEncoder ? ` · ${value.allocatedEncoder === "nvenc" ? "GPU" : value.allocatedEncoder === "copy" ? "원본 전달" : "CPU"} 배정` : "";
+  return `${encoder}${allocation}${reason ? ` · ${reason}${value.actualEncoder === "cpu" ? " (CPU 사용)" : ""}` : ""}`;
 }

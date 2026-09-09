@@ -717,7 +717,7 @@ func applyResults(camera Camera) []CameraOutputApplyResult {
 	results := make([]CameraOutputApplyResult, 0, len(camera.Outputs))
 	for _, output := range camera.Outputs {
 		results = append(results, CameraOutputApplyResult{Purpose: output.Purpose, Policy: CameraOutputPolicySnapshot{
-			SourceKey: output.SourceKey, SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode,
+			SourceKey: output.SourceKey, SourceStreamID: output.SourceStreamID, VideoMode: output.VideoMode, VideoEncoder: output.VideoEncoder,
 			MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS,
 			AudioMode: output.AudioMode, Activation: output.Activation,
 		}})
@@ -777,3 +777,83 @@ func mustGetCamera(t *testing.T, db *DB, streamName string) Camera {
 func intPtr(v int) *int           { return &v }
 func int64Ptr(v int64) *int64     { return &v }
 func floatPtr(v float64) *float64 { return &v }
+
+func TestVideoEncoderMigrationAndLegacySnapshot(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.UpsertCamera(t.Context(), Camera{Name: "encoder", URL: "rtsp://camera/main", StreamName: "encoder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(t.Context(), `UPDATE camera_outputs SET applied_policy_json=json_remove(applied_policy_json,'$.videoEncoder')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(t.Context(), `ALTER TABLE camera_outputs DROP COLUMN video_encoder`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := db.Migrate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := mustGetCamera(t, db, camera.StreamName)
+	for _, output := range got.Outputs {
+		if output.VideoEncoder != CameraVideoEncoderCPU || output.AppliedPolicy.VideoEncoder != CameraVideoEncoderCPU {
+			t.Fatalf("legacy encoder not CPU: %s / %s", output.VideoEncoder, output.AppliedPolicy.VideoEncoder)
+		}
+	}
+}
+
+func TestVideoEncoderDesiredAppliedAndValidation(t *testing.T) {
+	db := openMigratedStore(t)
+	camera, err := db.UpsertCamera(t.Context(), Camera{Name: "encoder", URL: "rtsp://camera/main", StreamName: "encoder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	camera.Outputs[1].VideoEncoder = CameraVideoEncoderNVENC
+	camera.Outputs[2].VideoEncoder = CameraVideoEncoderNVENC // auto may still resolve to copy
+	revision := camera.PolicyState.DesiredRevision
+	camera, err = db.SaveCameraConfiguration(t.Context(), camera, &revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if camera.Outputs[1].VideoEncoder != CameraVideoEncoderNVENC || camera.Outputs[1].AppliedPolicy.VideoEncoder != CameraVideoEncoderCPU {
+		t.Fatal("desired save changed applied encoder")
+	}
+	if err := db.MarkCameraPolicyFailed(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, "encoder unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	camera = mustGetCamera(t, db, camera.StreamName)
+	if camera.Outputs[1].VideoEncoder != CameraVideoEncoderNVENC || camera.Outputs[1].AppliedPolicy.VideoEncoder != CameraVideoEncoderCPU {
+		t.Fatal("failed apply lost encoder selections")
+	}
+	if err := db.MarkCameraPolicyApplied(t.Context(), camera.ID, camera.PolicyState.DesiredRevision, applyResults(camera)); err != nil {
+		t.Fatal(err)
+	}
+	camera = mustGetCamera(t, db, camera.StreamName)
+	if camera.Outputs[1].AppliedPolicy.VideoEncoder != CameraVideoEncoderNVENC {
+		t.Fatal("NVENC snapshot did not persist")
+	}
+	for _, encoder := range []CameraVideoEncoder{CameraVideoEncoderNVENC, "invalid"} {
+		camera.Outputs[0].VideoEncoder = encoder
+		if _, err := db.SaveCameraConfiguration(t.Context(), camera, nil); err == nil {
+			t.Fatalf("copy accepted encoder %s", encoder)
+		}
+	}
+	camera.Outputs[0].VideoEncoder = ""
+	if _, err := db.SaveCameraConfiguration(t.Context(), camera, &revision); !errors.Is(err, ErrDesiredRevisionMismatch) {
+		t.Fatalf("stale revision error: %v", err)
+	}
+	camera, err = db.SaveCameraConfiguration(t.Context(), camera, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if camera.Outputs[0].VideoEncoder != CameraVideoEncoderCPU {
+		t.Fatal("omitted encoder not CPU")
+	}
+}

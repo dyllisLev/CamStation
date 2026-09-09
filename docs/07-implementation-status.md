@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-09-07
+Last updated: 2026-09-09
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
@@ -28,6 +28,23 @@ This document records the current implementation state so the next session can c
 - Main monitoring page: `http://192.168.0.160:18081/live`
 
 ## Implemented
+
+### 2026-09-09 optional NVENC output encoding (validation in progress)
+
+- Output policies support `videoEncoder=cpu|nvenc`; CPU remains the default and
+  recording/input relays retain stream copy. Shared live/focus outputs encode once
+  regardless of viewer count. Desired/applied policy and observed encoder state are separate.
+- Deterministic allocation and child-process locks limit NVENC to three concurrent
+  sessions, including capability probes. GPU-specific failures fall back per output
+  and remain on CPU until the go2rtc generation changes; source failures are separate.
+- The glibc image pins FFmpeg 5.1.7, NVIDIA 470.256.02 libraries and matching codec
+  headers. Runtime setup supports the existing GTX 660 Ti without replacing host drivers.
+- Unit/race checks and UID 10001 image smoke checks pass. Development real-camera,
+  failure-recovery and production LXC/CPU comparison evidence is being collected;
+  this entry does not yet claim production deployment.
+- [Design](superpowers/specs/2026-09-09-nvidia-nvenc-acceleration-design.md),
+  [execution plan](superpowers/plans/2026-09-09-nvidia-nvenc-acceleration.md), and
+  [deployment procedure](deployment.md) define the rollout and rollback contract.
 
 ### 2026-09-07 live recovery latency (source only; rollout pending)
 

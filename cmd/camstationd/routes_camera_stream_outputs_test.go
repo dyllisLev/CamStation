@@ -695,3 +695,77 @@ func mustCameraByStream(t *testing.T, db *store.DB, streamName string) store.Cam
 	}
 	return cameraRow
 }
+
+func TestOutputVideoEncoderAPIValidationAndPersistence(t *testing.T) {
+	for _, encoder := range []string{"nvenc", "invalid"} {
+		t.Run("copy_"+encoder, func(t *testing.T) {
+			server, camera := newPolicyRouteServer(t, nil)
+			body := streamOutputRequestBody(t, camera.PolicyState.DesiredRevision, store.CameraVideoH264)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(body), &payload); err != nil {
+				t.Fatal(err)
+			}
+			payload["outputs"].([]any)[0].(map[string]any)["videoEncoder"] = encoder
+			encoded, _ := json.Marshal(payload)
+			status, _ := requestJSONWithHeaders(t, server.handler, http.MethodPut, "/api/cameras/"+camera.StreamName+"/stream-outputs", string(encoded), trustedConsoleHeaders())
+			if status != http.StatusBadRequest {
+				t.Fatalf("invalid encoder status = %d", status)
+			}
+		})
+	}
+	server, camera := newPolicyRouteServer(t, nil)
+	body := streamOutputRequestBody(t, camera.PolicyState.DesiredRevision, store.CameraVideoH264)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["outputs"].([]any)[1].(map[string]any)["videoEncoder"] = "nvenc"
+	encoded, _ := json.Marshal(payload)
+	requestJSONWithHeaders(t, server.handler, http.MethodPut, "/api/cameras/"+camera.StreamName+"/stream-outputs", string(encoded), trustedConsoleHeaders())
+	got, err := server.db.GetCameraByStream(t.Context(), camera.StreamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := publicCameraFromStore(got)
+	if dto.StreamOutputs[0].Desired.VideoEncoder != store.CameraVideoEncoderCPU || dto.StreamOutputs[1].Desired.VideoEncoder != store.CameraVideoEncoderNVENC {
+		t.Fatal("API encoder choice/default did not persist")
+	}
+}
+
+func TestPublicEncoderStatusRequiresEvidenceAndSanitizesCodes(t *testing.T) {
+	applied := &publicStreamOutputSettings{VideoEncoder: store.CameraVideoEncoderNVENC}
+	got := publicEncoderStatus(stream.EncoderRuntime{AllocatedEncoder: "nvenc", State: "unverified"}, applied)
+	if got.ActualEncoder != "" || got.RequestedEncoder != "nvenc" || got.AllocatedEncoder != "nvenc" {
+		t.Fatal("allocation reported as execution")
+	}
+	got = publicEncoderStatus(stream.EncoderRuntime{ActualEncoder: "cpu", State: "running", Reason: "session_limit"}, applied)
+	if got.ActualEncoder != "cpu" || got.Reason != "session_limit" {
+		t.Fatal("CPU fallback not exposed")
+	}
+	got = publicEncoderStatus(stream.EncoderRuntime{ActualEncoder: "nvenc", State: "stopped", Reason: "untrusted diagnostic", RequestedEncoder: "untrusted diagnostic"}, applied)
+	if got.ActualEncoder != "" || got.Reason != "" || got.RequestedEncoder != "nvenc" {
+		t.Fatal("stale or untrusted encoder state leaked")
+	}
+}
+
+func TestPublicEncoderSummarySeparatesReservationsAndRunning(t *testing.T) {
+	got := publicGo2RTCStatus(stream.Status{EncoderRuntime: map[string]stream.EncoderRuntime{
+		"1_live":  {AllocatedEncoder: "nvenc", ActualEncoder: "nvenc", State: "running"},
+		"2_live":  {AllocatedEncoder: "nvenc", ActualEncoder: "cpu", State: "running"},
+		"3_focus": {AllocatedEncoder: "nvenc", State: "unverified"},
+	}})
+	if got.Encoders.SessionLimit != 3 || got.Encoders.AssignedNVENC != 3 || got.Encoders.RunningNVENC != 1 {
+		t.Fatalf("wrong encoder counts: %+v", got.Encoders)
+	}
+}
+
+func TestPublicEncoderStatusPreservesCapabilityFailureReasons(t *testing.T) {
+	for _, reason := range []string{"supervisor_unavailable", "probe_timeout"} {
+		t.Run(reason, func(t *testing.T) {
+			got := publicEncoderStatus(stream.EncoderRuntime{RequestedEncoder: "nvenc", AllocatedEncoder: "cpu", State: "unverified", Reason: reason}, nil)
+			if got.Reason != reason || got.ActualEncoder != "" || got.AllocatedEncoder != "cpu" {
+				t.Fatalf("capability fallback missing or unverified execution claimed: %+v", got)
+			}
+		})
+	}
+}

@@ -48,7 +48,7 @@ func (d routeDeps) registerCameraStreamOutputRoutes(mux *http.ServeMux) {
 		camera.Outputs = make([]store.CameraOutput, 0, len(req.Outputs))
 		for _, output := range req.Outputs {
 			camera.Outputs = append(camera.Outputs, store.CameraOutput{
-				Purpose: output.Purpose, SourceKey: output.SourceKey, VideoMode: output.VideoMode,
+				Purpose: output.Purpose, SourceKey: output.SourceKey, VideoMode: output.VideoMode, VideoEncoder: output.VideoEncoder,
 				MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS,
 				AudioMode: output.AudioMode, Activation: output.Activation,
 			})

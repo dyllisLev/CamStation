@@ -9,6 +9,7 @@ export type StreamRuntime = {
 };
 
 export type StreamStatus = {
+  readonly encoders?: { readonly sessionLimit: number; readonly assignedNVENC: number; readonly runningNVENC: number; readonly checkedAt?: string };
   readonly installed: boolean;
   readonly running: boolean;
   readonly error?: string;

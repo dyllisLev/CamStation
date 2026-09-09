@@ -266,7 +266,7 @@ func requestedCameraOutputs(requested []publicStreamOutputSettings, inputs []sto
 	if len(requested) > 0 {
 		outputs := make([]store.CameraOutput, 0, len(requested))
 		for _, output := range requested {
-			outputs = append(outputs, store.CameraOutput{Purpose: output.Purpose, SourceKey: output.SourceKey, VideoMode: output.VideoMode, MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS, AudioMode: output.AudioMode, Activation: output.Activation})
+			outputs = append(outputs, store.CameraOutput{Purpose: output.Purpose, SourceKey: output.SourceKey, VideoMode: output.VideoMode, VideoEncoder: output.VideoEncoder, MaxWidth: output.MaxWidth, MaxHeight: output.MaxHeight, MaxFPS: output.MaxFPS, AudioMode: output.AudioMode, Activation: output.Activation})
 		}
 		return outputs
 	}

@@ -82,6 +82,9 @@ func (d *DB) ensureCameraPolicySchema(ctx context.Context) error {
 			return fmt.Errorf("camera policy migration failed: %w", err)
 		}
 	}
+	if err := d.addColumnIfMissing(ctx, "camera_outputs", "video_encoder", "TEXT NOT NULL DEFAULT 'cpu' CHECK (video_encoder IN ('cpu','nvenc'))"); err != nil {
+		return err
+	}
 	if err := d.addColumnIfMissing(ctx, "camera_outputs", "verified_transcoding", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}

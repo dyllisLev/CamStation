@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -68,14 +69,15 @@ type publicEffectiveDescriptor struct {
 }
 
 type publicStreamOutputSettings struct {
-	Purpose    store.CameraOutputPurpose `json:"purpose"`
-	SourceKey  string                    `json:"sourceKey"`
-	VideoMode  store.CameraVideoMode     `json:"videoMode"`
-	MaxWidth   *int                      `json:"maxWidth"`
-	MaxHeight  *int                      `json:"maxHeight"`
-	MaxFPS     *float64                  `json:"maxFPS"`
-	AudioMode  store.CameraAudioMode     `json:"audioMode"`
-	Activation store.CameraActivation    `json:"activation"`
+	Purpose      store.CameraOutputPurpose `json:"purpose"`
+	SourceKey    string                    `json:"sourceKey"`
+	VideoEncoder store.CameraVideoEncoder  `json:"videoEncoder"`
+	VideoMode    store.CameraVideoMode     `json:"videoMode"`
+	MaxWidth     *int                      `json:"maxWidth"`
+	MaxHeight    *int                      `json:"maxHeight"`
+	MaxFPS       *float64                  `json:"maxFPS"`
+	AudioMode    store.CameraAudioMode     `json:"audioMode"`
+	Activation   store.CameraActivation    `json:"activation"`
 }
 
 type publicStreamOutputSource struct {
@@ -92,6 +94,15 @@ type publicStreamOutputVerification struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type publicOutputEncoder struct {
+	RequestedEncoder string `json:"requestedEncoder"`
+	AllocatedEncoder string `json:"allocatedEncoder,omitempty"`
+	ActualEncoder    string `json:"actualEncoder,omitempty"`
+	State            string `json:"state"`
+	Reason           string `json:"reason,omitempty"`
+	CheckedAt        string `json:"checkedAt,omitempty"`
+}
+
 type publicStreamOutputRuntime struct {
 	State         string `json:"state"`
 	ProducerCount int    `json:"producerCount"`
@@ -100,6 +111,7 @@ type publicStreamOutputRuntime struct {
 }
 
 type publicCameraStreamOutput struct {
+	Encoder      publicOutputEncoder            `json:"encoder"`
 	Purpose      store.CameraOutputPurpose      `json:"purpose"`
 	SourceKey    string                         `json:"sourceKey"`
 	StreamName   string                         `json:"streamName"`
@@ -149,11 +161,11 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 	for _, output := range camera.Outputs {
 		sourceKey := canonicalPublicSourceKey(output.SourceKey, output.Purpose, bySourceKey)
 		input := bySourceKey[sourceKey]
-		desired := publicSettings(output.Purpose, sourceKey, output.VideoMode, output.MaxWidth, output.MaxHeight, output.MaxFPS, output.AudioMode, output.Activation)
+		desired := publicSettings(output.Purpose, sourceKey, output.VideoMode, output.VideoEncoder, output.MaxWidth, output.MaxHeight, output.MaxFPS, output.AudioMode, output.Activation)
 		var applied *publicStreamOutputSettings
 		if camera.PolicyState.AppliedRevision > 0 && output.AppliedPolicy.SourceKey != "" {
 			appliedSourceKey := canonicalPublicSourceKey(output.AppliedPolicy.SourceKey, output.Purpose, bySourceKey)
-			value := publicSettings(output.Purpose, appliedSourceKey, output.AppliedPolicy.VideoMode, output.AppliedPolicy.MaxWidth, output.AppliedPolicy.MaxHeight, output.AppliedPolicy.MaxFPS, output.AppliedPolicy.AudioMode, output.AppliedPolicy.Activation)
+			value := publicSettings(output.Purpose, appliedSourceKey, output.AppliedPolicy.VideoMode, output.AppliedPolicy.VideoEncoder, output.AppliedPolicy.MaxWidth, output.AppliedPolicy.MaxHeight, output.AppliedPolicy.MaxFPS, output.AppliedPolicy.AudioMode, output.AppliedPolicy.Activation)
 			applied = &value
 		}
 		verificationState := "unverified"
@@ -169,6 +181,7 @@ func publicCameraFromStore(camera store.Camera, statuses ...stream.Status) publi
 		runtime := status.Streams[output.StreamName]
 		outputs = append(outputs, publicCameraStreamOutput{
 			Purpose: output.Purpose, SourceKey: sourceKey, StreamName: output.StreamName, Desired: desired, Applied: applied,
+			Encoder:      publicEncoderStatus(status.EncoderRuntime[fmt.Sprintf("%d_%s", camera.ID, output.Purpose)], applied),
 			Source:       publicStreamOutputSource{Label: input.Label, Advertised: advertisedDescriptor(input), Detected: detectedDescriptor(input), CheckedAt: formatPublicTime(input.DetectedCheckedAt), Error: publicPolicyError(input.DetectedError)},
 			Effective:    effective,
 			Verification: publicStreamOutputVerification{State: verificationState, CheckedAt: formatPublicTime(output.Verification.CheckedAt), Error: publicPolicyError(output.Verification.Error)},
@@ -230,8 +243,8 @@ func publicPolicyError(value string) string {
 	return redactInternalRuntimeText(store.RedactText(value))
 }
 
-func publicSettings(purpose store.CameraOutputPurpose, sourceKey string, video store.CameraVideoMode, maxWidth, maxHeight *int, maxFPS *float64, audio store.CameraAudioMode, activation store.CameraActivation) publicStreamOutputSettings {
-	return publicStreamOutputSettings{Purpose: purpose, SourceKey: sourceKey, VideoMode: video, MaxWidth: maxWidth, MaxHeight: maxHeight, MaxFPS: maxFPS, AudioMode: audio, Activation: activation}
+func publicSettings(purpose store.CameraOutputPurpose, sourceKey string, video store.CameraVideoMode, encoder store.CameraVideoEncoder, maxWidth, maxHeight *int, maxFPS *float64, audio store.CameraAudioMode, activation store.CameraActivation) publicStreamOutputSettings {
+	return publicStreamOutputSettings{Purpose: purpose, SourceKey: sourceKey, VideoMode: video, VideoEncoder: store.NormalizeCameraVideoEncoder(encoder), MaxWidth: maxWidth, MaxHeight: maxHeight, MaxFPS: maxFPS, AudioMode: audio, Activation: activation}
 }
 
 func advertisedDescriptor(input store.CameraStream) *publicMediaDescriptor {
@@ -310,7 +323,15 @@ func isSecretJSONKey(key string) bool {
 	}
 }
 
+type publicEncoderSummary struct {
+	SessionLimit  int    `json:"sessionLimit"`
+	AssignedNVENC int    `json:"assignedNVENC"`
+	RunningNVENC  int    `json:"runningNVENC"`
+	CheckedAt     string `json:"checkedAt,omitempty"`
+}
+
 type publicStreamStatus struct {
+	Encoders            publicEncoderSummary            `json:"encoders"`
 	Installed           bool                            `json:"installed"`
 	Running             bool                            `json:"running"`
 	MediaReady          bool                            `json:"mediaReady"`
@@ -321,7 +342,22 @@ type publicStreamStatus struct {
 }
 
 func publicGo2RTCStatus(status stream.Status) publicStreamStatus {
+	summary := publicEncoderSummary{SessionLimit: 3}
+	var checkedAt time.Time
+	for _, encoder := range status.EncoderRuntime {
+		if encoder.AllocatedEncoder == "nvenc" {
+			summary.AssignedNVENC++
+		}
+		if encoder.State == "running" && encoder.ActualEncoder == "nvenc" {
+			summary.RunningNVENC++
+		}
+		if encoder.CheckedAt.After(checkedAt) {
+			checkedAt = encoder.CheckedAt
+		}
+	}
+	summary.CheckedAt = formatPublicTime(checkedAt)
 	return publicStreamStatus{
+		Encoders:            summary,
 		Installed:           status.Installed,
 		Running:             status.Running,
 		MediaReady:          status.MediaReady,
@@ -339,4 +375,32 @@ func redactInternalRuntimeText(value string) string {
 		value = strings.ReplaceAll(value, internalHost, "[internal-go2rtc]")
 	}
 	return value
+}
+
+func publicEncoderStatus(value stream.EncoderRuntime, applied *publicStreamOutputSettings) publicOutputEncoder {
+	result := publicOutputEncoder{State: "unverified"}
+	if applied != nil {
+		result.RequestedEncoder = string(applied.VideoEncoder)
+	}
+	for _, encoder := range []string{"cpu", "nvenc", "copy"} {
+		if value.RequestedEncoder == encoder {
+			result.RequestedEncoder = encoder
+		}
+		if value.AllocatedEncoder == encoder {
+			result.AllocatedEncoder = encoder
+		}
+		if value.State == "running" && value.ActualEncoder == encoder {
+			result.ActualEncoder = encoder
+		}
+	}
+	switch value.State {
+	case "running", "stopped", "failed":
+		result.State = value.State
+	}
+	switch value.Reason {
+	case "device_unavailable", "permission_denied", "library_unavailable", "api_incompatible", "encoder_failed", "session_limit", "cpu_failed", "supervisor_unavailable", "probe_timeout":
+		result.Reason = value.Reason
+	}
+	result.CheckedAt = formatPublicTime(value.CheckedAt)
+	return result
 }

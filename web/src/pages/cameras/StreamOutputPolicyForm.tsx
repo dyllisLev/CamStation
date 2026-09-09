@@ -1,3 +1,4 @@
+import { outputEncoderLabel } from "./streamOutputPolicyModel";
 import type { CameraSourceKey, CameraStreamOutput, StreamOutputSettings, StreamOutputSettingsTuple } from "../../app/api";
 import { purposeLabel } from "./streamOutputPolicyModel";
 
@@ -65,10 +66,14 @@ function StreamPolicyCard({
             <option key={sourceKey} value={sourceKey} disabled={!availableSourceKeys.includes(sourceKey)}>{sourceKey === "recording" ? "녹화 입력" : "라이브 입력"}{availableSourceKeys.includes(sourceKey) ? "" : " (현재 없음)"}</option>
           ))}
         </PolicySelect>
-        <PolicySelect label="영상" value={output.videoMode} disabled={disabled} onChange={(value) => onChange({ videoMode: value as StreamOutputSettings["videoMode"], ...(value === "copy" ? { maxWidth: null, maxHeight: null, maxFPS: null } : {}) })}>
+        <PolicySelect label="영상" value={output.videoMode} disabled={disabled} onChange={(value) => onChange({ videoMode: value as StreamOutputSettings["videoMode"], ...(value === "copy" ? { maxWidth: null, maxHeight: null, maxFPS: null, videoEncoder: "cpu" as const } : {}) })}>
           <option value="auto">자동</option>
           <option value="copy">원본 복사</option>
           <option value="h264">H.264 변환</option>
+        </PolicySelect>
+        <PolicySelect label="변환 인코더" value={output.videoEncoder ?? "cpu"} disabled={disabled || output.videoMode === "copy"} onChange={(value) => onChange({ videoEncoder: value as StreamOutputSettings["videoEncoder"] })}>
+          <option value="cpu">CPU</option>
+          <option value="nvenc">NVIDIA GPU (NVENC)</option>
         </PolicySelect>
         <PolicySelect label="오디오" value={output.audioMode} disabled={disabled} onChange={(value) => onChange({ audioMode: value as StreamOutputSettings["audioMode"] })}>
           <option value="source">원본</option>
@@ -112,7 +117,8 @@ function StreamPolicyCard({
           <PolicyFact label="실제 입력" value={descriptor(status.source.detected)} />
           <PolicyFact label="요청 정책" value={policySummary(output)} />
           <PolicyFact label="적용 정책" value={applied ? policySummary(applied) : "미적용"} />
-          <PolicyFact label="실제 출력" value={effective ? `${descriptor(effective)} · ${effective.transcoding ? "software H.264 변환" : "원본 전달"}` : "미검증"} />
+          <PolicyFact label="실제 출력" value={effective ? `${descriptor(effective)} · ${effective.transcoding ? "H.264 변환" : "원본 전달"}` : "미검증"} />
+          <PolicyFact label="실행 인코더" value={outputEncoderLabel(status.encoder)} />
           <PolicyFact label="런타임" value={`${runtimeLabel(status.runtime.state)} · producer ${status.runtime.producerCount} / consumer ${status.runtime.consumerCount} / viewer ${status.runtime.viewerCount}`} />
           <PolicyFact label="검사 시각" value={status.verification.checkedAt || status.source.checkedAt || "-"} />
           {(status.source.error || status.verification.error) && <div className="new-policy-error">{status.source.error || status.verification.error}</div>}
@@ -152,7 +158,7 @@ function descriptor(value: { videoCodec?: string; audioCodec?: string; width?: n
 
 function policySummary(value: StreamOutputSettings): string {
   const size = value.maxWidth && value.maxHeight ? `${value.maxWidth}×${value.maxHeight}` : "원본 크기";
-  return `${value.videoMode} · ${size} · ${value.maxFPS ? `${value.maxFPS}fps` : "원본 FPS"} · ${value.audioMode}`;
+  return `${value.videoMode} · ${value.videoEncoder === "nvenc" ? "GPU 요청" : "CPU"} · ${size} · ${value.maxFPS ? `${value.maxFPS}fps` : "원본 FPS"} · ${value.audioMode}`;
 }
 
 function verificationLabel(state?: CameraStreamOutput["verification"]["state"]): string {

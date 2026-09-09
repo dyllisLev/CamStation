@@ -7,8 +7,9 @@
 - GitHub Push Mirror: `https://github.com/dyllisLev/CamStation`
 - GitHub는 Forgejo에서 나가는 단방향 mirror다. GitHub Actions는 build 또는 production 배포에
   사용하지 않는다.
-- production build와 배포를 시작할 수 있는 source event는 Forgejo `main` push뿐이다. Fork PR이나
-  다른 branch는 self-hosted runner를 실행하지 않는다.
+- 자동 운영 배포를 시작하는 source event는 Forgejo `main` push뿐이다. Fork PR이나 다른 branch의
+  push는 self-hosted runner를 실행하지 않는다. 권한 있는 관리자는 `workflow_dispatch`로 지정한
+  release commit의 이미지 빌드·게시만 먼저 실행할 수 있으며, 이 이벤트에서는 배포 단계를 건너뛴다.
 - workflow의 `runs-on`은 `self-hosted`이며 현재 연결된 runner는 `ct109-forgejo-ci`
   (`linux/amd64`)다.
 
@@ -20,12 +21,13 @@
 | immutable tag | `sha-<40자리 Forgejo commit SHA>` |
 | 전체 image 형식 | `git.loc.hmini.me/dyllislev/camstation:sha-<commit>` |
 | build context | 저장소 root (`.`) |
-| Dockerfile | `Dockerfile` |
+| Dockerfile | `Dockerfile.nvenc` (기존 CPU 전용 빌드는 `Dockerfile`) |
 | build target | `runtime` |
 | platform | `linux/amd64` |
 
-이미지는 Web build, Go build와 runtime 단계를 분리한다. Runtime은 UID/GID `10001:10001`, Tini,
-digest로 고정된 base/go2rtc와 production 실행 도구를 사용한다. Application credential은 build arg,
+이미지는 Web build, Go build와 runtime 단계를 분리한다. GPU 지원 이미지는 glibc 기반 Ubuntu,
+FFmpeg 5.1.7, NVENC headers 11.1.5.3, NVIDIA 470.256.02 사용자 라이브러리와 rclone 1.72.1을 고정한다.
+Runtime은 UID/GID `10001:10001`, Tini, digest로 고정된 base/go2rtc와 production 실행 도구를 사용한다. Application credential은 build arg,
 label 또는 image layer에 넣지 않는다.
 
 ## OpenShip 등록
@@ -282,3 +284,19 @@ GitHub 저장소에는 production workflow가 없으며 Forgejo의 단방향 Pus
 DB를 그대로 사용한다. 데이터가 손상된 경우에만 서비스를 안전하게 중지하고 검증된 SQLite online
 backup을 원자적으로 복원한다. Media 복구는 PBS snapshot에서 별도 위치로 우선 복원·검증한 뒤 필요한
 파일만 되돌린다. 기존 volume을 백업 없이 초기화하거나 교체하지 않는다.
+
+
+## 선택적 NVENC 운영 절차
+
+GPU 선택은 카메라 출력별 설정이며 동일 출력의 시청자는 인코딩 결과를 공유한다. 녹화의 stream copy는 유지한다. CPU가 기본이며 호환 검사 실패 또는 세션 제한 시 해당 출력은 CPU를 사용한다. 설정 배정 최대 3개와 실제 프로세스 슬롯 최대 3개를 함께 적용한다. 여러 CamStation 인스턴스가 같은 GPU를 사용하는 시험은 운영 측정 전에 종료한다.
+
+OpenShip 0.6.9는 service의 device/runtime 전달을 모델링하지 않으므로 생성 Compose 파일을 수정하지 않는다. 개발 CT 102에서 검증한 `scripts/nvenc/setup-runtime.sh`를 운영 CT 113에 적용하고, 이 전용 LXC에서만 `--set-default`로 `camstation-nvidia`를 Docker 기본 runtime으로 선택한다. NVIDIA 환경변수가 없는 컨테이너는 GPU를 사용하지 않는다. 스크립트는 현재 시스템 드라이버 라이브러리를 교체하지 않고 별도 470 driver root, 부팅 시 mount unit, 설정 백업 및 Docker reload를 사용한다.
+
+1. 개발 이미지와 실제 출력·녹화·CPU 복귀 검증을 완료한다. 운영 이미지/DB/정책/CT/Docker 설정의 복구 자산을 준비한다.
+2. release branch의 exact commit을 push하고 `build-publish-deploy.yml`을 `workflow_dispatch`로 실행한다. 이미지 게시 성공과 **배포 단계 skipped**를 확인한다. 지정 commit을 main으로 fast-forward할 때만 자동 운영 배포가 진행된다. [Forgejo 15 공식 이벤트 명세](https://forgejo.org/docs/v15.0/user/actions/reference/).
+3. 이미지와 검증된 runtime 설치 파일을 미리 준비한다. 운영 GPU 장치 매핑에 필요한 CT 113 재시작은 녹화 정상 종료를 확인한 뒤 한 번의 통제된 중단으로 수행한다. dev1 등의 번호를 고정 가정하지 않고 기존 CT 설정과 충돌하지 않는 dev 슬롯을 선택한다.
+4. 운영 CT 안에서 runtime 구성 및 비root GPU encode 검사를 수행한다. OpenShip 서비스 환경변수에 `NVIDIA_VISIBLE_DEVICES=all`, `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`를 PATCH한다. 다른 환경값과 볼륨을 유지한다. [NVIDIA 공식 환경변수/runtime 설명](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html).
+5. 검증한 commit을 main으로 fast-forward push하고 exact CI run·OpenShip deployment·image label/health를 확인한다. 첫 GPU 출력부터 켜고 CPU 부하가 큰 출력 위주로 안정성을 확인하며 확대한다. 입력·해상도·FPS 설정은 비교 중 변경하지 않는다.
+6. 개발 빌드/검증 컨테이너를 중지한 상태에서 `scripts/nvenc/measure-host-cpu.py`로 운영 전후 각각 5분 이상 측정한다. 호스트 전체 CPU 비율과 1코어=100%인 CamStation 사용량을 구분하고 I/O wait도 함께 기록한다.
+
+GPU 문제가 발생하면 출력 정책을 CPU로 되돌려 적용한다. 이미지 rollback이 필요하면 이전 exact 이미지로 복귀하며 DB의 추가 encoder 필드를 이전 바이너리가 수용하는지 개발에서 미리 확인한다. Toolkit/device 문제로 컨테이너 자체가 시작하지 못하면 OpenShip의 두 NVIDIA 환경변수를 `null`로 PATCH하여 GPU opt-in을 해제하고 이전 CPU 이미지를 배포한다. 기존 녹화 데이터와 DB를 무조건 되돌리거나 삭제하지 않는다.

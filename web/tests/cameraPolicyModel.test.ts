@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Camera } from "../src/app/cameraTypes.ts";
 import {
   CAMERA_POLICY_INVALIDATION_KEYS,
+  outputEncoderLabel,
   cameraPolicySurfaceKey,
   hasDistinctLiveSource,
   draftFromCamera,
@@ -49,9 +50,9 @@ function policyCamera(revision = 7): Camera {
 
 test("recommended policies keep the browser live output warm with a bounded H.264 profile", () => {
   assert.deepEqual(recommendedStreamOutputs(true), [
-    { purpose: "recording", sourceKey: "recording", videoMode: "copy", maxWidth: null, maxHeight: null, maxFPS: null, audioMode: "source", activation: "on_demand" },
-    { purpose: "live", sourceKey: "live", videoMode: "h264", maxWidth: 1280, maxHeight: 720, maxFPS: 15, audioMode: "none", activation: "always" },
-    { purpose: "focus", sourceKey: "recording", videoMode: "auto", maxWidth: 1920, maxHeight: 1080, maxFPS: null, audioMode: "none", activation: "on_demand" },
+    { purpose: "recording", sourceKey: "recording", videoMode: "copy", videoEncoder: "cpu", maxWidth: null, maxHeight: null, maxFPS: null, audioMode: "source", activation: "on_demand" },
+    { purpose: "live", sourceKey: "live", videoMode: "h264", videoEncoder: "cpu", maxWidth: 1280, maxHeight: 720, maxFPS: 15, audioMode: "none", activation: "always" },
+    { purpose: "focus", sourceKey: "recording", videoMode: "auto", videoEncoder: "cpu", maxWidth: 1920, maxHeight: 1080, maxFPS: null, audioMode: "none", activation: "on_demand" },
   ]);
   assert.equal(recommendedStreamOutputs(false)[1].sourceKey, "recording");
 });
@@ -114,7 +115,7 @@ test("live source is available only for a distinct backend producer", () => {
 
 test("rescan keeps manual policy fields while remapping an unavailable live source", () => {
   const outputs = recommendedStreamOutputs(true);
-  outputs[1] = { ...outputs[1], videoMode: "h264", maxFPS: 15, activation: "always" };
+  outputs[1] = { ...outputs[1], videoMode: "h264", videoEncoder: "cpu", maxFPS: 15, activation: "always" };
   const normalized = normalizeUnavailableSources(outputs, ["recording"]);
   assert.deepEqual(normalized[1], { ...outputs[1], sourceKey: "recording" });
   assert.equal(outputs[1].sourceKey, "live");
@@ -145,4 +146,33 @@ test("all policy mutations invalidate the five UI and runtime query surfaces", (
     ["recorder-status"],
     ["events"],
   ]);
+});
+
+
+test("NVENC is shared output policy and copy rejects GPU encoding", () => {
+  const camera = policyCamera();
+  camera.streamOutputs[1].desired.videoEncoder = "nvenc";
+  const draft = draftFromCamera(camera);
+  assert.equal(streamOutputUpdateRequest(draft).outputs[1].videoEncoder, "nvenc");
+  assert.equal(validateStreamOutputs(draft.outputs), null);
+  draft.outputs[2].videoEncoder = "nvenc";
+  assert.equal(validateStreamOutputs(draft.outputs), null);
+  draft.outputs[0].videoEncoder = "nvenc";
+  assert.match(validateStreamOutputs(draft.outputs) ?? "", /원본 복사.*GPU/);
+});
+
+
+test("encoder labels distinguish allocation from execution and fallback", () => {
+ assert.match(outputEncoderLabel({requestedEncoder: "nvenc", allocatedEncoder: "nvenc", state: "unverified"}), /미검증.*GPU 배정/);
+ assert.equal(outputEncoderLabel({requestedEncoder: "nvenc", actualEncoder: "nvenc", state: "running"}), "NVIDIA GPU");
+ assert.match(outputEncoderLabel({requestedEncoder: "nvenc", actualEncoder: "cpu", state: "running", reason: "session_limit"}), /CPU.*3세션/);
+});
+
+
+test("capability fallback labels explain unavailable supervisor and probe timeout", () => {
+ for (const [reason, message] of [["supervisor_unavailable", "GPU 실행 관리자 없음"], ["probe_timeout", "GPU 호환성 검사 시간 초과"]]) {
+  const label = outputEncoderLabel({ requestedEncoder: "nvenc", allocatedEncoder: "cpu", state: "unverified", reason });
+  assert.ok(label.includes(message));
+  assert.match(label, /미검증.*CPU 배정/);
+ }
 });

@@ -80,6 +80,7 @@ export type CameraStream = {
 
 export type CameraSourceKey = "recording" | "live";
 export type StreamPurpose = "recording" | "live" | "focus";
+export type VideoEncoder = "cpu" | "nvenc";
 export type VideoMode = "auto" | "copy" | "h264";
 export type AudioMode = "source" | "none" | "aac";
 export type ActivationMode = "on_demand" | "always";
@@ -100,6 +101,7 @@ export type StreamOutputSettings = {
   purpose: StreamPurpose;
   sourceKey: CameraSourceKey;
   videoMode: VideoMode;
+  videoEncoder: VideoEncoder;
   maxWidth: number | null;
   maxHeight: number | null;
   maxFPS: number | null;
@@ -109,7 +111,17 @@ export type StreamOutputSettings = {
 
 export type StreamOutputSettingsTuple = [StreamOutputSettings, StreamOutputSettings, StreamOutputSettings];
 
+export type OutputEncoderStatus = {
+  requestedEncoder: string;
+  allocatedEncoder?: "cpu" | "nvenc" | "copy";
+  actualEncoder?: "cpu" | "nvenc" | "copy";
+  state: "unverified" | "running" | "stopped" | "failed";
+  reason?: string;
+  checkedAt?: string;
+};
+
 export type CameraStreamOutput = {
+  encoder?: OutputEncoderStatus;
   purpose: StreamPurpose;
   sourceKey: CameraSourceKey;
   streamName: string;

@@ -37,14 +37,15 @@ type Go2RTC struct {
 type Go2RTCOption func(*Go2RTC)
 
 type Status struct {
-	Installed           bool                     `json:"installed"`
-	Running             bool                     `json:"running"`
-	MediaReady          bool                     `json:"mediaReady"`
-	ExpectedLiveStreams int                      `json:"expectedLiveStreams"`
-	ReadyLiveStreams    int                      `json:"readyLiveStreams"`
-	APIURL              string                   `json:"apiUrl"`
-	Error               string                   `json:"error,omitempty"`
-	Streams             map[string]StreamRuntime `json:"streams,omitempty"`
+	EncoderRuntime      map[string]EncoderRuntime `json:"encoderRuntime,omitempty"`
+	Installed           bool                      `json:"installed"`
+	Running             bool                      `json:"running"`
+	MediaReady          bool                      `json:"mediaReady"`
+	ExpectedLiveStreams int                       `json:"expectedLiveStreams"`
+	ReadyLiveStreams    int                       `json:"readyLiveStreams"`
+	APIURL              string                    `json:"apiUrl"`
+	Error               string                    `json:"error,omitempty"`
+	Streams             map[string]StreamRuntime  `json:"streams,omitempty"`
 }
 
 type StreamRuntime struct {
@@ -309,7 +310,7 @@ func (g *Go2RTC) restartProcess(ctx context.Context) error {
 }
 
 func (g *Go2RTC) Status(ctx context.Context) Status {
-	status := Status{APIURL: g.apiURL}
+	status := Status{APIURL: g.apiURL, EncoderRuntime: g.EncoderStatus()}
 	snapshot := LiveWarmSnapshot{Active: map[string]bool{}}
 	if g.liveWarmer != nil {
 		snapshot = g.liveWarmer.Snapshot()

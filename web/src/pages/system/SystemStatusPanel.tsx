@@ -35,6 +35,7 @@ export function SystemStatusPanel() {
         </div>
         {status.isLoading && <div className="text-xs text-slate-500">상태를 불러오는 중입니다.</div>}
         {status.error && <div className="text-xs text-red-300">{errorMessage(status.error)}</div>}
+        {status.data?.go2rtc.encoders && <div className="text-xs text-slate-400">GPU 출력 배정 {status.data.go2rtc.encoders.assignedNVENC} / 실행 확인 {status.data.go2rtc.encoders.runningNVENC} · 동시 인코딩 한도 {status.data.go2rtc.encoders.sessionLimit}{status.data.go2rtc.encoders.checkedAt ? ` · 확인 ${status.data.go2rtc.encoders.checkedAt}` : " · 실행 미검증"}</div>}
         {status.data?.go2rtc.error && <div className="text-xs text-red-300">스트림 오류: {status.data.go2rtc.error}</div>}
         {status.data?.ffmpeg.error && <div className="text-xs text-red-300">ffmpeg 오류: {status.data.ffmpeg.error}</div>}
       </PanelBody>

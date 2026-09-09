@@ -1,9 +1,12 @@
-name: Build, publish, and deploy production
+name: Build image and deploy production on main push
 
 on:
   push:
     branches:
       - main
+  # A trusted maintainer can prebuild the exact release commit without changing
+  # production. Pushing that same commit to main performs the normal deployment.
+  workflow_dispatch:
 
 concurrency:
   group: camstation-production
@@ -87,6 +90,7 @@ jobs:
 
           docker buildx build \
             --platform linux/amd64 \
+            --file Dockerfile.nvenc \
             --target runtime \
             --build-arg "VERSION=sha-${DEPLOY_SHA}" \
             --build-arg "VCS_REF=${DEPLOY_SHA}" \
@@ -97,6 +101,7 @@ jobs:
           docker buildx imagetools inspect "$IMAGE_REF" >/dev/null
 
       - name: Deploy image with OpenShip
+        if: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}
         env:
           OPENSHIP_TOKEN: ${{ secrets.OPENSHIP_DEPLOY_TOKEN }}
         run: |

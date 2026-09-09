@@ -134,6 +134,21 @@ const (
 	CameraOutputFocus     CameraOutputPurpose = "focus"
 )
 
+type CameraVideoEncoder string
+
+const (
+	CameraVideoEncoderCPU   CameraVideoEncoder = "cpu"
+	CameraVideoEncoderNVENC CameraVideoEncoder = "nvenc"
+)
+
+// NormalizeCameraVideoEncoder keeps legacy policies on the CPU path.
+func NormalizeCameraVideoEncoder(value CameraVideoEncoder) CameraVideoEncoder {
+	if value == "" {
+		return CameraVideoEncoderCPU
+	}
+	return value
+}
+
 type CameraVideoMode string
 
 const (
@@ -158,14 +173,15 @@ const (
 )
 
 type CameraOutputPolicySnapshot struct {
-	SourceStreamID int64            `json:"-"`
-	SourceKey      string           `json:"sourceKey,omitempty"`
-	VideoMode      CameraVideoMode  `json:"videoMode,omitempty"`
-	MaxWidth       *int             `json:"maxWidth,omitempty"`
-	MaxHeight      *int             `json:"maxHeight,omitempty"`
-	MaxFPS         *float64         `json:"maxFps,omitempty"`
-	AudioMode      CameraAudioMode  `json:"audioMode,omitempty"`
-	Activation     CameraActivation `json:"activation,omitempty"`
+	SourceStreamID int64              `json:"-"`
+	SourceKey      string             `json:"sourceKey,omitempty"`
+	VideoEncoder   CameraVideoEncoder `json:"videoEncoder"`
+	VideoMode      CameraVideoMode    `json:"videoMode,omitempty"`
+	MaxWidth       *int               `json:"maxWidth,omitempty"`
+	MaxHeight      *int               `json:"maxHeight,omitempty"`
+	MaxFPS         *float64           `json:"maxFps,omitempty"`
+	AudioMode      CameraAudioMode    `json:"audioMode,omitempty"`
+	Activation     CameraActivation   `json:"activation,omitempty"`
 }
 
 type CameraOutputVerification struct {
@@ -192,6 +208,7 @@ type CameraOutput struct {
 	StreamName     string                     `json:"streamName"`
 	SourceStreamID int64                      `json:"sourceStreamId"`
 	SourceKey      string                     `json:"sourceKey"`
+	VideoEncoder   CameraVideoEncoder         `json:"videoEncoder"`
 	VideoMode      CameraVideoMode            `json:"videoMode"`
 	MaxWidth       *int                       `json:"maxWidth,omitempty"`
 	MaxHeight      *int                       `json:"maxHeight,omitempty"`

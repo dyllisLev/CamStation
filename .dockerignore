@@ -1,6 +1,10 @@
 *
 !.dockerignore
 !Dockerfile
+!Dockerfile.nvenc
+!scripts/
+!scripts/nvenc/
+!scripts/nvenc/build-ffmpeg.sh
 !go.mod
 !go.sum
 !internal/
@@ -10,6 +14,8 @@
 !cmd/camstationd/**
 !cmd/camstation-migrate/
 !cmd/camstation-migrate/**
+!cmd/camstation-ffmpeg/
+!cmd/camstation-ffmpeg/**
 !web/
 !web/**
 

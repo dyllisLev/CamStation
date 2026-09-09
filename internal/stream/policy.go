@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -25,6 +27,7 @@ func resolveOutput(camera store.Camera, output store.CameraOutput) (resolvedOutp
 }
 
 func resolveOutputWithEffective(camera store.Camera, output store.CameraOutput, applied *store.CameraOutputVerification) (resolvedOutput, error) {
+	output.VideoEncoder = store.NormalizeCameraVideoEncoder(output.VideoEncoder)
 	source, ok := sourceForOutput(camera, output)
 	if !ok {
 		return resolvedOutput{}, fmt.Errorf("output %s source %q not found", output.Purpose, output.SourceKey)
@@ -103,6 +106,7 @@ func resolveOutputWithEffective(camera store.Camera, output store.CameraOutput, 
 				SourceStreamID: output.SourceStreamID,
 				SourceKey:      source.SourceKey,
 				VideoMode:      output.VideoMode,
+				VideoEncoder:   output.VideoEncoder,
 				MaxWidth:       output.MaxWidth,
 				MaxHeight:      output.MaxHeight,
 				MaxFPS:         output.MaxFPS,
@@ -119,6 +123,10 @@ func renderPolicyConfig(cameras []store.Camera, applied bool) ([]byte, map[int64
 }
 
 func renderPolicyConfigWithCandidates(cameras []store.Camera, applied bool, candidates []string) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
+	return renderPolicyConfigWithEncoder(cameras, applied, candidates, "")
+}
+
+func renderPolicyConfigWithEncoder(cameras []store.Camera, applied bool, candidates []string, supervisor string) ([]byte, map[int64][]store.CameraOutputApplyResult, error) {
 	cameras = enabledCameras(cameras)
 	resolved := make(map[int64][]resolvedOutput, len(cameras))
 	results := make(map[int64][]store.CameraOutputApplyResult, len(cameras))
@@ -140,7 +148,95 @@ func renderPolicyConfigWithCandidates(cameras []store.Camera, applied bool, cand
 		}
 	}
 
+	// Reserve configured outputs, including on-demand outputs, in stable camera/purpose order.
+	// Viewers attach to the same go2rtc producer and never allocate additional encodes.
+	type candidate struct {
+		cameraID int64
+		index    int
+		purpose  store.CameraOutputPurpose
+	}
+	var gpu []candidate
+	for _, camera := range cameras {
+		for i, item := range resolved[camera.ID] {
+			if item.Transcoding && item.Result.Policy.VideoEncoder == store.CameraVideoEncoderNVENC {
+				gpu = append(gpu, candidate{camera.ID, i, item.Result.Purpose})
+			}
+		}
+	}
+	sort.Slice(gpu, func(i, j int) bool {
+		if gpu[i].cameraID != gpu[j].cameraID {
+			return gpu[i].cameraID < gpu[j].cameraID
+		}
+		return gpu[i].purpose < gpu[j].purpose
+	})
+	allocations := make(map[string]EncoderRuntime)
+	for _, camera := range cameras {
+		for _, item := range resolved[camera.ID] {
+			requested := string(item.Result.Policy.VideoEncoder)
+			if requested == "" {
+				requested = "cpu"
+			}
+			allocated := "copy"
+			reason := ""
+			if item.Transcoding {
+				allocated = "cpu"
+				if requested == "nvenc" {
+					reason = "session_limit"
+					if supervisor == "" {
+						reason = "supervisor_unavailable"
+					}
+				}
+			}
+			allocations[encoderOutputKey(camera.ID, item.Result.Purpose)] = EncoderRuntime{RequestedEncoder: requested, AllocatedEncoder: allocated, State: "unverified", Reason: reason}
+		}
+	}
+	if supervisor != "" {
+		for i, candidate := range gpu {
+			if i >= 3 {
+				break
+			}
+			item := &resolved[candidate.cameraID][candidate.index]
+			item.Producer = strings.Replace(item.Producer, "#video=h264", "#video=h264/nvenc", 1)
+			key := encoderOutputKey(candidate.cameraID, candidate.purpose)
+			state := allocations[key]
+			state.AllocatedEncoder, state.Reason = "nvenc", ""
+			allocations[key] = state
+		}
+		for _, camera := range cameras {
+			for i := range resolved[camera.ID] {
+				item := &resolved[camera.ID][i]
+				if !item.Transcoding {
+					continue
+				}
+				key := encoderOutputKey(camera.ID, item.Result.Purpose)
+				state := allocations[key]
+				marker := "-camstation-output " + key + " -camstation-requested " + state.RequestedEncoder
+				if state.Reason != "" {
+					marker += " -camstation-reason " + state.Reason
+				}
+				if strings.Contains(item.Producer, "#raw=") {
+					item.Producer = strings.Replace(item.Producer, "#raw=", "#raw="+marker+" ", 1)
+				} else {
+					item.Producer += "#raw=" + marker
+				}
+			}
+		}
+	}
+
 	var buf bytes.Buffer
+	// Private metadata describes allocation only; actual execution comes from the supervisor.
+	if len(allocations) > 0 {
+		buf.WriteString("camstation_encoders:\n")
+		keys := make([]string, 0, len(allocations))
+		for key := range allocations {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			state := allocations[key]
+			fmt.Fprintf(&buf, "  %s:\n    requestedEncoder: %s\n    allocatedEncoder: %s\n    state: unverified\n    reason: %s\n", quoteYAML(key), quoteYAML(state.RequestedEncoder), quoteYAML(state.AllocatedEncoder), quoteYAML(state.Reason))
+		}
+	}
 	buf.WriteString("api:\n  listen: 127.0.0.1:1984\n")
 	buf.WriteString("rtsp:\n  listen: 127.0.0.1:8554\n")
 	buf.WriteString("webrtc:\n  listen: 0.0.0.0:8555\n")
@@ -151,6 +247,13 @@ func renderPolicyConfigWithCandidates(cameras []store.Camera, applied bool, cand
 		}
 	}
 	buf.WriteString("ffmpeg:\n")
+	if supervisor != "" {
+		fmt.Fprintf(&buf, "  bin: %s\n", quoteYAML(supervisor))
+		// go2rtc closes its RTSP producer before recreating it. Give the supervisor
+		// SIGTERM so it can drain the child diagnostic and preserve a GPU fallback latch.
+		buf.WriteString("  output: \"-user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}#killsignal=15#killtimeout=2\"\n")
+		buf.WriteString("  h264/nvenc: \"-codec:v h264_nvenc -preset:v llhp -tune:v ll -pix_fmt:v yuv420p -g 20 -bf 0 -zerolatency 1\"\n")
+	}
 	buf.WriteString("  h264: \"-codec:v libx264 -preset:v veryfast -tune:v zerolatency -pix_fmt:v yuv420p -g 20 -keyint_min 20 -sc_threshold 0\"\n")
 	preload := false
 	preloaded := make(map[string]bool)
@@ -220,7 +323,8 @@ func (g *Go2RTC) renderPolicyConfig(cameras []store.Camera, applied bool) ([]byt
 	if len(candidates) == 0 {
 		candidates = localCandidates(8555)
 	}
-	return renderPolicyConfigWithCandidates(cameras, applied, candidates)
+	supervisor, _ := exec.LookPath("camstation-ffmpeg")
+	return renderPolicyConfigWithEncoder(cameras, applied, candidates, supervisor)
 }
 
 func enabledCameras(cameras []store.Camera) []store.Camera {
@@ -272,6 +376,7 @@ func outputFromSnapshot(output store.CameraOutput, policy store.CameraOutputPoli
 	output.SourceStreamID = policy.SourceStreamID
 	output.SourceKey = policy.SourceKey
 	output.VideoMode = policy.VideoMode
+	output.VideoEncoder = policy.VideoEncoder
 	output.MaxWidth = policy.MaxWidth
 	output.MaxHeight = policy.MaxHeight
 	output.MaxFPS = policy.MaxFPS

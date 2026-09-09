@@ -16,6 +16,9 @@ var ErrDesiredRevisionMismatch = errors.New("camera desired revision mismatch")
 var ErrAppliedRevisionRegression = errors.New("camera applied revision regression")
 
 func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expectedDesiredRevision *int64) (Camera, error) {
+	for i := range camera.Outputs {
+		camera.Outputs[i].VideoEncoder = NormalizeCameraVideoEncoder(camera.Outputs[i].VideoEncoder)
+	}
 	if err := validateCameraOutputs(camera.Outputs); err != nil {
 		return Camera{}, err
 	}
@@ -165,13 +168,13 @@ func (d *DB) SaveCameraConfiguration(ctx context.Context, camera Camera, expecte
 			return Camera{}, fmt.Errorf("output %s stream name is required", output.Purpose)
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO camera_outputs(
-			camera_id,purpose,stream_name,source_stream_id,video_mode,max_width,max_height,max_fps,audio_mode,activation,created_at,updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			camera_id,purpose,stream_name,source_stream_id,video_mode,video_encoder,max_width,max_height,max_fps,audio_mode,activation,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(camera_id,purpose) DO UPDATE SET
-			source_stream_id=excluded.source_stream_id,video_mode=excluded.video_mode,
+			source_stream_id=excluded.source_stream_id,video_mode=excluded.video_mode,video_encoder=excluded.video_encoder,
 			max_width=excluded.max_width,max_height=excluded.max_height,max_fps=excluded.max_fps,audio_mode=excluded.audio_mode,
 			activation=excluded.activation,updated_at=excluded.updated_at`,
-			camera.ID, output.Purpose, output.StreamName, output.SourceStreamID, output.VideoMode, output.MaxWidth, output.MaxHeight,
+			camera.ID, output.Purpose, output.StreamName, output.SourceStreamID, output.VideoMode, output.VideoEncoder, output.MaxWidth, output.MaxHeight,
 			output.MaxFPS, output.AudioMode, output.Activation, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		if err != nil {
 			return Camera{}, err
@@ -234,6 +237,13 @@ func validateCameraOutputs(outputs []CameraOutput) error {
 		if output.VideoMode != CameraVideoAuto && output.VideoMode != CameraVideoCopy && output.VideoMode != CameraVideoH264 {
 			return fmt.Errorf("invalid video mode %q", output.VideoMode)
 		}
+		encoder := NormalizeCameraVideoEncoder(output.VideoEncoder)
+		if encoder != CameraVideoEncoderCPU && encoder != CameraVideoEncoderNVENC {
+			return fmt.Errorf("invalid output video encoder")
+		}
+		if output.VideoMode == CameraVideoCopy && encoder == CameraVideoEncoderNVENC {
+			return fmt.Errorf("invalid output: copy cannot use nvenc")
+		}
 		if output.AudioMode != CameraAudioSource && output.AudioMode != CameraAudioNone && output.AudioMode != CameraAudioAAC {
 			return fmt.Errorf("invalid audio mode %q", output.AudioMode)
 		}
@@ -258,7 +268,7 @@ func validateCameraOutputs(outputs []CameraOutput) error {
 
 func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecrets bool) ([]CameraOutput, error) {
 	rows, err := d.db.QueryContext(ctx, `SELECT o.id,o.camera_id,o.purpose,o.stream_name,o.source_stream_id,s.source_key,
-		o.video_mode,o.max_width,o.max_height,o.max_fps,o.audio_mode,o.activation,o.applied_policy_json,
+		o.video_mode,o.video_encoder,o.max_width,o.max_height,o.max_fps,o.audio_mode,o.activation,o.applied_policy_json,
 		o.verified_video_codec,o.verified_audio_codec,o.verified_width,o.verified_height,o.verified_fps,o.verified_transcoding,o.verified_at,
 		o.verification_error,o.created_at,o.updated_at
 		FROM camera_outputs o JOIN camera_streams s ON s.id=o.source_stream_id WHERE o.camera_id=?
@@ -276,7 +286,7 @@ func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecre
 		var applied, verifiedAt, createdAt, updatedAt string
 		var nullableVerifiedAt sql.NullString
 		if err := rows.Scan(&output.ID, &output.CameraID, &output.Purpose, &output.StreamName, &output.SourceStreamID, &output.SourceKey,
-			&output.VideoMode, &maxWidth, &maxHeight, &maxFPS, &output.AudioMode, &output.Activation, &applied,
+			&output.VideoMode, &output.VideoEncoder, &maxWidth, &maxHeight, &maxFPS, &output.AudioMode, &output.Activation, &applied,
 			&output.Verification.VideoCodec, &output.Verification.AudioCodec, &output.Verification.Width, &output.Verification.Height,
 			&output.Verification.FPS, &transcoding, &nullableVerifiedAt, &output.Verification.Error, &createdAt, &updatedAt); err != nil {
 			return nil, err
@@ -294,6 +304,8 @@ func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecre
 			output.MaxFPS = &v
 		}
 		_ = json.Unmarshal([]byte(applied), &output.AppliedPolicy)
+		output.VideoEncoder = NormalizeCameraVideoEncoder(output.VideoEncoder)
+		output.AppliedPolicy.VideoEncoder = NormalizeCameraVideoEncoder(output.AppliedPolicy.VideoEncoder)
 		output.Verification.Transcoding = transcoding != 0
 		verifiedAt = nullableVerifiedAt.String
 		output.Verification.CheckedAt, _ = time.Parse(time.RFC3339Nano, verifiedAt)
@@ -388,6 +400,7 @@ func markCameraPolicyAppliedTx(ctx context.Context, tx *sql.Tx, snapshot CameraP
 		if result.Policy.SourceKey == "" {
 			return fmt.Errorf("applied output %s source key is required", result.Purpose)
 		}
+		result.Policy.VideoEncoder = NormalizeCameraVideoEncoder(result.Policy.VideoEncoder)
 		policy, err := json.Marshal(result.Policy)
 		if err != nil {
 			return err

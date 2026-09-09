@@ -1,0 +1,119 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:22.22.1-alpine3.23@sha256:8094c002d08262dba12645a3b4a15cd6cd627d30bc782f53229a2ec13ee22a00 AS node-base
+
+FROM node-base AS web-builder
+
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+FROM golang:1.25.12-alpine3.23@sha256:cc985ef6f9c3bf9ece7488129c9abe0a150388ccdfa428d886fc709dca0b230a AS go-builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal/ ./internal/
+COPY cmd/camstationd/ ./cmd/camstationd/
+COPY cmd/camstation-migrate/ ./cmd/camstation-migrate/
+COPY cmd/camstation-ffmpeg/ ./cmd/camstation-ffmpeg/
+COPY --from=web-builder /src/cmd/camstationd/web/ ./cmd/camstationd/web/
+RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -buildvcs=false -o /out/camstationd ./cmd/camstationd && \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -buildvcs=false -o /out/camstation-migrate ./cmd/camstation-migrate && \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -trimpath -buildvcs=false -o /out/camstation-ffmpeg ./cmd/camstation-ffmpeg
+
+FROM ghcr.io/alexxit/go2rtc:1.9.14@sha256:675c318b23c06fd862a61d262240c9a63436b4050d177ffc68a32710d9e05bae AS go2rtc-binary
+
+FROM node-base AS rclone-binary
+ADD --checksum=sha256:b5c9b2fb6ada8a400c5fc5d48cd112dc1adea21a3b73b03857059374dd8a78d0 https://downloads.rclone.org/v1.72.1/rclone-v1.72.1-linux-amd64.zip /tmp/rclone.zip
+RUN mkdir -p /out && busybox unzip -q /tmp/rclone.zip -d /tmp && \
+    cp /tmp/rclone-v1.72.1-linux-amd64/rclone /out/rclone && chmod 0755 /out/rclone
+
+# Snapshot apt repositories and immutable source archives make this independent of
+# the exploratory GPU container. This image targets the amd64 legacy 470 driver.
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS glibc-base
+COPY --from=node-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://snapshot.ubuntu.com/ubuntu/20260908T000000Z/|g; s|http://security.ubuntu.com/ubuntu/|https://snapshot.ubuntu.com/ubuntu/20260908T000000Z/|g' /etc/apt/sources.list.d/ubuntu.sources
+
+FROM glibc-base AS ffmpeg-builder
+ARG BUILD_JOBS=4
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config nasm xz-utils libx264-dev libgnutls28-dev zlib1g-dev && rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:27d87965c5b0ab857a0092aeb9f55d975becb7126d83aefe39ae24102492180b https://ffmpeg.org/releases/ffmpeg-5.1.7.tar.xz /build/ffmpeg.tar.xz
+ADD --checksum=sha256:7e7fe9ecd3cb517698a7dde7885935f8616d13c6382dfd722bf3652a985d7fe1 https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n11.1.5.3 /build/headers.tar.gz
+ADD --checksum=sha256:d6451862deb695bb0447f3b7cd6268f73e81168c10e2c10597ff3fa01349b1de https://us.download.nvidia.com/XFree86/Linux-x86_64/470.256.02/NVIDIA-Linux-x86_64-470.256.02.run /build/nvidia.run
+COPY scripts/nvenc/build-ffmpeg.sh /build-ffmpeg.sh
+RUN BUILD_JOBS="${BUILD_JOBS}" sh /build-ffmpeg.sh
+
+FROM glibc-base AS runtime
+
+COPY --from=rclone-binary /out/rclone /usr/bin/rclone
+COPY --from=ffmpeg-builder /opt/ffmpeg/ /usr/local/
+COPY --from=ffmpeg-builder /opt/nvidia/ /usr/local/lib/
+RUN ln -s /usr/local/lib/nvidia-smi /usr/local/bin/nvidia-smi
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates libx264-164 libgnutls30t64 zlib1g tini tzdata wget && \
+    rm -rf /var/lib/apt/lists/* && ldconfig && \
+    groupadd -g 10001 camstation && \
+    useradd -u 10001 -g camstation -M -d /var/lib/camstation -s /usr/sbin/nologin camstation && \
+    install -d -o root -g root -m 0755 /var/lib/camstation && \
+    install -d -o camstation -g camstation -m 0750 \
+      /var/lib/camstation/data \
+      /var/lib/camstation/media \
+      /var/lib/camstation/media/recordings \
+      /var/lib/camstation/media/temp && \
+    test -x /usr/local/bin/ffmpeg && \
+    test -x /usr/local/bin/ffprobe && \
+    test -x /usr/bin/rclone && \
+    test -x /usr/bin/tini
+
+COPY --from=go2rtc-binary --chown=root:root /usr/local/bin/go2rtc /usr/local/bin/go2rtc
+COPY --from=go-builder --chown=root:root /out/camstationd /usr/local/bin/camstationd
+COPY --from=go-builder --chown=root:root /out/camstation-migrate /usr/local/bin/camstation-migrate
+COPY --from=go-builder --chown=root:root /out/camstation-ffmpeg /usr/local/bin/camstation-ffmpeg
+RUN echo "60384f150325733f156245caa23c60ee9f9e176f666fe50df5f213b238419b2d  /usr/local/bin/go2rtc" | sha256sum -c -
+
+ARG VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="CamStation" \
+      org.opencontainers.image.description="CamStation 2.0 CCTV/NVR application runtime" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://git.loc.hmini.me/dyllislev/CamStation" \
+      org.opencontainers.image.url="https://git.loc.hmini.me/dyllislev/CamStation" \
+      org.opencontainers.image.licenses="NOASSERTION" \
+      org.opencontainers.image.base.name="ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517" \
+      io.camstation.rclone.version="1.72.1" \
+      io.camstation.ffmpeg.version="5.1.7" \
+      io.camstation.nv-codec-headers.version="11.1.5.3" \
+      io.camstation.nvidia.version="470.256.02" \
+      io.camstation.go2rtc.image="ghcr.io/alexxit/go2rtc:1.9.14@sha256:675c318b23c06fd862a61d262240c9a63436b4050d177ffc68a32710d9e05bae" \
+      io.camstation.go2rtc.binary.sha256="60384f150325733f156245caa23c60ee9f9e176f666fe50df5f213b238419b2d"
+
+WORKDIR /var/lib/camstation
+ENV HOME=/var/lib/camstation \
+    TMPDIR=/tmp \
+    XDG_CONFIG_HOME=/var/lib/camstation/data/xdg-config \
+    XDG_CACHE_HOME=/var/lib/camstation/data/xdg-cache \
+    CAMSTATION_ADDR=0.0.0.0:18080 \
+    CAMSTATION_DB=/var/lib/camstation/data/camstation.db \
+    CAMSTATION_RECORDINGS_DIR=/var/lib/camstation/media/recordings \
+    CAMSTATION_TEMP_DIR=/var/lib/camstation/media/temp \
+    CAMSTATION_VIEWER_RELEASES_DIR=/var/lib/camstation/data/viewer-releases \
+    CAMSTATION_RECORDING_ENABLED=false
+
+EXPOSE 18080/tcp 8555/tcp 8555/udp
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:18080/api/health || exit 1
+
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/camstationd"]
