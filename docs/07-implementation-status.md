@@ -29,7 +29,7 @@ This document records the current implementation state so the next session can c
 
 ## Implemented
 
-### 2026-09-09 optional NVENC output encoding (validation in progress)
+### 2026-09-09 optional NVENC output encoding (deployed)
 
 - Output policies support `videoEncoder=cpu|nvenc`; CPU remains the default and
   recording/input relays retain stream copy. Shared live/focus outputs encode once
@@ -42,9 +42,18 @@ This document records the current implementation state so the next session can c
 - NVENC uses VBR CQ23 without a fixed target bitrate after a same-source 4K sample
   exposed substantial quality loss with the default 2 Mbps target. The selected
   setting matched CPU SSIM/PSNR in that sample, with approximately 12.5% more bitrate.
-- Unit/race checks and UID 10001 image smoke checks pass. Development real-camera,
-  failure-recovery and production LXC/CPU comparison evidence is being collected;
-  this entry does not yet claim production deployment.
+- Unit/race checks, UID 10001 image smoke, development shared-output/session-limit,
+  per-output GPU failure recovery and CPU-image rollback checks pass. At the user's
+  request, extended observation ended after 28 minutes on one GPU output; additional
+  30-minute two/three-output runs were omitted rather than reported as passing.
+- Production runs revision `220a588aa658b03a73bea21ac25a6f111246708c` with two GPU live
+  outputs and eight original-copy recorders. The deployment also fixes go2rtc process
+  replacement to wait for child exit before binding the same listeners again.
+- Five-minute production averages: Proxmox host CPU 16.03% → 9.68%; CamStation CPU
+  5.34 → 2.43 logical cores. All eight live streams and recording files advanced
+  throughout observation, with stable encoder PIDs and matching viewer counts.
+- [Validation record](nvenc-validation-2026-09-09.md) separates measured results,
+  shortened observation, image identity and the deployment-wide comparison limits.
 - [Design](superpowers/specs/2026-09-09-nvidia-nvenc-acceleration-design.md),
   [execution plan](superpowers/plans/2026-09-09-nvidia-nvenc-acceleration.md), and
   [deployment procedure](deployment.md) define the rollout and rollback contract.

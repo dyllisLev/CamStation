@@ -2,6 +2,12 @@
 
 Date: 2026-09-09 KST
 
+## 실행 결과와 관찰 기간 조정
+
+후속 사용자 요청에 따라 장시간 관찰을 GPU 출력 1개·28분 11초에서 마치고 운영으로 전환했다. 추가적인 GPU 2개·3개 각 30분 관찰은 생략했다. 아래 원래 관찰 계획을 전체 통과한 것으로 취급하지 않는다. 실제 3세션 실행, 공유 수신, 세션 제한, GPU 장애 시 CPU 복구와 이전 CPU 이미지 복귀는 별도로 검증했다.
+
+운영은 `220a588aa658b03a73bea21ac25a6f111246708c` 이미지로 배포됐으며, 소방서1·5 live를 NVENC로 전환했다. 운영 LXC GPU 장치·라이브러리·런타임과 8대 영상·원본 복사 녹화를 검증했다. go2rtc 교체 시 이전 프로세스 종료를 기다리는 수정도 운영 재적용으로 확인했다. 전후 5분 평균은 Proxmox CPU 16.03% → 9.68%, CamStation 5.34 → 2.43코어였다. 완료 범위와 미실행 항목, 원시 검사 한계는 [검증 기록](../../nvenc-validation-2026-09-09.md)에 정리했다. 아래 체크리스트는 실행 전 인수인계 원문으로 보존하며, 현재 상태는 [구현 상태](../../07-implementation-status.md)를 따른다.
+
 ## Task
 
 Implement optional, selective NVIDIA NVENC H.264 transcoding in CamStation. Develop and verify the change in the dev LXC first. Do not modify or restart the production CCTV LXC until the development test and review have passed.
@@ -80,7 +86,7 @@ This checkout already has unrelated modified files. Inspect `git status --short 
 
 용어: 여기서 가속하는 대상은 **카메라 내부 인코더가 아니라 서버의 재인코딩 작업**이다. 서버가 원본을 그대로 중계·녹화하는 copy 경로는 GPU를 사용하지 않는다. **3세션은 서버에서 동시에 실행되는 GPU 인코딩 작업 3개**를 뜻한다. 일반 상태 조회·기존 영상 ffprobe는 별도 세션이 아니며, 독립적인 합성 영상 NVENC 호환성 검사를 실행할 때만 추가 슬롯이 필요하다. on-demand 출력 검사로 해당 출력이 시작되면 그 출력의 작업을 계산한다.
 
-상태: **구현·개발 검증 진행 중**. 사용자는 후속 대화에서 개발 검증 후 운영 배포와 Proxmox 호스트 CPU 사용률 전후 비교까지 명시적으로 승인했다. 위 인수인계 원문은 보존한다. 아래는 현재 체크아웃과 [현재 구현 상태](../../07-implementation-status.md)를 대조한 실행안이다. 동작 계약은 [NVENC 설계](../specs/2026-09-09-nvidia-nvenc-acceleration-design.md)에 둔다.
+상태: **사용자가 조정한 관찰 범위로 구현·검증·운영 배포·CPU 비교 완료**. 사용자는 후속 대화에서 개발 검증 후 운영 배포와 Proxmox 호스트 CPU 사용률 전후 비교까지 명시적으로 승인했다. 위 인수인계 원문과 아래 실행 전 계획은 보존한다. 실제 결과는 문서 앞부분과 [현재 구현 상태](../../07-implementation-status.md)를 따른다. 동작 계약은 [NVENC 설계](../specs/2026-09-09-nvidia-nvenc-acceleration-design.md)에 둔다.
 
 ### 1. 확인한 구현과 선행 위험
 
