@@ -4,11 +4,11 @@ Last updated: 2026-09-10
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
-## 2026-09-10 recording startup and direct MP4 duration (verified, rollout pending)
+## 2026-09-10 recording startup and direct MP4 duration (deployed)
 
 - The recorder skips unnecessary FPS estimation with `-fpsprobesize 0` while retaining codec discovery, stream copy, post-probe packet clocks and absolute PRFT. A measured real HEVC relay comparison preserved one additional four-second GOP; the next camera keyframe and fragment completion still impose a startup wait.
 - Epoch recordings are exposed through a virtual ordinary MP4 for direct playback/download. Explicit sample tables and edit lists correct duration inference while preserving encoded payload and relative A/V timing. Producer references precede one media extent so Chrome does not scan every old fragment through separate requests. Archive bytes, HLS and database timing remain unchanged; HTTP length and Range refer to the virtual file. Ordinary MP4 and relative-clock fMP4 pass through unchanged.
-- Full Go tests and daemon build passed, together with FFmpeg 5.1.7 recording/media checks, HTTP Range and legacy compatibility, A/V delay and B-frame cases, zero-duration AAC preservation, and independent real HEVC payload/decode review. The first rollout `a1d5764` passed all server/recording checks; its real HTTP browser check identified fragment-by-fragment metadata scanning, now corrected in source. See the [fix contract](superpowers/specs/2026-09-10-recording-start-and-mp4-duration.md) and [implementation/validation record](superpowers/plans/2026-09-10-recording-start-and-mp4-duration.md) for final rollout verification.
+- Full Go tests and daemon build passed, together with FFmpeg 5.1.7 recording/media checks, HTTP Range and legacy compatibility, A/V delay and B-frame cases, zero-duration AAC preservation, and independent real HEVC payload/decode review. Final revision `d179e6af6c29f60233510cbbe04cf9d697d3e50f` was deployed at 09:14 KST. Exact CI/OpenShip/image identity, healthy status, DB/mount checks, eight finalized previous recordings and eight growing new recordings passed; live remains 8/8 and NVENC 2. The operating HTTP browser check loaded the previously affected file's metadata in 367 ms and confirmed its correct duration, first/middle/end seeks and normal ending. See the [fix contract](superpowers/specs/2026-09-10-recording-start-and-mp4-duration.md) and [implementation/validation record](superpowers/plans/2026-09-10-recording-start-and-mp4-duration.md).
 
 ## 2026-09-09 shared recorded playback (deployed)
 
