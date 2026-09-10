@@ -4,11 +4,11 @@ Last updated: 2026-09-10
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
-## 2026-09-10 live initial connection delay (validated; rollout pending)
+## 2026-09-10 live initial connection delay (deployed)
 
 - Fresh external Chrome reproduced eight setup failures before WebSocket upgrade. Timeline queries grouped the full recording catalogue per camera; filtering before the join reduced the actual-driver eight-camera workload from 5.21 to 0.63 seconds. New WebSocket registration now uses one targeted query instead of hydrating all camera policies.
 - Actual external WebRTC signaling includes public reflexive candidates. With the DB fix and original frontend, asura's eight videos start within 2.20 seconds without retries. The final change retains the original WebRTC-first/MSE-recovery policy for browser and Viewer.
-- Full Go tests, Web tests, lint and builds pass. Final production rollout and external/native Viewer verification remain pending. See the [diagnosis and validation record](live-startup-2026-09-10.md).
+- Full Go tests, Web tests 101/101, lint and builds pass. Final revision `49c84f05f602b367e106ede4dc6138467a1a5d98` deployed at 09:57 KST with exact CI/OpenShip/image/health checks. An unmodified fresh Chrome on asura showed the first video in 0.896 s and all eight in 2.666 s, with zero retries. OCI's valid-origin WebSocket handshake fell from 5,953 to 91 ms. A fresh native monitoring-PC page load started all eight on their first WebRTC attempts; the actual maximized window and cleanup were verified. Old/new recording continuity, DB and persistent mounts passed. See the [diagnosis and validation record](live-startup-2026-09-10.md).
 
 ## 2026-09-10 recording startup and direct MP4 duration (deployed)
 
