@@ -4,6 +4,12 @@ Last updated: 2026-09-10
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
+## 2026-09-10 live initial connection delay (validated; rollout pending)
+
+- Fresh external Chrome reproduced eight setup failures before WebSocket upgrade. Timeline queries grouped the full recording catalogue per camera; filtering before the join reduced the actual-driver eight-camera workload from 5.21 to 0.63 seconds. New WebSocket registration now uses one targeted query instead of hydrating all camera policies.
+- Hostname/public-IP access starts with MSE through the HTTP proxy; direct private/loopback/link-local IP access retains WebRTC. This avoids an initial private-candidate WebRTC attempt on the public domain while preserving the monitoring PC's direct LAN policy. LAN DNS names intentionally also use MSE.
+- Full Go tests, Web tests 103/103, lint and builds pass. External production and native Viewer verification remain pending. See the [diagnosis and validation record](live-startup-2026-09-10.md).
+
 ## 2026-09-10 recording startup and direct MP4 duration (deployed)
 
 - The recorder skips unnecessary FPS estimation with `-fpsprobesize 0` while retaining codec discovery, stream copy, post-probe packet clocks and absolute PRFT. A measured real HEVC relay comparison preserved one additional four-second GOP; the next camera keyframe and fragment completion still impose a startup wait.

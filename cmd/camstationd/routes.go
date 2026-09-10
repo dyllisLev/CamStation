@@ -155,8 +155,8 @@ func (d routeDeps) handler() (http.Handler, error) {
 	d.registerLegacyViewerCompatibilityRoute(mux)
 
 	liveProxy, err := go2RTCProxy(previews, func(ctx context.Context, streamName string) bool {
-		cameras, err := d.db.ListCameras(ctx, false)
-		return err == nil && isRegisteredPublicStream(cameras, streamName)
+		registered, err := d.db.IsRegisteredPublicStream(ctx, streamName)
+		return err == nil && registered
 	})
 	if err != nil {
 		return nil, err

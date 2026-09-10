@@ -28,6 +28,7 @@ import {
 } from "./liveLayoutState";
 import { PtzControlPanel } from "./PtzControlPanel";
 import { playbackStatusCopy } from "./playbackPresentation";
+import { preferredLiveTransport } from "./preferredLiveTransport";
 import { playbackStreamCandidates, tileFocusPresentation } from "./streamSelection";
 import { hasViewerFullscreenBridge, reportViewerStream, requestViewerFullscreen, subscribeViewerCommands, subscribeViewerFullscreen } from "./viewerBridge";
 import { useWebRtcMseStream, type PlaybackPhase } from "./useWebRtcMseStream";
@@ -853,7 +854,7 @@ function LiveVideo({
     fallbackCount,
     resubscribeCount,
     errorCategory,
-  } = useWebRtcMseStream(streamNames, resubscribeGeneration + reconnectGeneration, "webrtc", surface);
+  } = useWebRtcMseStream(streamNames, resubscribeGeneration + reconnectGeneration, preferredLiveTransport(window.location.hostname), surface);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const currentViewport = viewport ?? DEFAULT_VIDEO_VIEWPORT;
