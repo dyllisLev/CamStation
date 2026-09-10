@@ -93,7 +93,7 @@ func TestNormalizedMP4CommonClockAndImmutablePayload(t *testing.T) {
 	if binary.BigEndian.Uint64(out[prft+20:]) != 0 {
 		t.Fatal("PRFT media_time not mapped to flat track clock")
 	}
-	mdat := bytes.Index(out, []byte("mdat"))
+	mdat := bytes.LastIndex(out, []byte("mdat"))
 	if string(out[mdat+4:mdat+12]) != "V123A456" {
 		t.Fatal("sample payload changed")
 	}
@@ -107,9 +107,8 @@ func TestNormalizedMP4CommonClockAndImmutablePayload(t *testing.T) {
 	if string(out[audioOffset:audioOffset+4]) != "A456" {
 		t.Fatal("flat audio chunk offset incorrect")
 	}
-	// Range crosses the synthesized moov/source boundary, then reads a sample.
-	moov := bytes.Index(out, []byte("moov")) - 4
-	boundary := moov + int(binary.BigEndian.Uint32(out[moov:]))
+	// Range crosses the synthesized prefix/source boundary, then reads a sample.
+	boundary := bytes.Index(out, []byte("mdat")) + 12
 	for _, start := range []int{boundary - 3, mdat + 5} {
 		stop := start + 5
 		w := httptest.NewRecorder()
@@ -205,4 +204,67 @@ func TestNormalizedMP4FFprobeRelativeDuration(t *testing.T) {
 		}
 	}
 	run("-i", normalized, "-f", "null", "-")
+}
+
+func TestNormalizedMP4SingleMediaExtentAndReferences(t *testing.T) {
+	original := normFixture(1788912000)
+	original = append(original, normBox("prft", []byte{1, 0, 0, 0}, normU32(1), normU64(0xed00000112345678), normU64(1788912000*90000+181920+90000))...)
+	view, err := NormalizedMP4(bytes.NewReader(original), int64(len(original)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sourceTail int64
+	var ntps [][]byte
+	for pos := int64(0); pos < int64(len(original)); {
+		b, err := readBox(bytes.NewReader(original), pos, int64(len(original)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.kind == "moov" {
+			sourceTail = pos + b.size
+		}
+		if b.kind == "prft" {
+			ntps = append(ntps, original[pos+b.header+8:pos+b.header+16])
+		}
+		pos += b.size
+	}
+	var references, media int
+	for pos := int64(0); pos < int64(len(out)); {
+		b, err := readBox(bytes.NewReader(out), pos, int64(len(out)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch b.kind {
+		case "ftyp", "moov":
+		case "prft":
+			if references >= len(ntps) || !bytes.Equal(out[pos+b.header+8:pos+b.header+16], ntps[references]) {
+				t.Fatal("producer NTP changed")
+			}
+			if got := binary.BigEndian.Uint64(out[pos+b.header+16:]); got != uint64(references)*90000 {
+				t.Fatalf("reference media time %d", got)
+			}
+			references++
+		case "mdat":
+			media++
+			if references != len(ntps) {
+				t.Fatal("references not all before media")
+			}
+			if pos+b.size != int64(len(out)) {
+				t.Fatal("browser would need to scan beyond media")
+			}
+			if !bytes.Equal(out[pos+b.header:], original[sourceTail:]) {
+				t.Fatal("source tail changed")
+			}
+		default:
+			t.Fatalf("unexpected top-level box %s", b.kind)
+		}
+		pos += b.size
+	}
+	if references != 2 || media != 1 {
+		t.Fatalf("references=%d media extents=%d", references, media)
+	}
 }

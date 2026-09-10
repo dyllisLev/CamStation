@@ -9,15 +9,15 @@ import (
 )
 
 // flatMovie describes samples without owning their payload. The virtual file
-// replaces moov, hides fragment indexes, and leaves every mdat byte in place.
+// replaces moov and encloses the untouched source tail in one mdat.
 type flatMovie struct {
-	moov       box
-	metadata   []byte
-	tracks     map[uint32]*flatTrack
-	patches    []clockPatch
-	references []flatReference
-	origin     *big.Rat
-	duration   uint64
+	moov          box
+	metadata      []byte
+	tracks        map[uint32]*flatTrack
+	referenceData []byte
+	references    []flatReference
+	origin        *big.Rat
+	duration      uint64
 }
 type flatTrack struct {
 	info              track
@@ -37,8 +37,9 @@ type flatChunk struct {
 	samples uint32
 }
 type flatReference struct {
-	field clockField
-	track uint32
+	field   clockField
+	track   uint32
+	payload []byte
 }
 
 const flatMovieScale uint32 = 1000000
@@ -174,7 +175,6 @@ func readFlatMovie(r io.ReaderAt, size int64) (*flatMovie, error) {
 			}
 			haveFragment = true
 			pending = runs
-			m.patches = append(m.patches, clockPatch{b.offset + 4, []byte("free")})
 		case "mdat":
 			if m.moov.size == 0 {
 				break
@@ -192,10 +192,6 @@ func readFlatMovie(r io.ReaderAt, size int64) (*flatMovie, error) {
 			pending = nil
 		case "prft":
 			referenceBoxes = append(referenceBoxes, b)
-		case "mfra", "sidx":
-			// Their original offsets/times index fragments. Flat sample tables below
-			// replace them; leaving either active would re-enable fragment inference.
-			m.patches = append(m.patches, clockPatch{b.offset + 4, []byte("free")})
 		}
 		pos += b.size
 	}
@@ -218,11 +214,11 @@ func readFlatMovie(r io.ReaderAt, size int64) (*flatMovie, error) {
 		if !ok {
 			return nil, errors.New("normalization: unknown reference track")
 		}
-		f, err := readClockField(p, 16, b.offset+b.header, t.scale)
+		f, err := readClockField(p, 16, 0, t.scale)
 		if err != nil {
 			return nil, err
 		}
-		m.references = append(m.references, flatReference{f, ref.track})
+		m.references = append(m.references, flatReference{f, ref.track, p})
 	}
 	if len(m.references) == 0 {
 		return nil, errors.New("normalization: epoch fragments lack producer reference")
@@ -274,7 +270,11 @@ func readFlatMovie(r io.ReaderAt, size int64) (*flatMovie, error) {
 		} else {
 			binary.BigEndian.PutUint32(p, uint32(v.Uint64()))
 		}
-		m.patches = append(m.patches, clockPatch{ref.field.offset, p})
+		copy(ref.payload[ref.field.offset:], p)
+		m.referenceData = append(m.referenceData, flatBox("prft", ref.payload)...)
+		if len(m.referenceData) > maxMetadataBox {
+			return nil, errors.New("normalization: reference metadata too large")
+		}
 	}
 	return m, nil
 }

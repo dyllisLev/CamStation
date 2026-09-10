@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"sort"
 )
 
 // NormalizedMP4 presents epoch-clock recorder fragments as a normal finalized
@@ -36,7 +35,7 @@ func NormalizedMP4(r io.ReaderAt, size int64) (*io.SectionReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	delta := int64(len(moov)) - movie.moov.size
+	delta := int64(len(moov)) + int64(len(movie.referenceData)) + 16 - movie.moov.size
 	if delta > 0 && size > math.MaxInt64-delta {
 		return nil, errors.New("normalization: file size overflows")
 	}
@@ -44,13 +43,19 @@ func NormalizedMP4(r io.ReaderAt, size int64) (*io.SectionReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(movie.patches, func(i, j int) bool { return movie.patches[i].offset < movie.patches[j].offset })
-	source := &normalizedReader{source: r, patches: movie.patches}
-	view := &movieReader{source: source, start: movie.moov.offset, removed: movie.moov.size, metadata: moov, size: size + delta}
+	// Chrome otherwise seeks across every interspersed fragment box before
+	// loadedmetadata. Put every producer reference beside moov, then expose
+	// the untouched source tail as one mdat ending at EOF. Old box headers
+	// are harmless padding between the samples addressed by co64.
+	metadata := append(moov, movie.referenceData...)
+	metadata = append(metadata, 0, 0, 0, 1, 'm', 'd', 'a', 't')
+	metadata = binary.BigEndian.AppendUint64(metadata, uint64(size-movie.moov.offset-movie.moov.size)+16)
+	view := &movieReader{source: r, start: movie.moov.offset, removed: movie.moov.size, metadata: metadata, size: size + delta}
 	return io.NewSectionReader(view, 0, view.size), nil
 }
 
-// The only materialized part is moov. All prefix/tail reads still address the
+// Only moov, producer references and the mdat header are materialized. All
+// prefix/tail reads still address the
 // immutable source; partial reads may cross either replacement boundary.
 type movieReader struct {
 	source               io.ReaderAt
@@ -102,26 +107,7 @@ type clockField struct {
 	scale  uint32
 	width  int
 }
-type clockPatch struct {
-	offset int64
-	data   []byte
-}
-type normalizedReader struct {
-	source  io.ReaderAt
-	patches []clockPatch
-}
 
-func (r *normalizedReader) ReadAt(p []byte, off int64) (int, error) {
-	n, err := r.source.ReadAt(p, off)
-	i := sort.Search(len(r.patches), func(i int) bool { return r.patches[i].offset+int64(len(r.patches[i].data)) > off })
-	for ; i < len(r.patches) && r.patches[i].offset < off+int64(n); i++ {
-		patch := r.patches[i]
-		start := max(off, patch.offset)
-		end := min(off+int64(n), patch.offset+int64(len(patch.data)))
-		copy(p[start-off:end-off], patch.data[start-patch.offset:end-patch.offset])
-	}
-	return n, err
-}
 func readClockField(p []byte, at int, base int64, scale uint32) (clockField, error) {
 	if len(p) < 1 || scale == 0 {
 		return clockField{}, errors.New("normalization: invalid clock")
