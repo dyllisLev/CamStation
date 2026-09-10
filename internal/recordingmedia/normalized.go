@@ -4,14 +4,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"math/big"
+	"math"
 	"sort"
 )
 
-// NormalizedMP4 supplies a virtual finalized-file view. Only clock metadata is
-// patched; canonical archive bytes, sample payloads and all byte offsets stay
-// unchanged. SectionReader supplies Seek and HTTP Range support over ReaderAt.
-// Legacy nonfragmented and relative-clock files pass through byte-for-byte.
+// NormalizedMP4 presents epoch-clock recorder fragments as a normal finalized
+// MP4. It synthesizes sample tables and edit lists, reads payload from the
+// original archive, and never writes or transcodes that archive. The explicit
+// movie duration avoids fragmented-MP4 duration inference counting an initial
+// A/V delay twice. Legacy MP4 and relative-clock fMP4 pass through unchanged.
 func NormalizedMP4(r io.ReaderAt, size int64) (*io.SectionReader, error) {
 	plain := io.NewSectionReader(r, 0, size)
 	var signature [8]byte
@@ -24,191 +25,75 @@ func NormalizedMP4(r io.ReaderAt, size int64) (*io.SectionReader, error) {
 	if string(signature[4:]) != "ftyp" {
 		return plain, nil
 	}
-	tracks := map[uint32]track{}
-	var fields []clockField
-	var origin *big.Rat
-	haveReference, haveFragment := false, false
-	for pos := int64(0); pos < size; {
-		b, err := readBox(r, pos, size)
-		if err != nil {
-			return nil, err
-		}
-		switch b.kind {
-		case "moov":
-			data, err := payload(r, b)
-			if err != nil {
-				return nil, err
-			}
-			tracks, err = readTracks(data)
-			if errors.Is(err, ErrNotFragmented) {
-				return plain, nil
-			}
-			if err != nil {
-				return nil, err
-			}
-		case "moof":
-			data, err := payload(r, b)
-			if err != nil {
-				return nil, err
-			}
-			first := !haveFragment
-			err = walkClockBoxes(data, b.offset+b.header, func(child box, p []byte) error {
-				if child.kind != "traf" {
-					return nil
-				}
-				var id uint32
-				if err := walkClockBoxes(p, child.offset+child.header, func(c box, v []byte) error {
-					if c.kind == "tfhd" {
-						if len(v) < 8 {
-							return io.ErrUnexpectedEOF
-						}
-						id = u32(v, 4)
-					}
-					return nil
-				}); err != nil {
-					return err
-				}
-				t, ok := tracks[id]
-				if !ok {
-					return errors.New("normalization: unknown fragment track")
-				}
-				found := false
-				err := walkClockBoxes(p, child.offset+child.header, func(c box, v []byte) error {
-					if c.kind != "tfdt" {
-						return nil
-					}
-					if found {
-						return errors.New("normalization: duplicate decode time")
-					}
-					found = true
-					f, err := readClockField(v, 4, c.offset+c.header, t.scale)
-					if err != nil {
-						return err
-					}
-					fields = append(fields, f)
-					if first {
-						at := new(big.Rat).SetFrac(new(big.Int).SetUint64(f.value), new(big.Int).SetUint64(uint64(t.scale)))
-						if origin == nil || at.Cmp(origin) < 0 {
-							origin = at
-						}
-					}
-					return nil
-				})
-				if err != nil {
-					return err
-				}
-				if !found {
-					return errors.New("normalization: missing decode time")
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-			haveFragment = true
-			// Only the recorder's epoch clock needs normalization. Old relative fMP4
-			// (including files whose PRFT NTP is absolute) keeps its established clock.
-			if first && (origin == nil || origin.Cmp(big.NewRat(946684800, 1)) < 0) {
-				return plain, nil
-			}
-		case "prft":
-			p, err := payload(r, b)
-			if err != nil {
-				return nil, err
-			}
-			if len(p) < 8 {
-				return nil, io.ErrUnexpectedEOF
-			}
-			t, ok := tracks[u32(p, 4)]
-			if !ok {
-				return nil, errors.New("normalization: unknown reference track")
-			}
-			f, err := readClockField(p, 16, b.offset+b.header, t.scale)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, f)
-			haveReference = true
-		case "sidx":
-			p, err := payload(r, b)
-			if err != nil {
-				return nil, err
-			}
-			if len(p) < 12 {
-				return nil, io.ErrUnexpectedEOF
-			}
-			f, err := readClockField(p, 12, b.offset+b.header, u32(p, 8))
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, f)
-		case "mfra":
-			p, err := payload(r, b)
-			if err != nil {
-				return nil, err
-			}
-			err = walkClockBoxes(p, b.offset+b.header, func(c box, v []byte) error {
-				if c.kind != "tfra" {
-					return nil
-				}
-				if len(v) < 16 {
-					return io.ErrUnexpectedEOF
-				}
-				t, ok := tracks[u32(v, 4)]
-				if !ok {
-					return errors.New("normalization: unknown random-access track")
-				}
-				width := 4
-				if v[0] == 1 {
-					width = 8
-				} else if v[0] != 0 {
-					return errors.New("normalization: unsupported tfra version")
-				}
-				lengths := u32(v, 8)
-				stride := 2*width + int((lengths>>4)&3) + int((lengths>>2)&3) + int(lengths&3) + 3
-				count := uint64(u32(v, 12))
-				if count > uint64((len(v)-16)/stride) {
-					return io.ErrUnexpectedEOF
-				}
-				for at, n := 16, uint64(0); n < count; at, n = at+stride, n+1 {
-					f, err := readClockField(v, at, c.offset+c.header, t.scale)
-					if err != nil {
-						return err
-					}
-					fields = append(fields, f)
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-		}
-		pos += b.size
+	movie, err := readFlatMovie(r, size)
+	if err != nil {
+		return nil, err
 	}
-	if !haveFragment {
+	if movie == nil {
 		return plain, nil
 	}
-	if !haveReference || origin == nil {
-		return nil, errors.New("normalization: epoch fragments lack producer reference")
+	moov, err := movie.movieBox(0)
+	if err != nil {
+		return nil, err
 	}
-	patches := make([]clockPatch, 0, len(fields))
-	for _, f := range fields {
-		scaled := new(big.Rat).Mul(origin, new(big.Rat).SetInt(new(big.Int).SetUint64(uint64(f.scale))))
-		shift := new(big.Int).Quo(scaled.Num(), scaled.Denom())
-		if !shift.IsUint64() || shift.Uint64() > f.value {
-			return nil, errors.New("normalization: clock precedes common origin")
-		}
-		n := f.value - shift.Uint64()
-		p := clockPatch{offset: f.offset, data: make([]byte, f.width)}
-		if f.width == 8 {
-			binary.BigEndian.PutUint64(p.data, n)
-		} else {
-			binary.BigEndian.PutUint32(p.data, uint32(n))
-		}
-		patches = append(patches, p)
+	delta := int64(len(moov)) - movie.moov.size
+	if delta > 0 && size > math.MaxInt64-delta {
+		return nil, errors.New("normalization: file size overflows")
 	}
-	sort.Slice(patches, func(i, j int) bool { return patches[i].offset < patches[j].offset })
-	return io.NewSectionReader(&normalizedReader{source: r, patches: patches}, 0, size), nil
+	moov, err = movie.movieBox(delta)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(movie.patches, func(i, j int) bool { return movie.patches[i].offset < movie.patches[j].offset })
+	source := &normalizedReader{source: r, patches: movie.patches}
+	view := &movieReader{source: source, start: movie.moov.offset, removed: movie.moov.size, metadata: moov, size: size + delta}
+	return io.NewSectionReader(view, 0, view.size), nil
+}
+
+// The only materialized part is moov. All prefix/tail reads still address the
+// immutable source; partial reads may cross either replacement boundary.
+type movieReader struct {
+	source               io.ReaderAt
+	start, removed, size int64
+	metadata             []byte
+}
+
+func (r *movieReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("negative read offset")
+	}
+	if off >= r.size {
+		return 0, io.EOF
+	}
+	requested := len(p)
+	n := 0
+	for len(p) > 0 && off < r.size {
+		var got int
+		var err error
+		switch {
+		case off < r.start:
+			count := min(int64(len(p)), r.start-off)
+			got, err = r.source.ReadAt(p[:count], off)
+		case off < r.start+int64(len(r.metadata)):
+			got = copy(p, r.metadata[off-r.start:])
+		default:
+			count := min(int64(len(p)), r.size-off)
+			got, err = r.source.ReadAt(p[:count], off-int64(len(r.metadata))+r.removed)
+		}
+		n += got
+		off += int64(got)
+		p = p[got:]
+		if err != nil {
+			return n, err
+		}
+		if got == 0 {
+			return n, io.ErrNoProgress
+		}
+	}
+	if n < requested {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 type clockField struct {

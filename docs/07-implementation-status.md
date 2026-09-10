@@ -1,8 +1,14 @@
 # Implementation Status
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
+
+## 2026-09-10 recording startup and direct MP4 duration (verified, rollout pending)
+
+- The recorder skips unnecessary FPS estimation with `-fpsprobesize 0` while retaining codec discovery, stream copy, post-probe packet clocks and absolute PRFT. A measured real HEVC relay comparison preserved one additional four-second GOP; the next camera keyframe and fragment completion still impose a startup wait.
+- Epoch recordings are exposed through a virtual ordinary MP4 for direct playback/download. Explicit sample tables and edit lists correct duration inference while preserving encoded payload and relative A/V timing. Archive bytes, HLS and database timing remain unchanged; HTTP length and Range refer to the virtual file. Ordinary MP4 and relative-clock fMP4 pass through unchanged.
+- Full Go tests and daemon build passed, together with FFmpeg 5.1.7 recording/media checks, HTTP Range and legacy compatibility, A/V delay and B-frame cases, zero-duration AAC preservation, and independent real HEVC payload/decode review. See the [fix contract](superpowers/specs/2026-09-10-recording-start-and-mp4-duration.md) and [implementation/validation record](superpowers/plans/2026-09-10-recording-start-and-mp4-duration.md). The operating server remains `47a4ad33` until the new exact image is verified.
 
 ## 2026-09-09 shared recorded playback (deployed)
 

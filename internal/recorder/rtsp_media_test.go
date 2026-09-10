@@ -144,6 +144,13 @@ loop:
 			}
 		}
 	}
+	firstVideoDelay := time.Duration(complete[0].Fragments[0].StartMs-started.UnixMilli()) * time.Millisecond
+	t.Logf("first video packet after %s", firstVideoDelay)
+	// This local source has a one-second GOP. Waiting through the default
+	// 20-frame FPS estimate would discard several usable keyframes.
+	if firstVideoDelay > 3*time.Second {
+		t.Fatalf("RTSP startup waited through extra keyframes: %s", firstVideoDelay)
+	}
 	for _, idx := range complete {
 		first, last := idx.Fragments[0], idx.Fragments[len(idx.Fragments)-1]
 		if first.StartMs < started.UnixMilli() || last.EndMs > time.Now().Add(time.Second).UnixMilli() {

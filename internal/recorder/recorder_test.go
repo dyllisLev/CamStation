@@ -39,6 +39,9 @@ func TestBuildFFmpegArgsUsesWallclockPtsForStableSegmentation(t *testing.T) {
 	if !strings.Contains(joined, "-fflags +genpts+nobuffer") {
 		t.Fatalf("expected generated PTS and post-probe input for stable epoch MP4 playback, got %s", joined)
 	}
+	if !strings.Contains(joined, "-fpsprobesize 0 -use_wallclock_as_timestamps") {
+		t.Fatalf("expected packet-clock stream copy without an extra FPS probe, got %s", joined)
+	}
 	if !strings.Contains(joined, "-use_wallclock_as_timestamps 1 -rtsp_transport tcp -i") {
 		t.Fatalf("expected wallclock input timestamps before RTSP input, got %s", joined)
 	}

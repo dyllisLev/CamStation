@@ -26,23 +26,38 @@ func normBox(kind string, p ...[]byte) []byte {
 func normU32(v uint32) []byte { p := make([]byte, 4); binary.BigEndian.PutUint32(p, v); return p }
 func normU64(v uint64) []byte { p := make([]byte, 8); binary.BigEndian.PutUint64(p, v); return p }
 func normTrack(id, scale uint32) []byte {
-	tk := make([]byte, 16)
+	tk := make([]byte, 84)
 	binary.BigEndian.PutUint32(tk[12:], id)
-	md := make([]byte, 16)
+	md := make([]byte, 24)
 	binary.BigEndian.PutUint32(md[12:], scale)
-	return normBox("trak", normBox("tkhd", tk), normBox("mdia", normBox("mdhd", md)))
+	handler := make([]byte, 12)
+	codec := "avc1"
+	copy(handler[8:], "vide")
+	if id == 2 {
+		codec = "mp4a"
+		copy(handler[8:], "soun")
+	}
+	stbl := normBox("stbl", normBox("stsd", make([]byte, 4), normU32(1), normBox(codec)), normBox("stts", make([]byte, 8)), normBox("stsc", make([]byte, 8)), normBox("stsz", make([]byte, 12)), normBox("stco", make([]byte, 8)))
+	return normBox("trak", normBox("tkhd", tk), normBox("mdia", normBox("mdhd", md), normBox("hdlr", handler), normBox("minf", stbl)))
 }
 func normFixture(epoch uint64) []byte {
 	video := epoch*90000 + 181920
 	audio := epoch * 48000
-	moov := normBox("moov", normTrack(1, 90000), normTrack(2, 48000), normBox("mvex", normBox("trex", make([]byte, 24))))
-	traf := func(id uint32, n uint64) []byte {
-		return normBox("traf", normBox("tfhd", make([]byte, 4), normU32(id)), normBox("tfdt", []byte{1, 0, 0, 0}, normU64(n)))
+	mvhd := make([]byte, 100)
+	binary.BigEndian.PutUint32(mvhd[12:], 1000)
+	trex := func(id, scale uint32) []byte {
+		return normBox("trex", make([]byte, 4), normU32(id), normU32(1), normU32(scale), normU32(4), normU32(0))
 	}
-	prft := normBox("prft", []byte{1, 0, 0, 0}, normU32(1), normU64(0xed00000012345678), normU64(video+18000))
-	tfra := normBox("tfra", []byte{1, 0, 0, 0}, normU32(1), normU32(0), normU32(1), normU64(video+18000), normU64(987), []byte{1, 1, 1})
-	sidx := normBox("sidx", []byte{1, 0, 0, 0}, normU32(1), normU32(90000), normU64(video+18000), normU64(0), make([]byte, 4))
-	return bytes.Join([][]byte{normBox("ftyp", []byte("isom0000")), moov, sidx, prft, normBox("moof", traf(1, video), traf(2, audio)), normBox("mdat", []byte("unaltered sample payload")), normBox("mfra", tfra)}, nil)
+	moov := normBox("moov", normBox("mvhd", mvhd), normTrack(1, 90000), normTrack(2, 48000), normBox("mvex", trex(1, 90000), trex(2, 48000)))
+	traf := func(id uint32, n uint64, offset uint32) []byte {
+		return normBox("traf", normBox("tfhd", []byte{0, 2, 0, 0}, normU32(id)), normBox("tfdt", []byte{1, 0, 0, 0}, normU64(n)), normBox("trun", []byte{0, 0, 0, 1}, normU32(1), normU32(offset)))
+	}
+	moof := normBox("moof", normBox("mfhd", make([]byte, 4), normU32(1)), traf(1, video, 0), traf(2, audio, 0))
+	moof = normBox("moof", normBox("mfhd", make([]byte, 4), normU32(1)), traf(1, video, uint32(len(moof)+8)), traf(2, audio, uint32(len(moof)+12)))
+	prft := normBox("prft", []byte{1, 0, 0, 0}, normU32(1), normU64(0xed00000012345678), normU64(video))
+	tfra := normBox("tfra", []byte{1, 0, 0, 0}, normU32(1), normU32(0), normU32(1), normU64(video), normU64(987), []byte{1, 1, 1})
+	sidx := normBox("sidx", []byte{1, 0, 0, 0}, normU32(1), normU32(90000), normU64(video), normU64(0), make([]byte, 4))
+	return bytes.Join([][]byte{normBox("ftyp", []byte("isom0000")), moov, sidx, prft, moof, normBox("mdat", []byte("V123A456")), normBox("mfra", tfra)}, nil)
 }
 func TestNormalizedMP4CommonClockAndImmutablePayload(t *testing.T) {
 	original := normFixture(1788912000)
@@ -55,52 +70,59 @@ func TestNormalizedMP4CommonClockAndImmutablePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != len(original) || !bytes.Equal(original, saved) {
-		t.Fatal("canonical bytes or length changed")
+	if !bytes.Equal(original, saved) {
+		t.Fatal("canonical source changed")
 	}
-	tfdt := bytes.Index(out, []byte("tfdt"))
-	if got := binary.BigEndian.Uint64(out[tfdt+8:]); got != 181920 {
-		t.Fatalf("A/V offset lost: %d", got)
+	if bytes.Contains(out, []byte("mvex")) {
+		t.Fatal("virtual normal MP4 still declares fragments")
 	}
-	second := bytes.Index(out[tfdt+4:], []byte("tfdt")) + tfdt + 4
-	if got := binary.BigEndian.Uint64(out[second+8:]); got != 0 {
-		t.Fatalf("earliest audio=%d", got)
+	// Movie-scale delay is explicit; sample decode/presentation relationships
+	// are conveyed by sample tables and an edit, not an epoch-valued tfdt.
+	elst := bytes.Index(out, []byte("elst"))
+	if elst < 0 {
+		t.Fatal("missing edit list")
 	}
-	for _, field := range []struct {
-		kind string
-		off  int
-	}{{"prft", 20}, {"tfra", 20}, {"sidx", 16}} {
-		at := bytes.Index(out, []byte(field.kind))
-		if got := binary.BigEndian.Uint64(out[at+field.off:]); got != 199920 {
-			t.Fatalf("%s=%d", field.kind, got)
-		}
-	}
-	tfra := bytes.Index(out, []byte("tfra"))
-	if binary.BigEndian.Uint64(out[tfra+28:]) != 987 {
-		t.Fatal("random access byte offset changed")
+	if got := binary.BigEndian.Uint64(out[elst+12:]); got != 2021334 {
+		t.Fatalf("video delay=%d", got)
 	}
 	prft := bytes.Index(out, []byte("prft"))
-	if !bytes.Equal(out[prft+12:prft+20], original[prft+12:prft+20]) {
+	oldPrft := bytes.Index(original, []byte("prft"))
+	if !bytes.Equal(out[prft+12:prft+20], original[oldPrft+12:oldPrft+20]) {
 		t.Fatal("absolute NTP changed")
 	}
+	if binary.BigEndian.Uint64(out[prft+20:]) != 0 {
+		t.Fatal("PRFT media_time not mapped to flat track clock")
+	}
 	mdat := bytes.Index(out, []byte("mdat"))
-	end := mdat + 4 + len("unaltered sample payload")
-	if !bytes.Equal(out[mdat:end], original[mdat:end]) {
+	if string(out[mdat+4:mdat+12]) != "V123A456" {
 		t.Fatal("sample payload changed")
 	}
-	// Range starts/ends within an eight-byte patched field, rather than on boxes.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/play", nil)
-	start := tfdt + 10
-	stop := tfdt + 13
-	r.Header.Set("Range", "bytes="+strconv.Itoa(start)+"-"+strconv.Itoa(stop))
-	http.ServeContent(w, r, "archive.mp4", time.Time{}, view)
-	if w.Code != 206 || !bytes.Equal(w.Body.Bytes(), out[start:stop+1]) {
-		t.Fatalf("range=%d %x", w.Code, w.Body.Bytes())
+	co64 := bytes.Index(out, []byte("co64"))
+	videoOffset := binary.BigEndian.Uint64(out[co64+12:])
+	if string(out[videoOffset:videoOffset+4]) != "V123" {
+		t.Fatal("flat video chunk offset incorrect")
 	}
-	var part [3]byte
-	if _, err := view.ReadAt(part[:], int64(tfdt+9)); err != nil || !bytes.Equal(part[:], out[tfdt+9:tfdt+12]) {
-		t.Fatal("ReaderAt patch slice", err)
+	co64 = bytes.Index(out[co64+4:], []byte("co64")) + co64 + 4
+	audioOffset := binary.BigEndian.Uint64(out[co64+12:])
+	if string(out[audioOffset:audioOffset+4]) != "A456" {
+		t.Fatal("flat audio chunk offset incorrect")
+	}
+	// Range crosses the synthesized moov/source boundary, then reads a sample.
+	moov := bytes.Index(out, []byte("moov")) - 4
+	boundary := moov + int(binary.BigEndian.Uint32(out[moov:]))
+	for _, start := range []int{boundary - 3, mdat + 5} {
+		stop := start + 5
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/play", nil)
+		r.Header.Set("Range", "bytes="+strconv.Itoa(start)+"-"+strconv.Itoa(stop))
+		http.ServeContent(w, r, "archive.mp4", time.Time{}, view)
+		if w.Code != 206 || !bytes.Equal(w.Body.Bytes(), out[start:stop+1]) {
+			t.Fatalf("range=%d %x", w.Code, w.Body.Bytes())
+		}
+		var part [6]byte
+		if _, err := view.ReadAt(part[:], int64(start)); err != nil || !bytes.Equal(part[:], out[start:start+6]) {
+			t.Fatal("ReaderAt splice", err)
+		}
 	}
 }
 func TestNormalizedMP4LegacyAndInvalidClock(t *testing.T) {

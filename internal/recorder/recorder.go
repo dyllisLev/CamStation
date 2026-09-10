@@ -727,6 +727,10 @@ func BuildFFmpegArgsForPolicy(input, outputDir string, segmentMinutes int, archi
 		// collapses MP4 sample durations. Start from post-probe packets and
 		// let stream copy wait for their first timestamped keyframe.
 		"-fflags", "+genpts+nobuffer",
+		// Stream copy uses packet timestamps, so skip the extra FPS estimate
+		// that can consume a keyframe while nobuffer discards probe packets.
+		// Keep the default codec-discovery time and byte budgets.
+		"-fpsprobesize", "0",
 		"-use_wallclock_as_timestamps", "1",
 		"-rtsp_transport", "tcp",
 		"-i", input,
