@@ -25,7 +25,7 @@ web/
 | Recordings UI | `src/pages/recordings/` | Storage, workers, segment playback, backup state. |
 | Backup UI | `src/pages/backup/` | Target, schedule, prefix, job history. |
 | Settings UI | `src/pages/settings/` | Recording/backup/alert settings and test alert. |
-| Visual system | `src/styles/index.css`, `DESIGN.md` | Dark operational console; avoid generic dashboard drift. |
+| Visual system | `src/styles/index.css`, `../DESIGN.md` | Dark operational console; avoid generic dashboard drift. |
 
 ## CONVENTIONS
 - Use domain API modules and query hooks; do not scatter raw `fetch` calls through pages.
@@ -45,7 +45,9 @@ web/
 - Do not let compact tables reflow unpredictably; fixed min widths/scroll are preferred for dense operations.
 
 ## VERIFY
+From the repository root for frontend source changes:
+
 ```bash
-cd web && npm run lint
-cd web && npm run build
+npm --prefix web run lint
+npm --prefix web run build
 ```

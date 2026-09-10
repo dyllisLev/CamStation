@@ -88,7 +88,7 @@ This document records the current implementation state so the next session can c
   [execution plan](superpowers/plans/2026-09-09-nvidia-nvenc-acceleration.md), and
   [deployment procedure](deployment.md) define the rollout and rollback contract.
 
-### 2026-09-07 live recovery latency (source only; rollout pending)
+### 2026-09-07 live recovery latency (deployed)
 
 - Recovered playback now resets its finite retry episode after five seconds of
   continuous progress. Previously, a cooldown retry that played for 183/225 seconds
@@ -108,9 +108,19 @@ This document records the current implementation state so the next session can c
   memory-backed test temp directory; the complete Viewer-agent package also passed
   with `TMPDIR=/dev/shm GOTMPDIR=/tmp`. No test deadlines or Go source were changed.
 - Design and verification contract: [live recovery latency](superpowers/specs/2026-09-07-live-recovery-latency-design.md).
-  Production rollout, real-camera return timing and any live-resolution change remain
-  pending. This section supersedes the older per-stream fast/five-minute cooldown policy,
+  This section supersedes the older per-stream fast/five-minute cooldown policy,
   not management/control reconnect policies.
+- Production commit `45c478947a0275a4ae0a5c8accdd9c36914986bb` passed Forgejo run 29
+  and OpenShip deployment `dep_-ovn1Ac9bphokr_7`; the exact image is healthy with
+  zero restarts (2026-09-07 07:26 KST). Both physical HTTP endpoints on port 18080
+  and the external TLS health endpoint pass. Persistent mount/DB identity is unchanged.
+- All eight pre-deploy recording segments closed ready, match their stored file sizes,
+  and pass video/audio ffprobe; eight new recordings grow. Official Viewer reload
+  command 23 succeeded at 07:28:21 KST; its new document started all eight streams
+  within approximately 0.6–1.5 seconds of their initial attempts. An exact Viewer
+  screenshot confirms eight visible feeds; capture task/run cleanup succeeded.
+- No intentional real-camera outage was injected and no live-resolution setting was
+  changed. Prolonged physical camera-return timing remains unmeasured.
 
 ### 2026-09-02 bounded recorder shutdown and Forgejo/OpenShip release path (deployed)
 

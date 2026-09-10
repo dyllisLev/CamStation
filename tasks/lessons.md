@@ -316,6 +316,9 @@
 - 운영 로그 감사를 소스와 서버 표본만으로 완료하지 않는다. 사용자가 운영 Viewer를
   `monitoring-pc`로 지정하면 그 대상의 Service/Viewer 실제 로그 파일, 회전본, 최근 record와
   서비스 상태를 공식 target wrapper로 확인해야 운영 경로 전체가 검증된다.
+- 영상 표시를 확인하는 요청은 backend health와 `mediaReady`만으로 끝내지 않는다. 지정된 PC의
+  정확한 Viewer 창을 캡처해 카메라 영상을 직접 확인하고, 서버 텔레메트리와 대조한 뒤 캡처
+  task와 원격 증거 디렉터리를 정리한다.
 - Paseo worktree에는 ignored `work/windows-control-targets.json`이 자동 복제되지 않을 수 있다.
   Windows 작업은 항상 `status` preflight부터 실행하고 프로필이 없으면 임의 SSH로 우회하지 않는다.
   구현은 독립적으로 진행할 수 있어도 PC 실측·설치·배포 완료는 프로필이 복구될 때까지 구분해 기록한다.

@@ -16,4 +16,9 @@ Design: [live recovery contract](../specs/2026-09-07-live-recovery-latency-desig
 Steps 1–4 completed: 88 web tests, lint, web/daemon builds pass; all Go packages
 passed with the Viewer-agent package using a memory-backed test temp directory
 after the original ZFS temp-directory run exceeded two short test deadlines.
-Step 5 remains pending. Live-resolution settings have not been changed.
+Step 5 rollout completed with user approval: commit `45c4789`, Forgejo run 29,
+OpenShip ready and matching healthy image, preserved DB/mount identity, eight
+normally finalized playable pre-deploy segments and eight growing new recordings.
+Official Viewer reload and exact-window capture confirm eight playing feeds.
+No intentional camera outage was injected; prolonged real-source return timing
+remains unmeasured. Live-resolution settings have not been changed.

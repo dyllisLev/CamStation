@@ -4410,3 +4410,29 @@
   commit A를 먼저 Forgejo에 게시해 그 exact SHA image를 보호된 bootstrap credential로 수동 build/push하고,
   recorder one-time gate와 첫 OpenShip 배포를 검증한다. 그 뒤 workflow·최종 문서 commit B를 push해 실제
   Actions 재배포와 persistent data 지속성을 증명한다. 공용 owner credential은 CI에 넣지 않는다.
+
+## 2026-08-13 운영 배포 후 모니터링 PC Viewer 확인
+
+- [x] `monitoring-pc` target status로 NUC·interactive session·driver·task 잔여물을 검증한다.
+- [x] 실행 중인 기존 Viewer 창을 exact-window `Capture`로 두 번 확인한다.
+- [x] 직접 PNG를 검사해 8대 영상과 소방서4가 실제로 그려지는지 확인한다.
+- [x] 안전한 UIA/서버 텔레메트리로 Viewer 연결 상태를 교차 확인한다.
+- [x] capture task·worker·evidence residue가 0인지 확인하고 결과를 Review에 기록한다.
+
+## 모니터링 PC Review
+
+- 대상은 `monitoring-pc`/`NUC`, interactive `NUC\\dyllislev` session 1 Active였다. Viewer Service는
+  running, Cua telemetry/TCP/firewall count와 control/setup/capture/configure task는 모두 0이고
+  canonical script parity도 모두 일치했다.
+- 기존 Viewer 2.0.25 창 PID 11808을 변경 없이 `PrintWindow` 2576×1408로 두 번 캡처했다.
+  첫 PNG SHA-256은 `a82b1f1df0cd9e48568ae976063eb7c31926844a91b8805c3dd7914d946db21d`,
+  두 번째는 `0d6cb6676cc143f253dbf6c0d4d2daae1b4acd7d8dfbf1d9a4a0f3e82165df25`다.
+  직접 검사에서 8대 모두 실영상과 녹색 live 상태였고, 소방서4 OSD가 14:43:13에서
+  14:44:02 KST로 진행했다. 염소장 개체 위치도 달라 정지 화면이 아니었다.
+- 운영 API에서 NUC Agent/control online, Viewer running, renderer ready를 확인했다. 8개 live가
+  모두 WebRTC playing이고 소방서4 최근 progress는 3초 이내였다. 서버 `mediaReady=8/8`,
+  live별 viewer 1개, 총 viewer 8개였다. 별도 focus 8개는 fallback 후보 텔레메트리이며 실제
+  consumer가 아니다.
+- 두 capture 모두 `TaskDeleted=true`, `RemoteRunRemoved=true`였고 최종 Status에서 ViewerCapture
+  task 0, control/setup/configure task 0, driver TCP/firewall 0을 재확인했다. Viewer를 재시작하거나
+  설정·집중보기·전체화면을 변경하지 않았다.

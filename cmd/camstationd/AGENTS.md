@@ -33,6 +33,8 @@
 - Do not restart/kill runtime processes from handlers except through owned managers.
 
 ## VERIFY
+Run from the repository root for daemon source changes. Check HTTP health only when the intended dev daemon is already running or its startup is authorized.
+
 ```bash
 go test ./cmd/camstationd
 go build -o camstationd ./cmd/camstationd

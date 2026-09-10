@@ -1,15 +1,13 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-07-03T01:42:29Z
-**Commit:** 720bd2a
-**Branch:** camstation2-initial
+Project-specific guidance; apply the global `/root/.codex/AGENTS.md` and nearer directory instructions. Resolve current branch, paths, and tool availability from this checkout.
 
 ## OVERVIEW
 CamStation 2.0 is a single-daemon CCTV/NVR system: Go `camstationd`, SQLite as source of truth, supervised go2rtc/ffmpeg workers, backup/cleanup jobs, and an embedded React/Vite console.
 
 ## STRUCTURE
 ```text
-/root/camstation/
+./
 |-- cmd/camstationd/      # daemon composition root, domain route files, embedded web output
 |-- internal/             # store, stream, recorder, cleanup, backup, camera packages
 |-- web/                  # React/Vite console source; builds into cmd/camstationd/web
@@ -36,7 +34,7 @@ CamStation 2.0 is a single-daemon CCTV/NVR system: Go `camstationd`, SQLite as s
 | Runtime lifecycle | `scripts/camstationctl.sh` | Use for status/start/stop/restart/verify. |
 
 ## CODE MAP
-LSP is unavailable in this workspace; codegraph is available and should be preferred over grep for source navigation.
+Use `rg` for targeted file/text discovery. Use codegraph or LSP for symbol relationships when those tools are available; do not assume a previous session’s tool inventory.
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
@@ -72,6 +70,8 @@ LSP is unavailable in this workspace; codegraph is available and should be prefe
 - Do not delete active temp/recording segments. Cleanup must stay limited to safe finalized rows, and unbacked protection is the default.
 
 ## COMMANDS
+Run from the repository root. Select checks for the changed surface; runtime lifecycle commands apply only to authorized runtime work. Documentation-only edits need diff/link checks, not a daemon restart.
+
 ```bash
 make test
 go test ./...
@@ -84,7 +84,7 @@ scripts/camstationctl.sh verify
 ```
 
 ## NOTES
-- Runtime dev defaults from `scripts/camstationctl.sh`: `0.0.0.0:18080`, `./data/camstation.db`, recording enabled, 5-minute segments, `CAMSTATION_MAX_STORAGE_GB=0.30`.
+- Runtime dev defaults from `scripts/camstationctl.sh`: `0.0.0.0:18080`, `./data/camstation.db`, recording disabled by default (`CAMSTATION_RECORDING_ENABLED=true` enables it), 5-minute segments, `CAMSTATION_MAX_STORAGE_GB=0.30`.
 - Use KST when explaining server/runtime timestamps to the user.
 - Behavior changes need surface verification: API response, process command, generated file, DB row, UI screenshot, or log evidence.
 - Web has lint/build but no dedicated component test suite; use Playwright screenshots for UI-sensitive work when possible.
