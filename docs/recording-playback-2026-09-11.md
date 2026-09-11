@@ -46,4 +46,24 @@ gap. The existing timeout then displayed the generic playback error.
   callback. No macOS Safari session was available; Linux WebKit is supporting
   evidence, not a claim of verification on the operator's Mac.
 
-Deployment verification is recorded after rollout.
+## Deployment
+
+Revision `57e0aa645ee388bd6ccdadf36d53014d65ad6011` was deployed at
+18:37:33 KST. Forgejo run 20 succeeded for the exact commit, OpenShip deployment
+`dep_6FExnTjDu7GbLC91` was ready, and the healthy amd64 container's revision and
+image matched. Restart count was zero. A fresh online DB backup was checked
+before rollout; DB integrity, mount identity and camera identity were preserved.
+
+All eight preceding recordings closed ready with matching file sizes and
+readable video/audio. All eight new recordings and their fragment indexes grew;
+live readiness was 8/8 and both assigned NVENC encoders were running. Physical
+and public health checks passed. No panic, fatal error, database lock error,
+cleanup timeout or port collision was found. Transient startup warm-stream and
+viewer retries recovered, as confirmed by later playing/first-media events.
+
+On the deployed public recordings page, Chrome paused at 19.855 seconds, sought
+to 29.823 and resumed past 31.731. WebKit native HLS paused at 7.852 seconds,
+sought to 17.820 and resumed past 20.354 with a decoded 1280×720 frame and the
+correct duration. Both used the originally reported recording without replacing
+its API responses or media. Verification on the operator's actual Mac remains
+the stated limitation.
