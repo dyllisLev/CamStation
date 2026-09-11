@@ -18,8 +18,8 @@ Spec: [indexed playback lookups](../specs/2026-09-11-indexed-playback-lookups.md
 
 ## Status
 
-Implementation complete; operating deployment is pending. The operating service
-remains revision `49c84f0`.
+Implementation and operating deployment are complete. The operating service is
+revision `677c3cef9f64505222cbdf113d6315fd44500fa3`.
 The diagnosis reproduced 7.4–8.2 seconds to eight videos on fresh browsers;
 five external first attempts hit the setup deadline in one sample. Server media
 reception and all eight recorder workers remained running.
@@ -57,6 +57,42 @@ after commit. All four reader connections reject writes after pool replacement
 and database reopen, including filenames with URI punctuation. Query-plan tests
 cover interval, boundary and archived camera/stream resolution indexes.
 
-The full Go suite and daemon build pass. No frontend source changed. Production
-schema migration and fresh-browser first-frame/8-camera startup remain pending
-deployment; the local SQL timings do not replace those checks.
+The full Go suite and daemon build pass. No frontend source changed. The local
+SQL timings are separate from the production checks below.
+
+## Production verification — 2026-09-11 17:51 KST
+
+- The user authorized deployment after local verification. A fresh SQLite
+  online backup passed quick/foreign-key checks before pushing release
+  `677c3cef9f64505222cbdf113d6315fd44500fa3`.
+- [Forgejo run 19](https://git.loc.hmini.me/dyllislev/CamStation/actions/runs/19)
+  succeeded for that exact SHA. OpenShip deployment `dep_iPFFcexjQGG29acT` is
+  ready. The service SHA tag, running image revision and `linux/amd64` platform
+  agree; image digest is `sha256:fccda410d3289ca66e15b9c6c649d5879548f830efd8445f7b3f7e4ade580b02`.
+- The container is healthy with zero restarts. Both existing physical endpoints
+  and the public TLS health endpoint return HTTP 200 / `ok=true`. Migration
+  20260911 is applied, SQLite quick check and R-tree integrity are `ok`, with
+  zero foreign-key violations. Mount identity and the camera catalogue identity
+  match the baseline.
+- The eight recordings open immediately before replacement closed ready;
+  every file matches its DB size and passes video/audio metadata inspection.
+  Eight new recording files and fragment indexes grow, their stored extrema
+  match published fragments, live is 8/8 and NVENC remains 2. Backup stays
+  disabled with no active backup job.
+- The same external host's fresh, unmodified Chrome rendered its first video
+  frame in 563.4 ms and all eight in 1,846.7 ms. All eight started on their first
+  WebRTC attempts. Before deployment, first/all frames took 2,192.4/7,408.8 ms,
+  with five failed first attempts. Initial WebSocket-open elapsed times dropped
+  from 1,450–5,000 to 72–205 ms. Observed timeline request maximum dropped from
+  3,907.5 to 16.5 ms. Screenshot and advancing video clocks confirmed all eight
+  playing; timings describe these samples rather than a universal network/GOP
+  startup guarantee.
+- There was no old-container cleanup timeout or port collision. OpenShip logged
+  a port-reservation inventory warning and retained uncertain reservations;
+  the deployment and existing endpoints passed. Startup logs had no panic,
+  fatal, DB-lock/schema, I/O, OOM or address-in-use errors.
+- Four existing official-Viewer streams briefly reached cooldown during service
+  replacement; each subsequently reported playback started and first media by
+  17:51:35 KST without a client reload. This was verified from server telemetry,
+  not a new native desktop inspection. An initial warm-stream RTSP 404 also
+  resolved before the verified 8/8 live state.

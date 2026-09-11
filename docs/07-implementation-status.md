@@ -4,7 +4,7 @@ Last updated: 2026-09-11
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
-## 2026-09-11 indexed playback and isolated live reads (not deployed)
+## 2026-09-11 indexed playback and isolated live reads (deployed)
 
 - The September 10 fix still aggregated all fragments for the selected camera.
   Fresh external Chrome again took 7.4 seconds to start all eight videos, with
@@ -22,9 +22,16 @@ This document records the current implementation state so the next session can c
   old/new result comparisons and canonical recording/media/fragment hashes.
   Window-plus-bounds p95 was 0.783 ms; registration under concurrent polling and
   publication was p95 2.562 ms, max 9.411 ms. The one-time migration took 716 ms.
-  Full Go tests and daemon build pass. Runtime is still revision `49c84f0`;
-  production migration and fresh-browser video startup have not been verified
-  for this change. See the [design](superpowers/specs/2026-09-11-indexed-playback-lookups.md)
+  Full Go tests and daemon build pass.
+- Revision `677c3cef9f64505222cbdf113d6315fd44500fa3` deployed at 17:51 KST.
+  Exact Forgejo/OpenShip/image/health checks passed, as did production migration,
+  DB/index integrity, stable mounts and camera identity. The previous eight
+  recordings closed ready with matching file sizes and readable video/audio;
+  eight new recordings and their published indexes grew. External fresh Chrome
+  rendered the first frame in 0.563 s and all eight in 1.847 s, without retries
+  (before: 2.192 s and 7.409 s, with five failed first attempts). Timeline
+  request maximum in that browser sample fell from 3,907 to 16.5 ms.
+  See the [design](superpowers/specs/2026-09-11-indexed-playback-lookups.md)
   and [validation record](superpowers/plans/2026-09-11-indexed-playback-lookups.md).
 
 ## 2026-09-10 live initial connection delay (deployed)
