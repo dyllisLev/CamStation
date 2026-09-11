@@ -94,7 +94,7 @@ func (d *DB) RecordingMedia(ctx context.Context, segmentID int64) (RecordingSegm
 		return s, recordingmedia.Index{}, ErrPlaybackMediaDeleted
 	}
 	var idx recordingmedia.Index
-	tx, err := d.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := d.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return s, idx, err
 	}

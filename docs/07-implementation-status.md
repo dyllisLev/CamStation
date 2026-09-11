@@ -1,8 +1,31 @@
 # Implementation Status
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
+
+## 2026-09-11 indexed playback and isolated live reads (not deployed)
+
+- The September 10 fix still aggregated all fragments for the selected camera.
+  Fresh external Chrome again took 7.4 seconds to start all eight videos, with
+  five first attempts reaching the setup deadline in one sample.
+- Playback now maintains exact file extrema during fragment publication and
+  uses an interval index for requested windows plus partial B-tree indexes for
+  bounds, neighbors and archived camera/stream resolution. A versioned atomic
+  migration backfills existing recordings once. Legacy, growing, failed and
+  deleted/restored recording semantics and canonical metadata are preserved.
+- Live configuration, public stream registration and playback use four
+  read-only WAL connections while writes remain serialized on one connection.
+  Held-writer tests verify committed visibility and prompt reads; connection
+  replacement/reopen tests verify read-only settings.
+- An isolated operating snapshot (472,775 fragments, 11,677 files) passed 88
+  old/new result comparisons and canonical recording/media/fragment hashes.
+  Window-plus-bounds p95 was 0.783 ms; registration under concurrent polling and
+  publication was p95 2.562 ms, max 9.411 ms. The one-time migration took 716 ms.
+  Full Go tests and daemon build pass. Runtime is still revision `49c84f0`;
+  production migration and fresh-browser video startup have not been verified
+  for this change. See the [design](superpowers/specs/2026-09-11-indexed-playback-lookups.md)
+  and [validation record](superpowers/plans/2026-09-11-indexed-playback-lookups.md).
 
 ## 2026-09-10 live initial connection delay (deployed)
 

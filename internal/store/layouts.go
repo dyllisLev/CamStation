@@ -10,7 +10,7 @@ import (
 )
 
 func (d *DB) ListLayouts(ctx context.Context) ([]LayoutProfile, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.readDB.QueryContext(ctx,
 		`SELECT id, name, data, timeline_collapsed, grid_cols, grid_rows, created_at, updated_at
 		 FROM layouts ORDER BY updated_at DESC`,
 	)
@@ -113,7 +113,7 @@ func (d *DB) UpdateLayout(ctx context.Context, id string, layout LayoutProfile) 
 }
 
 func (d *DB) GetLayout(ctx context.Context, id string) (LayoutProfile, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.readDB.QueryRowContext(ctx,
 		`SELECT id, name, data, timeline_collapsed, grid_cols, grid_rows, created_at, updated_at
 		 FROM layouts WHERE id = ?`,
 		id,

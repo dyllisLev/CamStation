@@ -9,7 +9,7 @@ func (d *DB) IsRegisteredPublicStream(ctx context.Context, streamName string) (b
 		return false, nil
 	}
 	var registered bool
-	err := d.db.QueryRowContext(ctx, `WITH outputs AS (
+	err := d.readDB.QueryRowContext(ctx, `WITH outputs AS (
 		SELECT o.camera_id,o.purpose,o.stream_name
 		FROM camera_outputs o JOIN camera_streams s ON s.id=o.source_stream_id
 	)

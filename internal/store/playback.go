@@ -19,7 +19,7 @@ type PlaybackCamera struct {
 }
 
 func (d *DB) ListPlaybackCameras(ctx context.Context) ([]PlaybackCamera, error) {
-	rows, err := d.db.QueryContext(ctx, `WITH archived AS (
+	rows, err := d.readDB.QueryContext(ctx, `WITH archived AS (
  SELECT camera_id,MAX(NULLIF(camera_name,'')) AS name FROM recording_segments WHERE status!='deleted' GROUP BY camera_id
  ), ids AS (SELECT id FROM cameras UNION SELECT camera_id FROM archived)
  SELECT ids.id,COALESCE(c.stream_name,'camera:'||ids.id),COALESCE(NULLIF(c.name,''),a.name,'보관 카메라 #'||ids.id),c.id IS NOT NULL,a.camera_id IS NOT NULL
@@ -46,13 +46,27 @@ func (d *DB) PlaybackCameraID(ctx context.Context, key string) (int64, error) {
 			return 0, sql.ErrNoRows
 		}
 		var found int64
-		err = d.db.QueryRowContext(ctx, `SELECT id FROM cameras WHERE id=? UNION SELECT camera_id FROM recording_segments WHERE camera_id=? AND status!='deleted' LIMIT 1`, id, id).Scan(&found)
+		err = d.readDB.QueryRowContext(ctx, playbackArchivedCameraQuery, id).Scan(&found)
 		return found, err
 	}
 	var id int64
-	err := d.db.QueryRowContext(ctx, `SELECT id FROM cameras c WHERE stream_name=? OR recording_stream_name=? OR live_stream_name=? OR EXISTS(SELECT 1 FROM camera_outputs o WHERE o.camera_id=c.id AND o.stream_name=?) UNION SELECT camera_id FROM recording_segments WHERE stream_name=? AND status!='deleted' LIMIT 1`, key, key, key, key, key).Scan(&id)
+	err := d.readDB.QueryRowContext(ctx, playbackStreamCameraQuery, key).Scan(&id)
 	return id, err
 }
+
+// Preserve the original UNION's lowest-ID resolution when a stream key has
+// historical owners, but read at most one archived owner from its index.
+const playbackStreamCameraQuery = `SELECT MIN(id) FROM (
+ SELECT (SELECT id FROM cameras c WHERE stream_name=?1 OR recording_stream_name=?1 OR live_stream_name=?1
+  OR EXISTS(SELECT 1 FROM camera_outputs o WHERE o.camera_id=c.id AND o.stream_name=?1) ORDER BY id LIMIT 1) AS id
+ UNION ALL
+ SELECT (SELECT camera_id FROM recording_segments WHERE stream_name=?1 AND status!='deleted' ORDER BY camera_id LIMIT 1)
+) HAVING MIN(id) IS NOT NULL`
+
+// Resolving an archived key only needs existence, not a deduplicated collection
+// of every file ever recorded by that camera.
+const playbackArchivedCameraQuery = `SELECT ?1 WHERE EXISTS(SELECT 1 FROM cameras WHERE id=?1)
+ OR EXISTS(SELECT 1 FROM recording_segments WHERE camera_id=?1 AND status!='deleted')`
 
 // PlaybackSpan is a coalesced file interval, never the uncommitted end of a growing file.
 type PlaybackSpan struct {
@@ -65,18 +79,18 @@ type PlaybackSpan struct {
 	VideoCodec string
 }
 
-// Restrict the archive before joining fragments. A filter outside this grouped
-// CTE makes SQLite aggregate every camera's fragments for each timeline poll.
-// Keep each selected file's full fragment extent: filtering individual fragments
-// by the requested window would truncate the span used by seek and pagination.
-const playbackSpansCTE = `WITH spans AS (
- SELECT s.id,s.camera_id,s.status,CASE WHEN m.segment_id IS NULL THEN CAST(ROUND(s.ts_start*1000) AS INTEGER) ELSE MIN(f.start_ms) END start_ms,
- CASE WHEN m.segment_id IS NULL THEN CAST(ROUND(s.ts_end*1000) AS INTEGER) ELSE MAX(f.end_ms) END end_ms,
- m.segment_id IS NOT NULL fragmented,COALESCE(m.time_basis,'legacy_filename') time_basis,COALESCE(m.video_codec,'') video_codec
- FROM recording_segments s LEFT JOIN recording_media m ON m.segment_id=s.id LEFT JOIN recording_fragments f ON f.segment_id=s.id
- WHERE s.camera_id=? AND s.status IN ('ready','recording','finalizing','failed') AND (m.segment_id IS NOT NULL OR (s.status='ready' AND s.ts_end>s.ts_start))
- GROUP BY s.id
- ) `
+// Start with the interval index even for an old or middle-of-history window.
+// A simple start/end B-tree can only bound one side of an overlap query and can
+// still scan years of unrelated files. CROSS JOIN keeps the candidate index in
+// the outer loop. Its outward-rounded coordinates need exact integer rechecks.
+// Complete published file extrema are maintained at write time; these reads
+// never join or aggregate recording_fragments.
+const playbackRangeQuery = `SELECT s.id,s.playback_start_ms,s.playback_end_ms,s.status,s.playback_fragmented,
+ COALESCE(m.time_basis,'legacy_filename'),COALESCE(m.video_codec,'')
+ FROM recording_playback_ranges r CROSS JOIN recording_segments s ON s.id=r.segment_id
+ LEFT JOIN recording_media m ON m.segment_id=s.id
+ WHERE r.camera_min<=?1 AND r.camera_max>=?1 AND r.end_ms>?2 AND r.start_ms<?3
+ AND s.camera_id=?1 AND ` + playbackAvailable + ` AND s.playback_end_ms>?2 AND s.playback_start_ms<?3`
 
 func scanPlaybackSpan(row scanner) (PlaybackSpan, error) {
 	var s PlaybackSpan
@@ -84,10 +98,8 @@ func scanPlaybackSpan(row scanner) (PlaybackSpan, error) {
 	return s, err
 }
 
-const playbackSpanColumns = "id,start_ms,end_ms,status,fragmented,time_basis,video_codec"
-
 func (d *DB) PlaybackSpans(ctx context.Context, cameraID, fromMs, toMs int64) ([]PlaybackSpan, error) {
-	rows, err := d.db.QueryContext(ctx, playbackSpansCTE+`SELECT `+playbackSpanColumns+` FROM spans WHERE end_ms>? AND start_ms<? ORDER BY start_ms,id`, cameraID, fromMs, toMs)
+	rows, err := d.readDB.QueryContext(ctx, playbackRangeQuery+` ORDER BY s.playback_start_ms,s.id`, cameraID, fromMs, toMs)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +118,7 @@ func (d *DB) PlaybackSpans(ctx context.Context, cameraID, fromMs, toMs int64) ([
 func (d *DB) PlaybackBounds(ctx context.Context, cameraID int64) (*int64, bool, error) {
 	var end sql.NullInt64
 	var active bool
-	err := d.db.QueryRowContext(ctx, playbackSpansCTE+`SELECT (SELECT MAX(end_ms) FROM spans),EXISTS(SELECT 1 FROM recording_segments WHERE camera_id=? AND status IN ('recording','finalizing'))`, cameraID, cameraID).Scan(&end, &active)
+	err := d.readDB.QueryRowContext(ctx, playbackBoundsQuery, cameraID).Scan(&end, &active)
 	if err != nil {
 		return nil, false, err
 	}
@@ -118,7 +130,7 @@ func (d *DB) PlaybackBounds(ctx context.Context, cameraID int64) (*int64, bool, 
 
 func (d *DB) PlaybackNeighbors(ctx context.Context, cameraID, atMs int64) (*int64, *int64, error) {
 	var previous, next sql.NullInt64
-	err := d.db.QueryRowContext(ctx, playbackSpansCTE+`SELECT MAX(CASE WHEN end_ms<=? THEN end_ms END),MIN(CASE WHEN start_ms>? THEN start_ms END) FROM spans`, cameraID, atMs, atMs).Scan(&previous, &next)
+	err := d.readDB.QueryRowContext(ctx, playbackNeighborsQuery, cameraID, atMs).Scan(&previous, &next)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -132,6 +144,14 @@ func (d *DB) PlaybackNeighbors(ctx context.Context, cameraID, atMs int64) (*int6
 	return p, n, nil
 }
 
+const playbackBoundsQuery = `SELECT
+ (SELECT playback_end_ms FROM recording_segments WHERE camera_id=?1 AND ` + playbackAvailable + ` ORDER BY playback_end_ms DESC LIMIT 1),
+ EXISTS(SELECT 1 FROM recording_segments WHERE camera_id=?1 AND status IN ('recording','finalizing'))`
+
+const playbackNeighborsQuery = `SELECT
+ (SELECT playback_end_ms FROM recording_segments WHERE camera_id=?1 AND ` + playbackAvailable + ` AND playback_end_ms<=?2 ORDER BY playback_end_ms DESC LIMIT 1),
+ (SELECT playback_start_ms FROM recording_segments WHERE camera_id=?1 AND ` + playbackAvailable + ` AND playback_start_ms>?2 ORDER BY playback_start_ms LIMIT 1)`
+
 func PlaybackMediaID(s PlaybackSpan) string {
 	kind := "file"
 	if s.Fragmented {
@@ -143,15 +163,15 @@ func PlaybackMediaID(s PlaybackSpan) string {
 var ErrPlaybackMediaDeleted = errors.New("playback media deleted")
 
 func (d *DB) PlaybackSpansPage(ctx context.Context, cameraID, fromMs, toMs, beforeMs, beforeID int64, limit int) ([]PlaybackSpan, error) {
-	query := playbackSpansCTE + `SELECT ` + playbackSpanColumns + ` FROM spans WHERE end_ms>? AND start_ms<?`
+	query := playbackRangeQuery
 	args := []any{cameraID, fromMs, toMs}
 	if beforeID > 0 {
-		query += ` AND (start_ms<? OR (start_ms=? AND id<?))`
-		args = append(args, beforeMs, beforeMs, beforeID)
+		query += ` AND r.start_ms<=?4 AND (s.playback_start_ms<?4 OR (s.playback_start_ms=?4 AND s.id<?5))`
+		args = append(args, beforeMs, beforeID)
 	}
-	query += ` ORDER BY start_ms DESC,id DESC LIMIT ?`
+	query += ` ORDER BY s.playback_start_ms DESC,s.id DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +189,6 @@ func (d *DB) PlaybackSpansPage(ctx context.Context, cameraID, fromMs, toMs, befo
 
 func (d *DB) PlaybackWaitingAt(ctx context.Context, cameraID, atMs int64) (bool, error) {
 	var waiting bool
-	err := d.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_segments WHERE camera_id=? AND status IN ('recording','finalizing') AND ts_start<=?)`, cameraID, float64(atMs)/1000).Scan(&waiting)
+	err := d.readDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM recording_segments WHERE camera_id=? AND status IN ('recording','finalizing') AND ts_start<=?)`, cameraID, float64(atMs)/1000).Scan(&waiting)
 	return waiting, err
 }

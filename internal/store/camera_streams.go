@@ -205,7 +205,7 @@ func deleteMissingCameraStreamsTx(ctx context.Context, tx *sql.Tx, cameraID int6
 }
 
 func (d *DB) ListCameraStreams(ctx context.Context, cameraID int64, includeSecrets bool) ([]CameraStream, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id,camera_id,role,source_key,label,source,url,go2rtc_stream_name,
+	rows, err := d.readDB.QueryContext(ctx, `SELECT id,camera_id,role,source_key,label,source,url,go2rtc_stream_name,
 		codec,width,height,fps,bitrate_kbps,profile_token,state,detected_video_codec,detected_audio_codec,
 		detected_profile,detected_level,detected_pixel_format,detected_bit_depth,detected_width,detected_height,
 		detected_fps,detected_checked_at,detected_error,created_at,updated_at

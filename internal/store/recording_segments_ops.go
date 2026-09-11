@@ -95,7 +95,7 @@ func (d *DB) ListRecordingSegmentsForConsole(ctx context.Context, filter Recordi
 }
 
 func (d *DB) GetRecordingSegmentByID(ctx context.Context, id int64) (RecordingSegment, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.readDB.QueryRowContext(ctx,
 		`SELECT id, camera_id, stream_name, filename, temp_path, final_path, ts_start,
 			        ts_end, file_size, status, backup_state, backed_up_at, backup_job_id,
 			        error, created_at, updated_at

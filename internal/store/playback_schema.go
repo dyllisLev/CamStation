@@ -26,5 +26,5 @@ func (d *DB) ensurePlaybackSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return d.ensurePlaybackLookupSchema(ctx)
 }

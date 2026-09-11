@@ -267,7 +267,7 @@ func validateCameraOutputs(outputs []CameraOutput) error {
 }
 
 func (d *DB) listCameraOutputs(ctx context.Context, cameraID int64, includeSecrets bool) ([]CameraOutput, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT o.id,o.camera_id,o.purpose,o.stream_name,o.source_stream_id,s.source_key,
+	rows, err := d.readDB.QueryContext(ctx, `SELECT o.id,o.camera_id,o.purpose,o.stream_name,o.source_stream_id,s.source_key,
 		o.video_mode,o.video_encoder,o.max_width,o.max_height,o.max_fps,o.audio_mode,o.activation,o.applied_policy_json,
 		o.verified_video_codec,o.verified_audio_codec,o.verified_width,o.verified_height,o.verified_fps,o.verified_transcoding,o.verified_at,
 		o.verification_error,o.created_at,o.updated_at
@@ -323,7 +323,7 @@ func (d *DB) getCameraPolicyState(ctx context.Context, cameraID int64, includeSe
 	var state CameraPolicyState
 	var at string
 	var appliedAt sql.NullString
-	err := d.db.QueryRowContext(ctx, `SELECT camera_id,desired_revision,applied_revision,apply_state,apply_state_at,applied_at,apply_error FROM camera_policy_states WHERE camera_id=?`, cameraID).
+	err := d.readDB.QueryRowContext(ctx, `SELECT camera_id,desired_revision,applied_revision,apply_state,apply_state_at,applied_at,apply_error FROM camera_policy_states WHERE camera_id=?`, cameraID).
 		Scan(&state.CameraID, &state.DesiredRevision, &state.AppliedRevision, &state.ApplyState, &at, &appliedAt, &state.ApplyError)
 	state.ApplyStateAt, _ = time.Parse(time.RFC3339Nano, at)
 	state.AppliedAt, _ = time.Parse(time.RFC3339Nano, appliedAt.String)

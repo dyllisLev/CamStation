@@ -119,7 +119,7 @@ func (d *DB) UpsertCamera(ctx context.Context, camera Camera) (Camera, error) {
 }
 
 func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, error) {
-	rows, err := d.db.QueryContext(ctx,
+	rows, err := d.readDB.QueryContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state, enabled,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
@@ -161,7 +161,7 @@ func (d *DB) ListCameras(ctx context.Context, includeSecrets bool) ([]Camera, er
 }
 
 func (d *DB) GetCameraByStream(ctx context.Context, streamName string) (Camera, error) {
-	row := d.db.QueryRowContext(ctx,
+	row := d.readDB.QueryRowContext(ctx,
 		`SELECT id, name, url, stream_name, layout_key, recording_stream_name, live_stream_name, state, enabled,
 		        profile_template_id, manufacturer, model, profile_adapter, host, rtsp_port, http_port, onvif_port, channel_index,
 		        last_probe_json, last_scan_json, control_capabilities_json, created_at, updated_at
