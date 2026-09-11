@@ -4,6 +4,17 @@ Last updated: 2026-09-11
 
 This document records the current implementation state so the next session can continue without re-discovering the same context.
 
+## 2026-09-11 recording playback startup (validated, rollout pending)
+
+- The reported Safari recording requests returned successful media responses;
+  the reproduced stall was in the player's initial-frame preparation.
+- Completed recordings prefer native HLS where supported. Growing recordings
+  retain explicit Hls.js positioning. Buffered-fragment preparation and clock
+  correction prevent an initial empty media interval from holding startup.
+- Web tests 106/106, lint, web/daemon builds and Chrome/WebKit native playback
+  controls passed. macOS Safari itself remains unverified. See the
+  [diagnosis and validation record](recording-playback-2026-09-11.md).
+
 ## 2026-09-11 indexed playback and isolated live reads (deployed)
 
 - The September 10 fix still aggregated all fragments for the selected camera.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playbackApi } from "../../app/playbackApi";
 import type { PlaybackMedia } from "../../app/playbackTypes";
-import { absoluteTimeAt, containsPlaybackTime, continuationSeekAt, mediaTimeAt, resumeBoundaryClock } from "./playbackClock";
+import { absoluteTimeAt, bufferedPlaybackStart, containsPlaybackTime, continuationSeekAt, mediaTimeAt, resumeBoundaryClock } from "./playbackClock";
 
 export type PlaybackCameraState = {
   status: "idle" | "loading" | "ready" | "playing" | "gap" | "edge_wait" | "error" | "unsupported";
@@ -221,8 +221,9 @@ export function usePlaybackWorkspace({ cameraKeys, initialMode = "playback", ini
           if (!now.playing) { video.pause(); continue; }
           // A camera whose next file starts slightly later waits for the other tiles' clock.
           if (atMs < camera.media.startMs) { video.pause(); continue; }
-          if (containsPlaybackTime(camera.media, atMs) && !video.seeking && Math.abs(absoluteTimeAt(camera.media, video.currentTime) - atMs) > 800) {
-            video.currentTime = mediaTimeAt(camera.media, atMs);
+          const target = bufferedPlaybackStart(mediaTimeAt(camera.media, atMs), video.buffered);
+          if (containsPlaybackTime(camera.media, atMs) && !video.seeking && Math.abs(video.currentTime - target) > 0.8) {
+            video.currentTime = target;
           }
           if (video.paused && !playPending.current.has(video)) {
             playPending.current.add(video);

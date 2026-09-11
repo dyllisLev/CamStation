@@ -4,6 +4,17 @@ export function mediaTimeAt(media: PlaybackMedia, atMs: number): number {
   return media.mediaStartSeconds + Math.max(0, atMs - media.startMs) / 1000;
 }
 
+// A demuxed file can begin before its first decodable sample. WebKit will stay
+// at HAVE_METADATA when paused in that gap, so waiting for canplay before
+// moving into the buffered media deadlocks preparation. Stay at the requested
+// position when it is buffered; otherwise use the next sample in this file.
+export function bufferedPlaybackStart(seconds: number, buffered: TimeRanges): number {
+  for (let i = 0; i < buffered.length; i++) {
+    if (seconds < buffered.end(i)) return Math.max(seconds, buffered.start(i));
+  }
+  return seconds;
+}
+
 export function absoluteTimeAt(media: PlaybackMedia, seconds: number): number {
   return media.startMs + (seconds - media.mediaStartSeconds) * 1000;
 }

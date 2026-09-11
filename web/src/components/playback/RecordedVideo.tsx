@@ -1,7 +1,7 @@
 import Hls from "hls.js";
 import { useEffect, useRef, type VideoHTMLAttributes } from "react";
 import { withAppBase } from "../../app/basePath";
-import { isPlaybackMediaUrl, mediaTimeAt } from "./playbackClock";
+import { bufferedPlaybackStart, isPlaybackMediaUrl, mediaTimeAt } from "./playbackClock";
 import type { PlaybackWorkspace } from "./usePlaybackWorkspace";
 
 export type RecordedVideoProps = Omit<VideoHTMLAttributes<HTMLVideoElement>, "src" | "autoPlay" | "ref"> & {
@@ -34,12 +34,14 @@ export function RecordedVideo({ workspace, cameraKey, muted = false, ...props }:
     let prepared = false;
     let target = mediaTimeAt(media, currentTime());
     let hls: Hls | undefined;
+    let bufferTimer: number | undefined;
     const fail = () => { if (!disposed) videoError(cameraKey, requestId, "녹화 영상을 재생하지 못했습니다."); };
     const prepare = () => {
       if (disposed || prepared || video.readyState < 1) return;
       // A remounted focus tile joins the workspace at its current absolute position.
       target = mediaTimeAt(media, currentTime());
       if (Number.isFinite(video.duration)) target = Math.min(target, Math.max(0, video.duration - 0.001));
+      target = bufferedPlaybackStart(target, video.buffered);
       if (Math.abs(video.currentTime - target) > 0.05) {
         try { video.currentTime = target; } catch { return; }
       }
@@ -47,6 +49,10 @@ export function RecordedVideo({ workspace, cameraKey, muted = false, ...props }:
         prepared = true;
         videoReady(cameraKey, requestId);
       }
+    };
+    const bufferReady = () => {
+      if (disposed || prepared || bufferTimer !== undefined) return;
+      bufferTimer = window.setTimeout(() => { bufferTimer = undefined; prepare(); }, 0);
     };
     const ended = () => { if (!disposed) videoEnded(cameraKey, requestId); };
     video.pause();
@@ -57,12 +63,18 @@ export function RecordedVideo({ workspace, cameraKey, muted = false, ...props }:
     video.addEventListener("error", fail);
     video.addEventListener("ended", ended);
     const url = withAppBase(media.url);
-    if (media.kind === "hls" && Hls.isSupported()) {
+    // Native HLS avoids Safari's MSE startup gap for completed recordings.
+    // Growing EVENT playlists retain explicit Hls.js positioning: native
+    // players can start at the live edge instead of the requested archive time.
+    const nativeHls = media.kind === "hls" && !media.growing && !!video.canPlayType("application/vnd.apple.mpegurl");
+    if (media.kind === "hls" && !nativeHls && Hls.isSupported()) {
       hls = new Hls({ startPosition: target, lowLatencyMode: false, maxLiveSyncPlaybackRate: 1 });
       hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) fail(); });
+      hls.on(Hls.Events.FRAG_BUFFERED, bufferReady);
       hls.loadSource(url);
       hls.attachMedia(video);
-    } else if (media.kind === "file" || video.canPlayType("application/vnd.apple.mpegurl")) {
+    } else if (media.kind === "file" || nativeHls) {
+      video.addEventListener("progress", bufferReady);
       video.src = url;
       video.load();
     } else {
@@ -73,7 +85,9 @@ export function RecordedVideo({ workspace, cameraKey, muted = false, ...props }:
     return () => {
       disposed = true;
       window.clearTimeout(timeout);
+      window.clearTimeout(bufferTimer);
       video.removeEventListener("loadedmetadata", prepare);
+      video.removeEventListener("progress", bufferReady);
       video.removeEventListener("loadeddata", prepare);
       video.removeEventListener("canplay", prepare);
       video.removeEventListener("seeked", prepare);
